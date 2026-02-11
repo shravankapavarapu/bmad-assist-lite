@@ -1,0 +1,14 @@
+name: retrospective
+instructions: instructions.md
+
+input_file_patterns:
+  epics_file:
+    pattern: "**/epics*.md"
+    strategy: FULL_LOAD
+  architecture_file:
+    pattern: "**/architecture*.md"
+    strategy: FULL_LOAD
+
+variables:
+  mission: "Epic {epic_num} retrospective"
+  retrospectives_folder: "{output_folder}/retrospectives"

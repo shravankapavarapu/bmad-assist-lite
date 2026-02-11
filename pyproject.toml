@@ -1,0 +1,93 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bmad-assist-lite"
+version = "0.1.0"
+description = "Lightweight, Windows-native BMAD methodology automation with plugin architecture"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = [
+    "typer[all]>=0.9.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "claude-agent-sdk>=0.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.24.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "types-PyYAML>=6.0.0",
+]
+
+[project.scripts]
+bmad-assist-lite = "bmad_assist_lite.cli:app"
+
+[project.entry-points."bmad_assist_lite.plugins"]
+# Built-in plugins are registered via entry points for discoverability
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bmad_assist_lite = ["workflows/**/*"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "D", "UP", "B", "C4", "SIM"]
+ignore = [
+    "D100", "D104", "D203", "D213", "D401", "D417",
+    "B008", "E501", "SIM108",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short -m \"not slow\""
+markers = [
+    "slow: marks tests as slow (>5s)",
+    "integration: marks tests as integration tests",
+    "no_auto_config: skip auto config loading fixture",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["src/bmad_assist_lite"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@abstractmethod",
+]
+show_missing = true
+fail_under = 0

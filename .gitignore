@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# bmad-assist-lite runtime artifacts
+.bmad-assist-lite/cache/
+.bmad-assist-lite/state.yaml
+.bmad-assist-lite/sprint-status.yaml
+.bmad-assist-lite/running.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/

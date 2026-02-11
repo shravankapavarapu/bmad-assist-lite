@@ -1,0 +1,40 @@
+<instructions>
+  <mission>Synthesize multi-LLM code review findings and apply fixes</mission>
+
+  <steps>
+    <step id="1" name="Analyze Reviewer Findings">
+      Cross-reference findings from all code reviewers.
+      Verify validity of each finding by examining the actual code.
+      Note areas of consensus and disagreement.
+    </step>
+
+    <step id="2" name="Verify and Identify False Positives">
+      Check each finding against the actual codebase.
+      Document false positives with explanation.
+    </step>
+
+    <step id="3" name="Prioritize by Severity">
+      Order fixes: Critical &gt; High &gt; Medium &gt; Low.
+      Group related fixes together.
+    </step>
+
+    <step id="4" name="Apply Fixes to Source Code">
+      Apply validated fixes using Edit tool.
+      Run pytest after each group of fixes.
+      Revert if tests break.
+    </step>
+
+    <step id="5" name="Refactor if Needed">
+      Only refactor files already modified by applied fixes.
+      Keep refactoring scope minimal and targeted.
+    </step>
+
+    <step id="6" name="Generate Synthesis Report">
+      Create report with:
+      - Applied fixes with before/after
+      - Rejected findings with rationale
+      - Quality metrics
+      - Test results after fixes
+    </step>
+  </steps>
+</instructions>

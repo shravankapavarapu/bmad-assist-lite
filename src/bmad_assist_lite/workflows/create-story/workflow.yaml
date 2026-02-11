@@ -1,0 +1,18 @@
+name: create-story
+instructions: instructions.xml
+template: template.md
+
+input_file_patterns:
+  epics_file:
+    pattern: "**/epics*.md"
+    strategy: FULL_LOAD
+  prd_file:
+    pattern: "**/prd*.md"
+    strategy: FULL_LOAD
+  architecture_file:
+    pattern: "**/architecture*.md"
+    strategy: FULL_LOAD
+
+variables:
+  mission: "Create a comprehensive story context file for Epic {epic_num} Story {story_num}"
+  story_dir: "{output_folder}/implementation-artifacts"

@@ -1,0 +1,40 @@
+<instructions>
+  <mission>Synthesize multi-LLM validation findings and apply improvements</mission>
+
+  <steps>
+    <step id="1" name="Analyze Validator Findings">
+      Cross-reference findings from all validators.
+      Determine validity of each finding.
+      Note areas of consensus and disagreement.
+    </step>
+
+    <step id="2" name="Verify and Prioritize">
+      Assign severity to each validated finding:
+      - Critical: Must fix before development
+      - High: Should fix, significant impact
+      - Medium: Recommended improvement
+      - Low: Nice to have
+
+      Document any false positives from validators.
+    </step>
+
+    <step id="3" name="Apply Changes">
+      Apply validated improvements directly to the story file.
+      Log all changes made.
+      Use atomic writes to prevent corruption.
+    </step>
+
+    <step id="4" name="Generate Synthesis Report">
+      Create synthesis report with:
+      - Agreed findings across validators
+      - Unique findings from individual validators
+      - Disputed findings with resolution
+      - Quality metrics (actionable_ratio, specificity_score, evidence_quality)
+    </step>
+
+    <step id="5" name="Final Verification">
+      Verify all Critical and High issues are addressed.
+      Confirm story consistency after changes.
+    </step>
+  </steps>
+</instructions>

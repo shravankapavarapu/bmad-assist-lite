@@ -1,0 +1,38 @@
+<instructions>
+  <mission>Implement story tasks for Epic {epic_num} Story {story_num}</mission>
+
+  <critical>Execute continuously without pausing. Do NOT stop for milestones or progress updates.</critical>
+
+  <steps>
+    <step id="1" name="Load Story">
+      Load the story file and extract all tasks, acceptance criteria,
+      and developer notes.
+    </step>
+
+    <step id="2" name="Load Project Context">
+      Load project context for coding standards, patterns, and conventions.
+    </step>
+
+    <step id="3" name="Implement Tasks">
+      For each task in the story:
+      1. Write failing tests first (red)
+      2. Implement the minimum code to pass (green)
+      3. Refactor for quality (refactor)
+      4. Mark task checkbox complete
+    </step>
+
+    <step id="4" name="Run Validations">
+      Run all tests and ensure:
+      - All new tests pass
+      - No existing tests broken
+      - Code quality checks pass (linting, type checking)
+    </step>
+
+    <step id="5" name="Story Completion">
+      - Verify all acceptance criteria met
+      - Update story status to "review"
+      - Update Dev Agent Record with model info and file list
+      - Ensure all task checkboxes are checked
+    </step>
+  </steps>
+</instructions>

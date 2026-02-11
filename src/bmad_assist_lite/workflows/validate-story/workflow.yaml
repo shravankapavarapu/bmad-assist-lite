@@ -1,0 +1,17 @@
+name: validate-story
+description: "Independent quality validation of story context. Competes against the original create-story LLM to find mistakes, omissions, and disasters."
+instructions: instructions.xml
+
+input_file_patterns:
+  story_file:
+    pattern: "**/{epic_num}-{story_num}*.md"
+    strategy: FULL_LOAD
+  epics_file:
+    pattern: "**/epics*.md"
+    strategy: FULL_LOAD
+  architecture_file:
+    pattern: "**/architecture*.md"
+    strategy: FULL_LOAD
+
+variables:
+  mission: "Validate story quality for Epic {epic_num} Story {story_num}"

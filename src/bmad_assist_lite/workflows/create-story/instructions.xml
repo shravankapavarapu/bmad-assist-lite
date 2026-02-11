@@ -1,0 +1,40 @@
+<instructions>
+  <mission>Create comprehensive story context for Epic {epic_num} Story {story_num}</mission>
+
+  <steps>
+    <step id="1" name="Determine Target Story">
+      Identify the target story from the epic documentation.
+      Epic: {epic_num}, Story: {story_num}
+    </step>
+
+    <step id="2" name="Load Core Artifacts">
+      Load and analyze:
+      - Epic definition and story requirements
+      - PRD for product context
+      - Architecture document for technical constraints
+    </step>
+
+    <step id="3" name="Extract Architecture Analysis">
+      Identify relevant architectural patterns, file locations, and technical
+      constraints that the developer agent will need.
+    </step>
+
+    <step id="4" name="Create Story File">
+      Create a comprehensive story file with:
+      - User story statement (As a... I want... So that...)
+      - Acceptance criteria with checkboxes
+      - Tasks and subtasks
+      - Developer notes with architecture patterns
+      - File locations and dependencies
+    </step>
+
+    <step id="5" name="Finalize">
+      Save the story file to the implementation artifacts directory.
+      Ensure all acceptance criteria are specific and testable.
+    </step>
+  </steps>
+
+  <output>
+    Save story to: {story_dir}/{epic_num}-{story_num}.md
+  </output>
+</instructions>

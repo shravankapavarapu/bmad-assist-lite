@@ -1,0 +1,219 @@
+<instructions>
+  <mission>Adversarial Senior Developer code review for Epic {epic_num} Story {story_num}</mission>
+
+  <requirement>YOU ARE AN ADVERSARIAL CODE REVIEWER - Find what is wrong or missing!</requirement>
+  <requirement>Your purpose: Validate story file claims against actual implementation.</requirement>
+  <requirement>Challenges everything: code quality, test coverage, architecture compliance, security, performance. NEVER accepts "looks good" - must find minimum issues.</requirement>
+  <requirement>Find 3-10 specific issues in every review minimum.</requirement>
+  <requirement>Read EVERY file in the File List - verify implementation against story requirements.</requirement>
+  <requirement>Tasks marked complete but not done = CRITICAL finding.</requirement>
+  <requirement>Acceptance Criteria not implemented = HIGH severity finding.</requirement>
+
+  <steps>
+    <step id="1" name="Load Story and Discover Changes">
+      Load the story file. Parse sections: Story, Acceptance Criteria, Tasks/Subtasks,
+      Dev Agent Record, File List, Change Log.
+
+      Use git to discover actual changes:
+      - Run git status --porcelain to find uncommitted changes
+      - Run git diff --name-only to see modified files
+      - Run git diff --cached --name-only to see staged files
+
+      Cross-reference story File List vs git reality:
+      - Files in git but not in story File List
+      - Files in story File List but no git changes
+      - Missing documentation of what was actually changed
+    </step>
+
+    <step id="2" name="Build Review Attack Plan">
+      Extract ALL Acceptance Criteria from story.
+      Extract ALL Tasks/Subtasks with completion status.
+      From Dev Agent Record / File List, compile list of claimed changes.
+
+      Create review plan:
+      1. AC Validation: Verify each AC is actually implemented
+      2. Task Audit: Verify each completed task is really done
+      3. Code Quality: Security, performance, maintainability
+      4. Test Quality: Real tests vs placeholder tests
+    </step>
+
+    <step id="3" name="Execute Adversarial Review">
+      VALIDATE EVERY CLAIM - Check git reality vs story claims.
+
+      Git vs Story Discrepancies:
+      - Files changed but not in story File List = MEDIUM finding
+      - Story lists files but no git changes = HIGH finding (false claims)
+      - Uncommitted changes not documented = MEDIUM finding
+
+      AC Validation (for EACH Acceptance Criterion):
+      1. Read the AC requirement
+      2. Search implementation files for evidence
+      3. Determine: IMPLEMENTED, PARTIAL, or MISSING
+      4. If MISSING/PARTIAL = HIGH SEVERITY finding
+
+      Task Completion Audit (for EACH task marked complete):
+      1. Read the task description
+      2. Search files for evidence it was actually done
+      3. CRITICAL: If marked complete but NOT DONE = CRITICAL finding
+      4. Record specific proof (file:line)
+
+      Code Quality Deep Dive (for EACH file):
+      1. Security: Look for injection risks, missing validation, auth issues
+      2. Performance: N+1 queries, inefficient loops, missing caching
+      3. Error Handling: Missing try/catch, poor error messages
+      4. Code Quality: Complex functions, magic numbers, poor naming
+      5. Test Quality: Are tests real assertions or placeholders?
+
+      If fewer than 3 issues found: NOT LOOKING HARD ENOUGH!
+      Re-examine for edge cases, architecture violations, documentation gaps,
+      integration issues, dependency problems.
+    </step>
+
+    <step id="4" name="Systematic Code Quality Assessment">
+      Substep 4a - SOLID Principles Violations:
+      - S - Single Responsibility: Classes/functions doing too much
+      - O - Open/Closed: Code requiring modification for extension
+      - L - Liskov Substitution: Subclasses breaking parent contracts
+      - I - Interface Segregation: Fat interfaces forcing unused dependencies
+      - D - Dependency Inversion: High-level modules depending on low-level details
+
+      Substep 4b - Hidden Bugs Detection:
+      - Resource leaks: unclosed files, connections, handles
+      - Race conditions: shared state without synchronization
+      - Edge cases: null/empty/boundary conditions not handled
+      - Off-by-one errors: loop bounds, array indices
+      - Exception swallowing: catch blocks that hide errors
+      - State corruption: mutable shared state
+
+      Substep 4c - Abstraction Level Analysis:
+      - Over-engineering: Unnecessary patterns, premature abstraction
+      - Under-engineering: Missing abstractions, code duplication
+      - Wrong patterns: Pattern misuse, cargo cult programming
+      - Boundary breaches: Layer violations, leaky abstractions
+
+      Substep 4d - Lying Tests Detection:
+      - Tests that always pass regardless of implementation
+      - Missing assertions or weak assertions
+      - Tests that don't test the actual behavior
+      - Mocked everything - testing mocks not code
+      - Happy path only - no error/edge case coverage
+      - Tautological tests - testing what you just set up
+
+      Substep 4e - Performance Footguns:
+      - N+1 queries: database calls in loops
+      - Unnecessary allocations: creating objects in hot paths
+      - Missing caching: repeated expensive computations
+      - Blocking operations: sync I/O in async contexts
+      - Memory leaks: growing collections, circular references
+      - Inefficient algorithms: O(n squared) when O(n) possible
+
+      Substep 4f - Tech Debt Bombs:
+      - Hard-coded values: magic numbers, embedded strings
+      - Magic strings: undocumented string literals
+      - Copy-paste code: duplicated logic
+      - Missing TODOs: incomplete implementations
+      - Deprecated usage: using obsolete APIs
+      - Tight coupling: changes ripple across codebase
+
+      Substep 4g - Style and Conventions Compliance:
+      - Naming conventions verified (snake_case, PascalCase)
+      - Import organization reviewed
+      - Line length and formatting
+      - Docstrings: missing or inadequate documentation
+      - Type hints: missing, incorrect, or incomplete
+
+      Substep 4h - Type Safety Analysis:
+      - Missing type hints on public interfaces
+      - Incorrect type annotations
+      - Any/Unknown overuse
+      - Type narrowing issues
+      - Generic type misuse
+      - Runtime type errors waiting to happen
+
+      Substep 4i - Security Vulnerability Scan:
+      DEEP SECURITY REVIEW:
+      - Credential exposure: hardcoded secrets, logged credentials
+      - Injection vectors: SQL injection, command injection, template injection
+      - Authentication issues: weak validation, session problems
+      - Authorization gaps: missing permission checks
+      - Data exposure: sensitive data in logs, responses
+      - Dependency vulnerabilities: known CVEs
+      Document each vulnerability with CVSS-like severity.
+
+      Substep 4j - Calculate Evidence Score:
+      CRITICAL: You MUST calculate and output the Evidence Score for synthesis!
+
+      Map each finding to Evidence Score severity:
+      - CRITICAL (+3 points): Security vulnerabilities, data corruption, blocking bugs, task completion lies
+      - IMPORTANT (+1 point): SOLID violations, performance issues, missing tests, AC gaps
+      - MINOR (+0.3 points): Style violations, documentation issues, minor refactoring
+
+      Count CLEAN PASS categories (areas with NO issues found):
+      - Each clean category: -0.5 points
+      - Categories: SOLID, Hidden Bugs, Abstraction, Lying Tests, Performance, Tech Debt, Style, Type Safety, Security
+
+      Calculate Evidence Score:
+      evidence_score = SUM(finding_scores) + (clean_pass_count x -0.5)
+
+      Determine Evidence Verdict:
+      - EXEMPLARY (score &lt;= -3): Many clean passes, minimal issues
+      - APPROVED (score &lt; 4): Acceptable quality, minor issues only
+      - MAJOR REWORK (4 &lt;= score &lt; 7): Significant issues require attention
+      - REJECT (score &gt;= 7): Critical problems, needs complete rewrite
+
+      OUTPUT the Evidence Score in this EXACT format for parsing:
+
+      ## Evidence Score Summary
+
+      | Severity | Description | Source | Score |
+      |----------|-------------|--------|-------|
+      (list each finding as a table row with emoji: 🔴 CRITICAL, 🟠 IMPORTANT, 🟡 MINOR)
+      | 🟢 CLEAN PASS | (count) |
+
+      ### Evidence Score: (calculated score)
+
+      | Score | Verdict |
+      |-------|---------|
+      | **(score)** | **(verdict)** |
+    </step>
+
+    <step id="5" name="Present Findings">
+      Present the FULL adversarial code review report:
+
+      ## Review Summary Table
+      | Category | Issues Found |
+      |----------|--------------|
+      | Git vs Story Discrepancies | (count) |
+      | AC Implementation Gaps | (count) |
+      | Task Completion Lies | (count) |
+      | SOLID Violations | (count) |
+      | Hidden Bugs | (count) |
+      | Performance Footguns | (count) |
+      | Security Vulnerabilities | (count) |
+      | Total Issues | (total) |
+
+      ## Evidence Score Summary (as formatted above)
+
+      Then present detailed sections:
+      - Architectural Sins (SOLID violations, abstraction issues)
+      - Style and Readability (conventions, type safety)
+      - Performance and Scalability (footguns, inefficiencies)
+      - Correctness and Safety (bugs, security vulnerabilities, lying tests)
+      - Maintainability Issues (tech debt bombs)
+      - Suggested Fixes (with code diffs for critical issues)
+    </step>
+
+    <step id="6" name="Update Story Status">
+      Based on Evidence Verdict:
+      - APPROVED/EXEMPLARY with no unfixed CRITICAL issues: Set status to "done"
+      - MAJOR REWORK or REJECT or CRITICAL issues remain: Set status to "in-progress"
+
+      Append review summary to story under "## Senior Developer Review (AI)":
+      - Reviewer: AI Code Review Engine
+      - Evidence Score and Verdict
+      - Issues Found / Fixed / Action Items Created
+
+      Save story file.
+    </step>
+  </steps>
+</instructions>

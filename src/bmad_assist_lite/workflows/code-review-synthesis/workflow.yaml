@@ -1,0 +1,5 @@
+name: code-review-synthesis
+instructions: instructions.xml
+
+variables:
+  mission: "Synthesize code review findings for Epic {epic_num} Story {story_num}"
