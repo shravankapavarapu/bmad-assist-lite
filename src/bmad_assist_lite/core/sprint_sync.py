@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Maps workflow phases to sprint status strings
 PHASE_TO_STATUS: dict[str, str] = {
-    Phase.CREATE_STORY.value: "in-progress",
+    Phase.CREATE_STORY.value: "ready-for-dev",
     Phase.VALIDATE_STORY.value: "in-progress",
     Phase.VALIDATE_STORY_SYNTHESIS.value: "in-progress",
     Phase.DEV_STORY.value: "in-progress",

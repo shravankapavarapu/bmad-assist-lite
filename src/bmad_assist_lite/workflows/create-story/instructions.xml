@@ -3,34 +3,46 @@
 
   <steps>
     <step id="1" name="Determine Target Story">
-      Identify the target story from the epic documentation.
-      Epic: {epic_num}, Story: {story_num}
+      The target story is already determined from the sprint status queue.
+      Epic: {epic_num}, Story: {story_num}, Key: {story_key}
     </step>
 
-    <step id="2" name="Load Core Artifacts">
+    <step id="2" name="Load and Analyze Core Artifacts">
       Load and analyze:
-      - Epic definition and story requirements
-      - PRD for product context
-      - Architecture document for technical constraints
+      - Epic definition and story requirements from the epic file
+      - Previous story learnings (if story_num > 1, check for prior story files
+        in the implementation artifacts directory)
+      - Recent git history (last 5 commits) for project context
     </step>
 
-    <step id="3" name="Extract Architecture Analysis">
-      Identify relevant architectural patterns, file locations, and technical
-      constraints that the developer agent will need.
+    <step id="3" name="Architecture Analysis">
+      Extract from the architecture document:
+      - Architectural guardrails and constraints
+      - Design patterns to follow
+      - Stack requirements and dependencies
+      - File structure conventions
     </step>
 
-    <step id="4" name="Create Story File">
-      Create a comprehensive story file with:
+    <step id="4" name="Web Research">
+      Verify latest information:
+      - Library versions and compatibility
+      - API documentation for referenced services
+      - Best practices for the technology stack
+    </step>
+
+    <step id="5" name="Generate Story File">
+      Create the story file using the template with:
       - User story statement (As a... I want... So that...)
-      - Acceptance criteria with checkboxes
-      - Tasks and subtasks
-      - Developer notes with architecture patterns
-      - File locations and dependencies
+      - Acceptance criteria derived from the epic
+      - Tasks and subtasks mapped to acceptance criteria
+      - Developer notes with architecture patterns and constraints
+      - Source tree components to create or modify
+      - Testing standards and requirements
     </step>
 
-    <step id="5" name="Finalize">
-      Save the story file to the implementation artifacts directory.
-      Ensure all acceptance criteria are specific and testable.
+    <step id="6" name="Update Sprint Status">
+      Mark the story as "ready-for-dev" in sprint-status.yaml.
+      Update the story key {story_key} status from "backlog" to "ready-for-dev".
     </step>
   </steps>
 

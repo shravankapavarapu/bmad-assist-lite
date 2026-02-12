@@ -8,11 +8,13 @@ Commands:
 """
 
 import logging
-import sys
+import os
+from collections import OrderedDict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
+import yaml
 
 from bmad_assist_lite import __version__
 
@@ -133,73 +135,88 @@ def run(
     # Initialize paths
     from bmad_assist_lite.core.paths import init_paths
 
-    init_paths(project)
+    paths = init_paths(project)
 
-    # Load epics and stories
-    from bmad_assist_lite.bmad import parse_epic_file
+    # --- Sprint-status-driven story discovery ---
+    from bmad_assist_lite.core.sprint_status import load_sprint_status
 
-    docs_dir = project / "docs"
-    if not docs_dir.exists():
-        typer.echo(f"Docs directory not found: {docs_dir}", err=True)
+    ss_path = paths.sprint_status_file
+    if not ss_path.exists():
+        typer.echo(
+            f"Sprint status not found: {ss_path}\n\n"
+            "Create sprint-status.yaml with your stories:\n\n"
+            '  generated: "2026-02-12"\n'
+            "  development_status:\n"
+            "    epic-1: backlog\n"
+            "    1-1-story-title: backlog\n"
+            "    1-2-another-story: backlog\n"
+            "    epic-1-retrospective: optional\n",
+            err=True,
+        )
         raise typer.Exit(1)
 
-    # Find epic files
-    epic_files = sorted(docs_dir.glob("epic*.md")) + sorted(docs_dir.glob("epics*.md"))
-    epics_dir = docs_dir / "epics"
-    if epics_dir.exists():
-        epic_files.extend(sorted(epics_dir.glob("*.md")))
+    sprint_status = load_sprint_status(ss_path)
+    backlog_stories = sprint_status.find_backlog_stories()
 
-    if not epic_files:
-        typer.echo("No epic files found in docs/", err=True)
+    if not backlog_stories:
+        typer.echo("No backlog stories found in sprint-status.yaml")
+        raise typer.Exit(0)
+
+    # Group by epic, maintaining insertion order
+    epic_stories: OrderedDict[int, list[tuple[int, int, str]]] = OrderedDict()
+    for epic_num, story_num, full_key in backlog_stories:
+        if epic and epic_num != epic:
+            continue
+        epic_stories.setdefault(epic_num, []).append((epic_num, story_num, full_key))
+
+    if not epic_stories:
+        typer.echo("No backlog stories match the specified filters.", err=True)
         raise typer.Exit(1)
 
-    # Load sprint status for done-story filtering
-    from bmad_assist_lite.core.sprint_status import (
-        get_sprint_status_path,
-        load_sprint_status,
-    )
+    # Filter by --story option (start from specific story number)
+    if story:
+        for e_num, story_list in list(epic_stories.items()):
+            filtered = [(en, sn, fk) for en, sn, fk in story_list if sn >= story]
+            if filtered:
+                epic_stories[e_num] = filtered
+            else:
+                del epic_stories[e_num]
 
-    sprint_status = load_sprint_status(get_sprint_status_path(project))
+    # Validate epic files exist for each epic
+    planning_dir = paths.planning_artifacts
+    epic_file_map: dict[int, Path] = {}
 
-    _DONE_STATUSES = {"done", "complete", "completed"}
+    for e_num in epic_stories:
+        epic_file = _find_epic_file(planning_dir, e_num)
+        if epic_file is None:
+            typer.echo(
+                f"No epic file found for epic {e_num} in {planning_dir}. Cannot continue.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        epic_file_map[e_num] = epic_file
 
-    epics_list: list[int] = []
+    # Build epics_list and stories_for_epic for the loop
+    epics_list: list[int] = list(epic_stories.keys())
     stories_for_epic: dict[int, list[str]] = {}
+    story_key_map: dict[str, str] = {}  # story_id -> full sprint-status key
 
-    for ef in epic_files:
-        epic_doc = parse_epic_file(ef)
-        if epic_doc.stories:
-            e_num = epic_doc.epic_number
-            if epic and e_num != epic:
-                continue
+    for e_num, story_tuples in epic_stories.items():
+        story_ids: list[str] = []
+        for _, s_num, full_key in story_tuples:
+            story_id = f"{e_num}.{s_num}"
+            story_ids.append(story_id)
+            story_key_map[story_id] = full_key
+        stories_for_epic[e_num] = story_ids
 
-            # Build story list, filtering out done stories
-            story_ids: list[str] = []
-            for s in epic_doc.stories:
-                # Skip if done in markdown metadata
-                if s.status.lower() in _DONE_STATUSES:
-                    continue
-                # Skip if done in sprint-status.yaml
-                if sprint_status.is_story_done(s.number):
-                    continue
-                story_ids.append(s.number)
-
-            if story:
-                # Filter to start from specific story
-                story_key = f"{e_num}.{story}"
-                if story_key in story_ids:
-                    idx = story_ids.index(story_key)
-                    story_ids = story_ids[idx:]
-
-            if story_ids:
-                epics_list.append(e_num)
-                stories_for_epic[e_num] = story_ids
-
-    if not epics_list:
-        typer.echo("No epics with stories found.", err=True)
-        raise typer.Exit(1)
-
-    epics_list.sort()
+    # Cache resolved story queue for create-story workflow
+    _cache_story_queue(
+        paths.cache_dir,
+        epics_list,
+        stories_for_epic,
+        story_key_map,
+        epic_file_map,
+    )
 
     typer.echo(
         f"Found {len(epics_list)} epic(s) with "
@@ -222,7 +239,10 @@ def run(
             from bmad_assist_lite.core.resume_validation import validate_resume_state
 
             validation = validate_resume_state(
-                resume_state, project, epics_list, stories_for_epic,
+                resume_state,
+                project,
+                epics_list,
+                stories_for_epic,
                 app_config.loop.story,
             )
             if validation.advanced:
@@ -311,19 +331,19 @@ paths:
     config_path.write_text(default_config)
     typer.echo(f"Created config: {config_path}")
 
-    # Create docs directory
-    docs_dir = project / "docs"
-    docs_dir.mkdir(exist_ok=True)
-    typer.echo(f"Created docs directory: {docs_dir}")
+    # Create BMAD directory structure
+    planning_dir = project / "_bmad-output" / "planning-artifacts"
+    planning_dir.mkdir(parents=True, exist_ok=True)
+    typer.echo(f"Created planning artifacts: {planning_dir}")
 
-    # Create output directory
-    output_dir = project / "_bmad-output"
-    output_dir.mkdir(exist_ok=True)
-    typer.echo(f"Created output directory: {output_dir}")
+    impl_dir = project / "_bmad-output" / "implementation-artifacts"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    typer.echo(f"Created implementation artifacts: {impl_dir}")
 
     typer.echo("\nProject initialized! Next steps:")
-    typer.echo("  1. Add your epic files to docs/ (e.g., docs/epic-1.md)")
-    typer.echo("  2. Run: bmad-assist-lite run")
+    typer.echo("  1. Add your epic files to _bmad-output/planning-artifacts/ (e.g., epic-1.md)")
+    typer.echo("  2. Create sprint-status.yaml in _bmad-output/implementation-artifacts/")
+    typer.echo("  3. Run: bmad-assist-lite run")
 
 
 @app.command()
@@ -399,3 +419,74 @@ def reset_lock(
         typer.echo(f"Removed lock file: {lock_path}")
     else:
         typer.echo("No lock file found.")
+
+
+# --- Helper functions for sprint-status-driven discovery ---
+
+
+def _find_epic_file(planning_dir: Path, epic_num: int) -> Path | None:
+    """Find an epic file for a given epic number in planning-artifacts.
+
+    Search order:
+        1. epic-{N}.md or epic{N}.md (specific file)
+        2. epics.md or *epic*.md (master file containing all epics)
+
+    Returns the first match or None.
+    """
+    if not planning_dir.exists():
+        return None
+
+    # Specific epic file patterns
+    for pattern in [f"epic-{epic_num}.md", f"epic{epic_num}.md"]:
+        matches = list(planning_dir.glob(pattern))
+        if matches:
+            return matches[0]
+
+    # Master epic file patterns
+    for pattern in ["epics.md", "*epic*.md"]:
+        matches = sorted(planning_dir.glob(pattern))
+        if matches:
+            return matches[0]
+
+    return None
+
+
+def _cache_story_queue(
+    cache_dir: Path,
+    epics_list: list[int],
+    stories_for_epic: dict[int, list[str]],
+    story_key_map: dict[str, str],
+    epic_file_map: dict[int, Path],
+) -> None:
+    """Cache resolved story queue to .bmad-assist-lite/cache/story-queue.yaml."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / "story-queue.yaml"
+    temp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+
+    data: dict[str, Any] = {
+        "epics": epics_list,
+        "stories_for_epic": stories_for_epic,
+        "story_key_map": story_key_map,
+        "epic_file_map": {str(k): str(v) for k, v in epic_file_map.items()},
+    }
+
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        os.replace(temp_path, cache_path)
+    except OSError:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def load_story_queue_cache(cache_dir: Path) -> dict[str, Any] | None:
+    """Load cached story queue from .bmad-assist-lite/cache/story-queue.yaml."""
+    cache_path = cache_dir / "story-queue.yaml"
+    if not cache_path.exists():
+        return None
+    try:
+        content = cache_path.read_text(encoding="utf-8")
+        data = yaml.safe_load(content)
+        return data if isinstance(data, dict) else None
+    except (yaml.YAMLError, OSError):
+        return None

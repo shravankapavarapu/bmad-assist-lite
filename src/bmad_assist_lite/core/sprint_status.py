@@ -15,19 +15,20 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 SPRINT_STATUS_FILENAME = "sprint-status.yaml"
-SPRINT_STATUS_DIR = ".bmad-assist-lite"
 TEMP_FILE_SUFFIX = ".tmp"
 
-VALID_STATUSES = frozenset({
-    "backlog",
-    "ready-for-dev",
-    "in-progress",
-    "review",
-    "done",
-    "blocked",
-    "deferred",
-    "optional",
-})
+VALID_STATUSES = frozenset(
+    {
+        "backlog",
+        "ready-for-dev",
+        "in-progress",
+        "review",
+        "done",
+        "blocked",
+        "deferred",
+        "optional",
+    }
+)
 
 DONE_STATUSES = frozenset({"done", "complete", "completed"})
 
@@ -84,6 +85,58 @@ class SprintStatus(BaseModel):
         status = self.get_epic_status(epic_id)
         return status is not None and status.lower() in DONE_STATUSES
 
+    # --- Backlog discovery ---
+
+    def find_next_backlog_story(self) -> tuple[int, int, str] | None:
+        """Find the first backlog story in development_status.
+
+        Skips epic entries (keys starting with 'epic-') and retrospective entries.
+        Parses key format '{epic_num}-{story_num}-{title}' (e.g., '1-2-user-auth').
+
+        Returns:
+            (epic_num, story_num, full_key) or None if no backlog stories.
+        """
+        result = self.find_backlog_stories()
+        return result[0] if result else None
+
+    def find_backlog_stories(self) -> list[tuple[int, int, str]]:
+        """Find all backlog stories in development_status order.
+
+        Skips epic entries (keys starting with 'epic-') and retrospective entries.
+        Parses key format '{epic_num}-{story_num}-{title}' (e.g., '1-2-user-auth').
+
+        Returns:
+            List of (epic_num, story_num, full_key) tuples in insertion order.
+        """
+        results: list[tuple[int, int, str]] = []
+        for key, status in self.development_status.items():
+            if key.startswith("epic-"):
+                continue
+            if "retrospective" in key:
+                continue
+            if status != "backlog":
+                continue
+            parsed = self._parse_story_key(key)
+            if parsed is not None:
+                results.append(parsed)
+        return results
+
+    @staticmethod
+    def _parse_story_key(key: str) -> tuple[int, int, str] | None:
+        """Parse a story key like '1-2-user-auth' into (epic_num, story_num, key).
+
+        Returns None if the key doesn't match expected format.
+        """
+        parts = key.split("-", 2)
+        if len(parts) < 2:
+            return None
+        try:
+            epic_num = int(parts[0])
+            story_num = int(parts[1])
+            return (epic_num, story_num, key)
+        except ValueError:
+            return None
+
     # --- Key resolution ---
 
     def _find_key(self, story_id: str) -> str | None:
@@ -107,8 +160,13 @@ class SprintStatus(BaseModel):
 
 
 def get_sprint_status_path(project_root: Path) -> Path:
-    """Get resolved sprint-status.yaml path for a project."""
-    return (project_root / SPRINT_STATUS_DIR / SPRINT_STATUS_FILENAME).resolve()
+    """Get resolved sprint-status.yaml path for a project.
+
+    Resolves to _bmad-output/implementation-artifacts/sprint-status.yaml.
+    """
+    return (
+        project_root / "_bmad-output" / "implementation-artifacts" / SPRINT_STATUS_FILENAME
+    ).resolve()
 
 
 def save_sprint_status(sprint_status: SprintStatus, path: str | Path) -> None:
@@ -121,9 +179,7 @@ def save_sprint_status(sprint_status: SprintStatus, path: str | Path) -> None:
         data = sprint_status.model_dump(mode="json")
 
         with open(temp_path, "w", encoding="utf-8") as f:
-            yaml.dump(
-                data, f, default_flow_style=False, sort_keys=False, allow_unicode=True
-            )
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
         os.replace(temp_path, path)
 

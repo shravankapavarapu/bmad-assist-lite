@@ -25,6 +25,13 @@ PHASE_LIST = [
 ]
 
 
+def _save_sprint_status(tmp_path, ss):
+    """Save sprint status to the correct path for tests."""
+    ss_path = get_sprint_status_path(tmp_path)
+    ss_path.parent.mkdir(parents=True, exist_ok=True)
+    save_sprint_status(ss, ss_path)
+
+
 class TestResumeValidation:
     """Tests for validate_resume_state."""
 
@@ -45,7 +52,7 @@ class TestResumeValidation:
         """Done story is skipped to next story in same epic."""
         ss = SprintStatus()
         ss.set_story_status("1.1", "done")
-        save_sprint_status(ss, get_sprint_status_path(tmp_path))
+        _save_sprint_status(tmp_path, ss)
 
         state = State(
             current_epic=1,
@@ -66,7 +73,7 @@ class TestResumeValidation:
         ss.set_story_status("1.1", "done")
         ss.set_story_status("1.2", "done")
         ss.set_story_status("1.3", "done")
-        save_sprint_status(ss, get_sprint_status_path(tmp_path))
+        _save_sprint_status(tmp_path, ss)
 
         state = State(
             current_epic=1,
@@ -86,7 +93,7 @@ class TestResumeValidation:
         ss = SprintStatus()
         for s in ["1.1", "1.2", "1.3", "2.1", "2.2"]:
             ss.set_story_status(s, "done")
-        save_sprint_status(ss, get_sprint_status_path(tmp_path))
+        _save_sprint_status(tmp_path, ss)
 
         state = State(
             current_epic=1,
@@ -103,7 +110,7 @@ class TestResumeValidation:
         """Never advance past RETROSPECTIVE phase."""
         ss = SprintStatus()
         ss.set_story_status("1.1", "done")
-        save_sprint_status(ss, get_sprint_status_path(tmp_path))
+        _save_sprint_status(tmp_path, ss)
 
         state = State(
             current_epic=1,
@@ -129,7 +136,7 @@ class TestResumeValidation:
         """Summary returns human-readable text."""
         ss = SprintStatus()
         ss.set_story_status("1.1", "done")
-        save_sprint_status(ss, get_sprint_status_path(tmp_path))
+        _save_sprint_status(tmp_path, ss)
 
         state = State(
             current_epic=1,

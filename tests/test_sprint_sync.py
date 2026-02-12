@@ -1,4 +1,4 @@
-"""Tests for state → sprint-status synchronization."""
+"""Tests for state -> sprint-status synchronization."""
 
 import pytest
 
@@ -31,6 +31,10 @@ class TestPhaseMapping:
         """CODE_REVIEW phase maps to review status."""
         assert PHASE_TO_STATUS[Phase.CODE_REVIEW.value] == "review"
 
+    def test_create_story_maps_to_ready_for_dev(self):
+        """CREATE_STORY phase maps to ready-for-dev status."""
+        assert PHASE_TO_STATUS[Phase.CREATE_STORY.value] == "ready-for-dev"
+
 
 class TestSyncStateToSprint:
     """Tests for the pure sync function."""
@@ -58,7 +62,7 @@ class TestSyncStateToSprint:
         sync_state_to_sprint(state, ss)
         assert ss.is_story_done("1.1")
         assert ss.is_story_done("1.2")
-        assert ss.get_story_status("1.3") == "in-progress"
+        assert ss.get_story_status("1.3") == "ready-for-dev"
 
     def test_sync_completed_epics(self):
         """Completed epics are marked as done."""
@@ -113,7 +117,7 @@ class TestTriggerSync:
         assert ss_path.exists()
 
         loaded = load_sprint_status(ss_path)
-        assert loaded.get_story_status("1.1") == "in-progress"
+        assert loaded.get_story_status("1.1") == "ready-for-dev"
 
     def test_trigger_sync_swallows_exceptions(self, tmp_path, monkeypatch):
         """trigger_sync never raises, even on errors."""

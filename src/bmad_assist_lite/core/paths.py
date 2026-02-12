@@ -63,15 +63,10 @@ class ProjectPaths:
 
     @cached_property
     def epics_dir(self) -> Path:
-        """Directory for epic definition files."""
+        """Directory for epic definition files (planning-artifacts)."""
         if "epics" in self._config:
             return self._resolve_path(self._config["epics"])
-
-        sharded_dir = self.project_knowledge / "epics"
-        if sharded_dir.exists() and sharded_dir.is_dir():
-            return sharded_dir
-
-        return self.planning_artifacts / "epics"
+        return self.planning_artifacts
 
     @cached_property
     def stories_dir(self) -> Path:
@@ -117,7 +112,7 @@ class ProjectPaths:
 
     @cached_property
     def sprint_status_file(self) -> Path:
-        return self.bmad_assist_dir / "sprint-status.yaml"
+        return self.implementation_artifacts / "sprint-status.yaml"
 
     @cached_property
     def plugins_dir(self) -> Path:
@@ -147,9 +142,7 @@ class ProjectPaths:
             try:
                 directory.mkdir(parents=True, exist_ok=True)
             except PermissionError as e:
-                raise PermissionError(
-                    f"Cannot create directory '{directory}': {e}"
-                ) from e
+                raise PermissionError(f"Cannot create directory '{directory}': {e}") from e
 
     def __repr__(self) -> str:
         return f"ProjectPaths(project_root={self.project_root})"

@@ -1,10 +1,8 @@
 # Story {epic_num}.{story_num}: [Title]
 
-**Epic:** {epic_num}
-**Status:** Draft
-**Estimate:** [TBD]
+Status: ready-for-dev
 
-## User Story
+## Story
 
 As a [user type],
 I want [action],
@@ -12,28 +10,26 @@ so that [benefit].
 
 ## Acceptance Criteria
 
-- [ ] [Criterion 1]
-- [ ] [Criterion 2]
-- [ ] [Criterion 3]
+1. [Criterion from epic]
 
 ## Tasks / Subtasks
 
-- [ ] Task 1
-- [ ] Task 2
+- [ ] Task 1 (AC: #1)
+  - [ ] Subtask 1.1
 
 ## Dev Notes
 
-### Architecture Patterns
-[Relevant patterns from architecture doc]
+- Architecture patterns and constraints
+- Source tree components to touch
+- Testing standards
 
-### File Locations
-[Key files to create or modify]
+### Project Structure Notes
 
-### Dependencies
-[External dependencies or prerequisites]
+### References
 
 ## Dev Agent Record
 
-- **Model:** [model]
-- **Completed:** [date]
-- **Files Modified:** [list]
+### Agent Model Used
+### Debug Log References
+### Completion Notes List
+### File List
