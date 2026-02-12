@@ -42,42 +42,53 @@ bmad-assist-lite init
 
 This creates:
 - `bmad-assist-lite.yaml` — project configuration (default: Claude master + Gemini multi)
-- `docs/` — place your BMAD documents here
-- `_bmad-output/` — generated artifacts
+- `_bmad-output/planning-artifacts/` — place your epic files, PRD, architecture docs here
+- `_bmad-output/implementation-artifacts/` — generated stories, code reviews, sprint status
 
-The `.bmad-assist-lite/` directory (state, cache, sprint status) is created automatically on first `run`.
+The `.bmad-assist-lite/` directory (state, cache) is created automatically on first `run`.
 
 > **Note:** The init command creates a static config template. There is no interactive wizard — edit `bmad-assist-lite.yaml` to customize providers and models (see [Changing Models](#changing-models)).
 
 ### Add Your BMAD Documents
 
-Place these files in your project's `docs/` directory:
+Place planning documents in `_bmad-output/planning-artifacts/`:
 
 ```
-docs/
-  prd.md              # Product Requirements Document
-  architecture.md     # Architecture/technical design
-  epic-1.md           # Epic with stories (## Story 1.1: Title format)
-  epic-2.md           # Additional epics
-  project_context.md  # Coding standards, conventions (optional)
+_bmad-output/
+  planning-artifacts/
+    epic-1.md           # Epic definition (or epics.md for all-in-one)
+    epic-2.md           # Additional epics
+    prd.md              # Product Requirements Document
+    architecture.md     # Architecture/technical design
+    ux.md               # UX specifications (optional)
+  implementation-artifacts/
+    sprint-status.yaml  # Story queue (you create this)
 ```
 
-Epic files should contain stories in this format:
+### Create Your Sprint Status
 
-```markdown
-# Epic 1: Feature Name
+**Sprint-status.yaml is the source of truth** for what stories to work on. Create it in `_bmad-output/implementation-artifacts/`:
 
-## Story 1.1: First Story Title
-**Status:** Draft
-**Priority:** High
-
-### Acceptance Criteria
-- [ ] Criterion one
-- [ ] Criterion two
-
-## Story 1.2: Second Story Title
-...
+```yaml
+# _bmad-output/implementation-artifacts/sprint-status.yaml
+generated: "2026-02-12"
+development_status:
+  epic-1: backlog
+  1-1-project-setup: backlog
+  1-2-user-auth: backlog
+  1-3-api-endpoints: backlog
+  epic-1-retrospective: optional
+  epic-2: backlog
+  2-1-dashboard: backlog
 ```
+
+Story keys use the format `{epic}-{story}-{title}` (e.g., `1-2-user-auth`). The loop processes backlog stories in the order they appear in the file.
+
+Each epic referenced in the sprint status **must have a matching epic file** in `planning-artifacts/`. The tool searches for:
+1. `epic-{N}.md` or `epic{N}.md` (specific file)
+2. `epics.md` or `*epic*.md` (master file containing all epics)
+
+If no epic file is found, the run stops immediately with a clear error.
 
 ### Run the Loop
 
@@ -209,40 +220,56 @@ loop:
 
 ## Sprint Status Tracking
 
-bmad-assist-lite tracks development progress in `.bmad-assist-lite/sprint-status.yaml`, automatically updated after each phase.
+Sprint status lives at `_bmad-output/implementation-artifacts/sprint-status.yaml` and serves as the **single source of truth** for story discovery and progress tracking.
 
 ### How It Works
 
+- **Sprint-status-driven discovery**: On `run`, the tool reads `sprint-status.yaml` to find backlog stories, validates epic files exist, then builds the story queue
 - **Auto-sync**: After every phase execution, `state.yaml` is projected onto `sprint-status.yaml` with story/epic statuses
-- **Story filtering**: On `run`, stories marked as done (in either the epic markdown `**Status: done**` or `sprint-status.yaml`) are automatically skipped
+- **Story caching**: Resolved story queue (epic files, story keys) is cached to `.bmad-assist-lite/cache/story-queue.yaml` so workflows don't re-parse sprint-status
 - **Resume validation**: On `--resume`, the saved state is cross-checked against sprint-status — done stories/epics are skipped automatically
 - **Crash recovery**: On resume, partial `*.tmp` files in the cache are cleaned up, and DEV_STORY phase warns about uncommitted git changes
 
 ### Sprint Status File Format
 
 ```yaml
-# .bmad-assist-lite/sprint-status.yaml (auto-generated, do not commit)
-generated: '2025-06-15T10:30:00'
+# _bmad-output/implementation-artifacts/sprint-status.yaml
+generated: '2026-02-12'
 development_status:
-  story-1-1: done
-  story-1-2: in-progress
-  story-1-3: backlog
-  epic-1: in-progress
+  epic-1: backlog
+  1-1-project-setup: done
+  1-2-user-auth: ready-for-dev
+  1-3-api-endpoints: backlog
+  epic-1-retrospective: optional
+  epic-2: backlog
+  2-1-dashboard: backlog
 ```
 
 **Valid statuses:** `backlog`, `ready-for-dev`, `in-progress`, `review`, `done`, `blocked`, `deferred`, `optional`
 
-You can also manually edit this file to mark stories as `done` or `deferred` — the loop will respect those statuses on next run.
+**Phase-to-status mapping:**
+
+| Phase | Status set |
+|-------|-----------|
+| `create_story` | `ready-for-dev` |
+| `validate_story` / `validate_story_synthesis` | `in-progress` |
+| `dev_story` | `in-progress` |
+| `code_review` / `code_review_synthesis` | `review` |
+| `retrospective` | `done` |
+
+You can manually edit this file to mark stories as `done` or `deferred` — the loop will respect those statuses on next run.
 
 ## Project Structure
 
 ```
 src/bmad_assist_lite/
   cli.py                    # 4 Typer commands: run, init, compile, reset-lock
+                            # Sprint-status-driven story discovery + epic file validation
   core/                     # Config, state, paths, exceptions, async utils
-    sprint_status.py        # Sprint status model + YAML I/O
+    sprint_status.py        # Sprint status model + YAML I/O + backlog discovery
     sprint_sync.py          # State → sprint-status one-way sync
     resume_validation.py    # Resume state validation against sprint-status
+    paths.py                # Centralized path resolution (planning-artifacts, implementation-artifacts)
   providers/                # Claude SDK + Gemini CLI implementations
   compiler/                 # Workflow compilation pipeline
     workflows/              # 7 workflow-specific compiler modules
@@ -253,6 +280,29 @@ src/bmad_assist_lite/
   plugins/                  # Plugin protocols, registry, loader
   bmad/                     # Epic/story markdown parser
   workflows/                # Bundled workflow templates (YAML + XML/MD)
+```
+
+### Directory Layout (per project)
+
+```
+your-project/
+  bmad-assist-lite.yaml               # Project config
+  _bmad-output/
+    planning-artifacts/               # Epic files, PRD, architecture (user-created)
+      epic-1.md
+      prd.md
+      architecture.md
+    implementation-artifacts/         # Generated stories, reviews, sprint status
+      sprint-status.yaml              # Source of truth for story queue (user-created)
+      1-1.md                          # Generated story files
+      story-validations/
+      code-reviews/
+      retrospectives/
+  .bmad-assist-lite/                  # Internal state (auto-created on first run)
+    state.yaml                        # Loop state (current epic/story/phase)
+    cache/
+      story-queue.yaml                # Cached resolved story queue
+    plugins/                          # Local plugins
 ```
 
 ## Evidence Score System
@@ -296,6 +346,28 @@ The code review phase includes a dedicated **Security Vulnerability Scan** (subs
 - **Dependency vulnerabilities**: known CVEs
 
 Security vulnerabilities are automatically rated **CRITICAL (+3 points)** in the Evidence Score, ensuring they trigger MAJOR REWORK or REJECT verdicts.
+
+## Security Considerations
+
+bmad-assist-lite includes several built-in protections, but there are risks users should be aware of when running LLM-orchestrated development:
+
+### Built-in Protections
+
+| Risk | Mitigation | File |
+|------|-----------|------|
+| **TOCTOU race on lock file** | Atomic exclusive file create using `os.O_CREAT \| os.O_EXCL` — no gap between check and create | `loop/locking.py` |
+| **LLM output DoS** | Caps on parsed content (500KB), finding descriptions (1KB), and findings per report (100) to prevent memory/CPU exhaustion from oversized LLM responses | `validation/evidence_score.py` |
+| **Path traversal via config_source** | Workflow `config_source` values are resolved and verified to be within the project root before loading | `compiler/variables.py` |
+| **Path traversal via glob patterns** | All glob matches are resolved to canonical paths and rejected if outside the base directory | `compiler/discovery.py` |
+| **Symlink attacks on local plugins** | Plugin directory is resolved to a canonical path before loading; a warning is logged whenever local plugins are loaded | `plugins/loader.py` |
+
+### User Responsibilities
+
+- **Local plugins execute arbitrary code.** Only place trusted `.py` files in `.bmad-assist-lite/plugins/`. Ensure the directory is only writable by your user account.
+- **LLMs can produce malicious code.** The Master LLM modifies your project files during `dev_story`. Always review generated code before committing. The code review phase helps catch issues, but is not a guarantee.
+- **Config files are trusted input.** `bmad-assist-lite.yaml` and `config_source` paths control what files the compiler reads. Don't accept config files from untrusted sources.
+- **Sprint-status.yaml is the source of truth.** This file controls which stories are queued for development. Manually editing story statuses to `done` will cause those stories to be skipped. If someone with write access marks stories done prematurely, work will be skipped silently.
+- **Provider credentials.** Claude and Gemini CLI tools manage their own authentication. bmad-assist-lite does not store or handle API keys directly, but ensure your CLI tools are properly secured.
 
 ## Adding Features from bmad-assist
 
@@ -434,7 +506,7 @@ Here's what to port from bmad-assist and how:
 # Install dev dependencies
 pip install -e ".[dev]"
 
-# Run tests (165 tests, ~0.7s)
+# Run tests (184 tests, ~0.7s)
 pytest -q --tb=line --no-header
 
 # Run specific test file

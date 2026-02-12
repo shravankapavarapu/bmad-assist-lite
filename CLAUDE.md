@@ -37,13 +37,13 @@ Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 4 comman
 
 ### Sprint Status Tracking
 
-The sprint status system provides a human-readable view of development progress:
+Sprint-status.yaml is the **single source of truth** for story discovery and progress:
 
-- **`core/sprint_status.py`** — `SprintStatus` Pydantic model with YAML I/O. Tracks story and epic statuses (backlog, in-progress, review, done, etc.) in `.bmad-assist-lite/sprint-status.yaml`
-- **`core/sprint_sync.py`** — One-way sync from `state.yaml` → `sprint-status.yaml` after each phase execution. Non-fatal (errors logged as warnings, never propagated)
+- **`core/sprint_status.py`** — `SprintStatus` Pydantic model with YAML I/O. Tracks story and epic statuses in `_bmad-output/implementation-artifacts/sprint-status.yaml`. Provides `find_backlog_stories()` and `find_next_backlog_story()` for story queue discovery
+- **`core/sprint_sync.py`** — One-way sync from `state.yaml` → `sprint-status.yaml` after each phase execution. Non-fatal (errors logged as warnings, never propagated). CREATE_STORY maps to `ready-for-dev`
 - **`core/resume_validation.py`** — On `--resume`, cross-checks state against sprint-status to skip done stories/epics. Safety: never advances past RETROSPECTIVE phase
 - **`loop/cleanup.py`** — Crash recovery: cleans `*.tmp` files from cache on resume, warns about uncommitted git changes for DEV_STORY
-- **Story filtering** — At load time (in `cli.py`), done stories are filtered out based on both markdown `**Status: done**` metadata and sprint-status.yaml
+- **Story discovery** — At load time (in `cli.py`), reads sprint-status.yaml for backlog stories, validates epic files exist in `planning-artifacts/`, caches resolved queue to `.bmad-assist-lite/cache/story-queue.yaml`
 
 ### Key Patterns
 
@@ -57,10 +57,10 @@ The sprint status system provides a human-readable view of development progress:
 
 `bmad-assist-lite init` creates a minimal project scaffold:
 - `bmad-assist-lite.yaml` — Default config (Claude master + Gemini multi)
-- `docs/` — Place BMAD documents (epics, PRD, architecture)
-- `_bmad-output/` — Generated artifacts
+- `_bmad-output/planning-artifacts/` — Place epic files, PRD, architecture docs
+- `_bmad-output/implementation-artifacts/` — Generated stories, sprint status
 
-The `.bmad-assist-lite/` directory (with `cache/`, `state.yaml`, `sprint-status.yaml`) is created automatically on first `run` via `paths.ensure_directories()`. The init command does **not** create it.
+The `.bmad-assist-lite/` directory (with `cache/`, `state.yaml`) is created automatically on first `run` via `paths.ensure_directories()`. The init command does **not** create it.
 
 Note: Unlike bmad-assist, there is no interactive config wizard. Config is a static template — edit `bmad-assist-lite.yaml` manually to change providers/models.
 
