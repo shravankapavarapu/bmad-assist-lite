@@ -98,16 +98,16 @@ def parse_bmad_file(file_path: Path) -> BmadDocument:
     )
 
 
-# Story header patterns
-# Standard: ## Story X.Y: Title
+# Story header patterns (## or ### or deeper, matching bmad-assist)
+# Standard: ## Story X.Y: Title  /  ### Story X.Y: Title
 _STORY_HEADER_PATTERN = re.compile(
-    r"^##\s+Story\s+(\d+)\.(\d+)\s*:\s*(.+)",
+    r"^#{2,}\s+Story\s+(\d+)\.(\d+)\s*:\s*(.+)",
     re.MULTILINE,
 )
 
-# Fallback: ## X.Y Title (no "Story" prefix)
+# Fallback: ## X.Y Title  /  ### X.Y Title (no "Story" prefix)
 _STORY_HEADER_FALLBACK = re.compile(
-    r"^##\s+(\d+)\.(\d+)\s+(.+)",
+    r"^#{2,}\s+(\d+)\.(\d+)\s+(.+)",
     re.MULTILINE,
 )
 
@@ -151,7 +151,7 @@ def _extract_story_metadata(section: str) -> dict[str, Any]:
 
 
 def _split_sections(content: str) -> list[tuple[str, str]]:
-    """Split content into (header, section_body) tuples at ## boundaries."""
+    """Split content into (header, section_body) tuples at ##+ boundaries."""
     sections: list[tuple[str, str]] = []
     lines = content.split("\n")
 
@@ -159,7 +159,7 @@ def _split_sections(content: str) -> list[tuple[str, str]]:
     current_lines: list[str] = []
 
     for line in lines:
-        if line.startswith("## "):
+        if re.match(r"^#{2,}\s", line):
             if current_header or current_lines:
                 sections.append((current_header, "\n".join(current_lines)))
             current_header = line
