@@ -173,9 +173,7 @@ def load_file_contents(
             except UnicodeDecodeError:
                 continue
             except PermissionError as e:
-                raise CompilerError(
-                    f"Permission denied reading file: {file_path}"
-                ) from e
+                raise CompilerError(f"Permission denied reading file: {file_path}") from e
             except OSError as e:
                 logger.warning("Error reading file '%s': %s", file_path, e)
 

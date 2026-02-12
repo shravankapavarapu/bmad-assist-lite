@@ -20,9 +20,7 @@ class RetrospectiveCompiler:
 
     def get_workflow_dir(self, context: CompilerContext) -> Path:
         """Return bundled workflow directory."""
-        ref = (
-            importlib.resources.files("bmad_assist_lite.workflows") / "retrospective"
-        )
+        ref = importlib.resources.files("bmad_assist_lite.workflows") / "retrospective"
         return Path(str(ref))
 
     def get_required_files(self) -> list[str]:
@@ -44,9 +42,7 @@ class RetrospectiveCompiler:
 
         # Resolve variables
         invocation_vars = {
-            k: v
-            for k, v in context.resolved_variables.items()
-            if isinstance(v, (str, int, float))
+            k: v for k, v in context.resolved_variables.items() if isinstance(v, (str, int, float))
         }
         resolved = resolve_variables(context, invocation_vars)
 

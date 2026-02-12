@@ -65,7 +65,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         return {}, text
 
     frontmatter_text = text[3:end_pos].strip()
-    remaining = text[end_pos + 3:].strip()
+    remaining = text[end_pos + 3 :].strip()
 
     if not frontmatter_text:
         return {}, remaining

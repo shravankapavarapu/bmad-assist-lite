@@ -102,8 +102,7 @@ def parse_workflow_instructions(instructions_path: Path) -> str:
     # Security: Reject XML with DOCTYPE/ENTITY declarations
     if "<!DOCTYPE" in content or "<!ENTITY" in content:
         raise ParserError(
-            f"Invalid XML in {instructions_path}: "
-            "DOCTYPE and ENTITY declarations are not allowed"
+            f"Invalid XML in {instructions_path}: DOCTYPE and ENTITY declarations are not allowed"
         )
 
     try:

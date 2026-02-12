@@ -119,11 +119,13 @@ class BaseHandler(ABC):
                 error_msg = result.stderr or f"Provider exited with code {result.exit_code}"
                 return PhaseResult.fail(error_msg)
 
-            return PhaseResult.ok({
-                "response": result.stdout,
-                "model": result.model,
-                "duration_ms": result.duration_ms,
-            })
+            return PhaseResult.ok(
+                {
+                    "response": result.stdout,
+                    "model": result.model,
+                    "duration_ms": result.duration_ms,
+                }
+            )
 
         except ConfigError as e:
             logger.error("Handler config error: %s", e)

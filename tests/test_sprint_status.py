@@ -80,98 +80,118 @@ class TestBacklogDiscovery:
 
     def test_find_backlog_stories_basic(self):
         """Finds backlog stories in insertion order."""
-        ss = SprintStatus(development_status={
-            "epic-1": "backlog",
-            "1-1-setup": "backlog",
-            "1-2-auth": "backlog",
-            "epic-1-retrospective": "optional",
-        })
+        ss = SprintStatus(
+            development_status={
+                "epic-1": "backlog",
+                "1-1-setup": "backlog",
+                "1-2-auth": "backlog",
+                "epic-1-retrospective": "optional",
+            }
+        )
         result = ss.find_backlog_stories()
         assert result == [(1, 1, "1-1-setup"), (1, 2, "1-2-auth")]
 
     def test_find_backlog_stories_skips_done(self):
         """Skips stories that are not backlog."""
-        ss = SprintStatus(development_status={
-            "epic-1": "in-progress",
-            "1-1-setup": "done",
-            "1-2-auth": "backlog",
-            "1-3-api": "in-progress",
-        })
+        ss = SprintStatus(
+            development_status={
+                "epic-1": "in-progress",
+                "1-1-setup": "done",
+                "1-2-auth": "backlog",
+                "1-3-api": "in-progress",
+            }
+        )
         result = ss.find_backlog_stories()
         assert result == [(1, 2, "1-2-auth")]
 
     def test_find_backlog_stories_skips_epic_entries(self):
         """Skips entries starting with 'epic-'."""
-        ss = SprintStatus(development_status={
-            "epic-1": "backlog",
-            "1-1-setup": "backlog",
-        })
+        ss = SprintStatus(
+            development_status={
+                "epic-1": "backlog",
+                "1-1-setup": "backlog",
+            }
+        )
         result = ss.find_backlog_stories()
         assert result == [(1, 1, "1-1-setup")]
 
     def test_find_backlog_stories_skips_retrospective(self):
         """Skips entries containing 'retrospective'."""
-        ss = SprintStatus(development_status={
-            "1-1-setup": "backlog",
-            "epic-1-retrospective": "backlog",
-        })
+        ss = SprintStatus(
+            development_status={
+                "1-1-setup": "backlog",
+                "epic-1-retrospective": "backlog",
+            }
+        )
         result = ss.find_backlog_stories()
         assert result == [(1, 1, "1-1-setup")]
 
     def test_find_backlog_stories_empty(self):
         """Returns empty list when no backlog stories."""
-        ss = SprintStatus(development_status={
-            "1-1-setup": "done",
-            "1-2-auth": "in-progress",
-        })
+        ss = SprintStatus(
+            development_status={
+                "1-1-setup": "done",
+                "1-2-auth": "in-progress",
+            }
+        )
         result = ss.find_backlog_stories()
         assert result == []
 
     def test_find_backlog_stories_multi_epic(self):
         """Finds backlog stories across multiple epics."""
-        ss = SprintStatus(development_status={
-            "epic-1": "done",
-            "1-1-setup": "done",
-            "epic-2": "backlog",
-            "2-1-api": "backlog",
-            "2-2-ui": "backlog",
-        })
+        ss = SprintStatus(
+            development_status={
+                "epic-1": "done",
+                "1-1-setup": "done",
+                "epic-2": "backlog",
+                "2-1-api": "backlog",
+                "2-2-ui": "backlog",
+            }
+        )
         result = ss.find_backlog_stories()
         assert result == [(2, 1, "2-1-api"), (2, 2, "2-2-ui")]
 
     def test_find_next_backlog_story(self):
         """Returns the first backlog story."""
-        ss = SprintStatus(development_status={
-            "1-1-setup": "done",
-            "1-2-auth": "backlog",
-            "1-3-api": "backlog",
-        })
+        ss = SprintStatus(
+            development_status={
+                "1-1-setup": "done",
+                "1-2-auth": "backlog",
+                "1-3-api": "backlog",
+            }
+        )
         result = ss.find_next_backlog_story()
         assert result == (1, 2, "1-2-auth")
 
     def test_find_next_backlog_story_none(self):
         """Returns None when no backlog stories."""
-        ss = SprintStatus(development_status={
-            "1-1-setup": "done",
-        })
+        ss = SprintStatus(
+            development_status={
+                "1-1-setup": "done",
+            }
+        )
         result = ss.find_next_backlog_story()
         assert result is None
 
     def test_find_backlog_stories_invalid_key_format(self):
         """Skips keys that don't match expected format."""
-        ss = SprintStatus(development_status={
-            "invalid-key": "backlog",
-            "1-2-auth": "backlog",
-            "abc": "backlog",
-        })
+        ss = SprintStatus(
+            development_status={
+                "invalid-key": "backlog",
+                "1-2-auth": "backlog",
+                "abc": "backlog",
+            }
+        )
         result = ss.find_backlog_stories()
         assert result == [(1, 2, "1-2-auth")]
 
     def test_parse_story_key_no_title(self):
         """Parses keys with just epic-story numbers (no title)."""
-        ss = SprintStatus(development_status={
-            "1-2": "backlog",
-        })
+        ss = SprintStatus(
+            development_status={
+                "1-2": "backlog",
+            }
+        )
         result = ss.find_backlog_stories()
         assert result == [(1, 2, "1-2")]
 

@@ -121,12 +121,11 @@ class TestTriggerSync:
 
     def test_trigger_sync_swallows_exceptions(self, tmp_path, monkeypatch):
         """trigger_sync never raises, even on errors."""
+
         def bad_save(*args, **kwargs):
             raise OSError("disk full")
 
-        monkeypatch.setattr(
-            "bmad_assist_lite.core.sprint_sync.save_sprint_status", bad_save
-        )
+        monkeypatch.setattr("bmad_assist_lite.core.sprint_sync.save_sprint_status", bad_save)
 
         state = State(
             current_epic=1,

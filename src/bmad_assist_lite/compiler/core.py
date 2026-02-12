@@ -53,21 +53,16 @@ def get_workflow_compiler(workflow_name: str) -> WorkflowCompiler:
         missing_module = getattr(e, "name", None)
         if missing_module in (module_path, module_name):
             raise CompilerError(f"Workflow not found: '{normalized_name}'") from e
-        raise CompilerError(
-            f"Workflow '{normalized_name}' has import errors: {e}"
-        ) from e
+        raise CompilerError(f"Workflow '{normalized_name}' has import errors: {e}") from e
     except (SyntaxError, ImportError) as e:
         raise CompilerError(f"Workflow '{normalized_name}' has errors: {e}") from e
 
-    class_name = (
-        "".join(word.capitalize() for word in module_name.split("_")) + "Compiler"
-    )
+    class_name = "".join(word.capitalize() for word in module_name.split("_")) + "Compiler"
     compiler_class = getattr(module, class_name, None)
 
     if compiler_class is None:
         raise CompilerError(
-            f"Workflow module missing compiler class: "
-            f"expected {class_name} in {module_path}"
+            f"Workflow module missing compiler class: expected {class_name} in {module_path}"
         )
 
     try:

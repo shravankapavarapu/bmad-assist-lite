@@ -42,9 +42,7 @@ class CreateStoryCompiler:
 
         # Resolve variables
         invocation_vars = {
-            k: v
-            for k, v in context.resolved_variables.items()
-            if isinstance(v, (str, int, float))
+            k: v for k, v in context.resolved_variables.items() if isinstance(v, (str, int, float))
         }
         resolved = resolve_variables(context, invocation_vars)
 

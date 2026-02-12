@@ -172,13 +172,17 @@ def validate_settings_file(
     if not settings_file.exists():
         logger.warning(
             "Settings file not found: path=%s, provider=%s, model=%s",
-            settings_file, provider_name, model,
+            settings_file,
+            provider_name,
+            model,
         )
         return None
     if not settings_file.is_file():
         logger.warning(
             "Settings path is not a file: path=%s, provider=%s, model=%s",
-            settings_file, provider_name, model,
+            settings_file,
+            provider_name,
+            model,
         )
         return None
     return settings_file
@@ -205,8 +209,7 @@ class BaseProvider(ABC):
 
     @property
     @abstractmethod
-    def provider_name(self) -> str:
-        ...
+    def provider_name(self) -> str: ...
 
     @property
     def default_model(self) -> str | None:
@@ -233,8 +236,7 @@ class BaseProvider(ABC):
         ...
 
     @abstractmethod
-    def supports_model(self, model: str) -> bool:
-        ...
+    def supports_model(self, model: str) -> bool: ...
 
     def cancel(self) -> None:
         """Cancel any running operation. Default no-op."""

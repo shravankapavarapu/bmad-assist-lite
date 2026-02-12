@@ -119,8 +119,7 @@ def running_lock(project_path: Path) -> Generator[Path, None, None]:
         if not _try_exclusive_create(lock_path, lock_content):
             # Another process grabbed the lock between our unlink and create
             raise StateError(
-                "Another bmad-assist-lite run acquired the lock. "
-                f"Lock file: {lock_path}"
+                f"Another bmad-assist-lite run acquired the lock. Lock file: {lock_path}"
             )
 
     try:

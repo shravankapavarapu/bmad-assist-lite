@@ -81,8 +81,7 @@ def _resolve_recursive(
     """Recursively resolve a single string value."""
     if depth > MAX_RECURSION_DEPTH:
         raise VariableError(
-            f"Cannot resolve '{current_key}': "
-            f"max recursion depth ({MAX_RECURSION_DEPTH}) exceeded",
+            f"Cannot resolve '{current_key}': max recursion depth ({MAX_RECURSION_DEPTH}) exceeded",
             variable_name=current_key,
         )
 
@@ -139,9 +138,7 @@ def _resolve_all_recursive(
     result: dict[str, Any] = {}
     for key, value in resolved.items():
         if isinstance(value, str):
-            result[key] = _resolve_recursive(
-                value, resolved, set(), 0, key, context, workflow_ir
-            )
+            result[key] = _resolve_recursive(value, resolved, set(), 0, key, context, workflow_ir)
         else:
             result[key] = value
     return result
@@ -196,9 +193,7 @@ def resolve_variables(
     if "config_source" in raw_config:
         config_source_raw = raw_config["config_source"]
         if isinstance(config_source_raw, str):
-            config_source_path = _resolve_path_placeholders(
-                config_source_raw, context, workflow_ir
-            )
+            config_source_path = _resolve_path_placeholders(config_source_raw, context, workflow_ir)
             config_path = Path(config_source_path).resolve()
             project_root_resolved = context.project_root.resolve()
             if not config_path.is_relative_to(project_root_resolved):

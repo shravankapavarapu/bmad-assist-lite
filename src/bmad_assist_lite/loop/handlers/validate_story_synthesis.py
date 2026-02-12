@@ -44,8 +44,7 @@ class ValidateStorySynthesisHandler(BaseHandler):
 
             # Reconstruct the aggregate from cached data
             per_validator_scores = {
-                vid: data["score"]
-                for vid, data in evidence_data.get("per_validator", {}).items()
+                vid: data["score"] for vid, data in evidence_data.get("per_validator", {}).items()
             }
             per_validator_verdicts = {
                 vid: Verdict(data["verdict"])

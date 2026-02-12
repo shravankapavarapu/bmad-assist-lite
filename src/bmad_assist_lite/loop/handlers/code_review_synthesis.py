@@ -41,9 +41,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
             # Reconstruct aggregate from cached data
             # Code review uses "per_reviewer" key
             per_reviewer = evidence_data.get("per_reviewer", evidence_data.get("per_validator", {}))
-            per_validator_scores = {
-                vid: data["score"] for vid, data in per_reviewer.items()
-            }
+            per_validator_scores = {vid: data["score"] for vid, data in per_reviewer.items()}
             per_validator_verdicts = {
                 vid: Verdict(data["verdict"]) for vid, data in per_reviewer.items()
             }

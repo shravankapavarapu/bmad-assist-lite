@@ -216,9 +216,7 @@ class TestAggregateEvidenceScores:
     def _make_report(self, validator_id, findings_data, clean_passes=0):
         findings = []
         for sev, score, desc in findings_data:
-            findings.append(
-                EvidenceFinding(sev, score, desc, "", validator_id)
-            )
+            findings.append(EvidenceFinding(sev, score, desc, "", validator_id))
         total = calculate_evidence_score(findings, clean_passes)
         return EvidenceScoreReport(
             validator_id=validator_id,
@@ -229,10 +227,14 @@ class TestAggregateEvidenceScores:
         )
 
     def test_single_validator(self):
-        report = self._make_report("V1", [
-            (Severity.CRITICAL, 3.0, "SQL injection"),
-            (Severity.MINOR, 0.3, "Naming issue"),
-        ], clean_passes=2)
+        report = self._make_report(
+            "V1",
+            [
+                (Severity.CRITICAL, 3.0, "SQL injection"),
+                (Severity.MINOR, 0.3, "Naming issue"),
+            ],
+            clean_passes=2,
+        )
 
         agg = aggregate_evidence_scores([report])
         assert agg.total_score == 2.3  # 3.0 + 0.3 - 1.0
@@ -242,12 +244,18 @@ class TestAggregateEvidenceScores:
         assert len(agg.consensus_findings) == 0
 
     def test_consensus_detection(self):
-        report_a = self._make_report("VA", [
-            (Severity.CRITICAL, 3.0, "SQL injection vulnerability"),
-        ])
-        report_b = self._make_report("VB", [
-            (Severity.CRITICAL, 3.0, "SQL injection vulnerability"),
-        ])
+        report_a = self._make_report(
+            "VA",
+            [
+                (Severity.CRITICAL, 3.0, "SQL injection vulnerability"),
+            ],
+        )
+        report_b = self._make_report(
+            "VB",
+            [
+                (Severity.CRITICAL, 3.0, "SQL injection vulnerability"),
+            ],
+        )
 
         agg = aggregate_evidence_scores([report_a, report_b])
         # Both validators agree on same finding -> consensus
@@ -255,12 +263,18 @@ class TestAggregateEvidenceScores:
         assert agg.consensus_ratio > 0
 
     def test_deduplication_keeps_highest_severity(self):
-        report_a = self._make_report("VA", [
-            (Severity.MINOR, 0.3, "Missing input validation"),
-        ])
-        report_b = self._make_report("VB", [
-            (Severity.CRITICAL, 3.0, "Missing input validation"),
-        ])
+        report_a = self._make_report(
+            "VA",
+            [
+                (Severity.MINOR, 0.3, "Missing input validation"),
+            ],
+        )
+        report_b = self._make_report(
+            "VB",
+            [
+                (Severity.CRITICAL, 3.0, "Missing input validation"),
+            ],
+        )
 
         agg = aggregate_evidence_scores([report_a, report_b])
         # Deduplicated to 1 finding, kept CRITICAL
@@ -273,12 +287,18 @@ class TestAggregateEvidenceScores:
             aggregate_evidence_scores([])
 
     def test_average_score(self):
-        report_a = self._make_report("VA", [
-            (Severity.CRITICAL, 3.0, "Issue A only"),
-        ])
-        report_b = self._make_report("VB", [
-            (Severity.IMPORTANT, 1.0, "Issue B only"),
-        ])
+        report_a = self._make_report(
+            "VA",
+            [
+                (Severity.CRITICAL, 3.0, "Issue A only"),
+            ],
+        )
+        report_b = self._make_report(
+            "VB",
+            [
+                (Severity.IMPORTANT, 1.0, "Issue B only"),
+            ],
+        )
 
         agg = aggregate_evidence_scores([report_a, report_b])
         # Average: (3.0 + 1.0) / 2 = 2.0
@@ -346,6 +366,7 @@ class TestFormatEvidenceScoreContext:
 class TestExceptions:
     def test_evidence_score_error_is_bmad_error(self):
         from bmad_assist_lite.core.exceptions import BmadAssistError
+
         assert issubclass(EvidenceScoreError, BmadAssistError)
 
     def test_all_validators_failed_is_evidence_error(self):

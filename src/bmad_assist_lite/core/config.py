@@ -125,9 +125,7 @@ class LoopConfig(BaseModel):
             "code_review_synthesis",
         ]
     )
-    epic_teardown: list[str] = Field(
-        default_factory=lambda: ["retrospective"]
-    )
+    epic_teardown: list[str] = Field(default_factory=lambda: ["retrospective"])
 
 
 DEFAULT_LOOP_CONFIG = LoopConfig()
@@ -233,8 +231,7 @@ def load_config_with_project(
 
     resolved_project = Path.cwd() if project_path is None else Path(project_path).expanduser()
     resolved_global = (
-        GLOBAL_CONFIG_PATH if global_config_path is None
-        else Path(global_config_path).expanduser()
+        GLOBAL_CONFIG_PATH if global_config_path is None else Path(global_config_path).expanduser()
     )
 
     # Load .env if exists
@@ -242,6 +239,7 @@ def load_config_with_project(
     if env_file.exists():
         try:
             from dotenv import load_dotenv
+
             load_dotenv(env_file)
             logger.debug("Loaded .env from %s", env_file)
         except ImportError:
@@ -252,9 +250,7 @@ def load_config_with_project(
     project_exists = project_config_path.exists() and project_config_path.is_file()
 
     if not global_exists and not project_exists:
-        raise ConfigError(
-            "No configuration found. Run 'bmad-assist-lite init' to create config."
-        )
+        raise ConfigError("No configuration found. Run 'bmad-assist-lite init' to create config.")
 
     global_data: dict[str, Any] = {}
     project_data: dict[str, Any] | None = None

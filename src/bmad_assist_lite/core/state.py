@@ -177,9 +177,7 @@ def advance_state(state: State, phase_list: list[str]) -> dict[str, Any]:
     try:
         current_idx = phase_list.index(current_value)
     except ValueError as e:
-        raise StateError(
-            f"Cannot advance state: phase {previous!r} not in phase sequence"
-        ) from e
+        raise StateError(f"Cannot advance state: phase {previous!r} not in phase sequence") from e
 
     if current_idx + 1 >= len(phase_list):
         state.updated_at = _utc_now()
@@ -250,6 +248,7 @@ def get_story_duration_ms(state: State) -> int:
 @dataclass
 class ResumePoint:
     """Information about where to resume the loop."""
+
     epic: int | str | None
     story: str | None
     phase: Phase | None
@@ -269,7 +268,9 @@ def get_resume_point(state_path: str | Path) -> ResumePoint:
 
     if not has_position:
         return ResumePoint(
-            epic=None, story=None, phase=None,
+            epic=None,
+            story=None,
+            phase=None,
             is_fresh_start=True,
             completed_stories=list(state.completed_stories),
         )

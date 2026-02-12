@@ -33,10 +33,7 @@ __all__ = [
 def _escape_xml_attr(value: str) -> str:
     """Escape string for use in XML attribute value."""
     return (
-        value.replace("&", "&amp;")
-        .replace('"', "&quot;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
+        value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
     )
 
 
@@ -91,9 +88,7 @@ def _get_file_order_key(path: str) -> tuple[int, str]:
     """Get ordering key for a file path (recency-bias ordering)."""
     path_lower = path.lower()
 
-    if "sprint-artifacts" in path_lower and _re.search(
-        r"/\d+-\d+-[^/]+\.md$", path_lower
-    ):
+    if "sprint-artifacts" in path_lower and _re.search(r"/\d+-\d+-[^/]+\.md$", path_lower):
         return (len(FILE_ORDER_PATTERNS) + 1, path)
 
     for idx, patterns in enumerate(FILE_ORDER_PATTERNS):
@@ -169,8 +164,7 @@ def _build_variables_section(
         value = variables[name]
         serialized = _serialize_value(value)
         var_elements.append(
-            f'<var name="{_escape_xml_attr(name)}">'
-            f"{_escape_xml_text(serialized)}</var>"
+            f'<var name="{_escape_xml_attr(name)}">{_escape_xml_text(serialized)}</var>'
         )
 
     return "<variables>\n" + "\n".join(var_elements) + "\n</variables>"
@@ -206,9 +200,7 @@ def generate_output(
     parts.append(f"<mission>{_wrap_cdata(compiled.mission)}</mission>")
 
     if context_files is not None:
-        context_xml, path_to_id = _build_context_section(
-            context_files, project_root, links_only
-        )
+        context_xml, path_to_id = _build_context_section(context_files, project_root, links_only)
         parts.append(context_xml)
     else:
         parts.append(f"<context>{_wrap_cdata(compiled.context)}</context>")
@@ -226,17 +218,13 @@ def generate_output(
 
         is_markdown = stripped.startswith("#") or not stripped.startswith("<")
         if is_markdown:
-            parts.append(
-                f"<instructions>{_wrap_cdata(compiled.instructions)}</instructions>"
-            )
+            parts.append(f"<instructions>{_wrap_cdata(compiled.instructions)}</instructions>")
         else:
             parts.append(f"<instructions>{compiled.instructions}</instructions>")
     else:
         parts.append("<instructions></instructions>")
 
-    parts.append(
-        f"<output-template>{_wrap_cdata(compiled.output_template)}</output-template>"
-    )
+    parts.append(f"<output-template>{_wrap_cdata(compiled.output_template)}</output-template>")
     parts.append("</compiled-workflow>")
 
     xml_str = "\n".join(parts)
@@ -249,9 +237,7 @@ def generate_output(
     size_bytes = len(xml_str.encode("utf-8"))
     token_estimate = len(xml_str) // CHARS_PER_TOKEN_ESTIMATE
 
-    return GeneratedOutput(
-        xml=xml_str, token_estimate=token_estimate, size_bytes=size_bytes
-    )
+    return GeneratedOutput(xml=xml_str, token_estimate=token_estimate, size_bytes=size_bytes)
 
 
 def validate_token_budget(
@@ -271,14 +257,12 @@ def validate_token_budget(
 
     if token_estimate > hard_limit:
         raise TokenBudgetError(
-            f"Token budget exceeded: ~{token_estimate:,} tokens "
-            f"(limit: {hard_limit:,})"
+            f"Token budget exceeded: ~{token_estimate:,} tokens (limit: {hard_limit:,})"
         )
 
     if token_estimate > soft_limit:
         warnings.append(
-            f"Compiled prompt nearing limit: ~{token_estimate:,} tokens "
-            f"(soft: {soft_limit:,})"
+            f"Compiled prompt nearing limit: ~{token_estimate:,} tokens (soft: {soft_limit:,})"
         )
 
     return warnings

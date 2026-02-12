@@ -40,8 +40,6 @@ def cleanup_for_phase(phase: Phase, project_path: Path) -> list[str]:
 
     # Phase-specific warnings
     if phase == Phase.DEV_STORY:
-        logger.warning(
-            "Resuming from DEV_STORY phase — check for uncommitted git changes"
-        )
+        logger.warning("Resuming from DEV_STORY phase — check for uncommitted git changes")
 
     return cleaned

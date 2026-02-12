@@ -20,10 +20,7 @@ class ValidateStorySynthesisCompiler:
 
     def get_workflow_dir(self, context: CompilerContext) -> Path:
         """Return bundled workflow directory."""
-        ref = (
-            importlib.resources.files("bmad_assist_lite.workflows")
-            / "validate-story-synthesis"
-        )
+        ref = importlib.resources.files("bmad_assist_lite.workflows") / "validate-story-synthesis"
         return Path(str(ref))
 
     def get_required_files(self) -> list[str]:
@@ -45,9 +42,7 @@ class ValidateStorySynthesisCompiler:
 
         # Resolve variables
         invocation_vars = {
-            k: v
-            for k, v in context.resolved_variables.items()
-            if isinstance(v, (str, int, float))
+            k: v for k, v in context.resolved_variables.items() if isinstance(v, (str, int, float))
         }
         resolved = resolve_variables(context, invocation_vars)
 

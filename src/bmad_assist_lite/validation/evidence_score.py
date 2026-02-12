@@ -57,11 +57,13 @@ __all__ = [
 
 class EvidenceScoreError(BmadAssistError):
     """Base exception for Evidence Score module."""
+
     pass
 
 
 class AllValidatorsFailedError(EvidenceScoreError):
     """Raised when all validators fail to produce parseable Evidence Score reports."""
+
     pass
 
 
@@ -237,9 +239,7 @@ _FINDING_BULLET_PATTERN = re.compile(
 
 # Pattern for CLEAN PASS count
 # | 🟢 CLEAN PASS | 5 |
-_CLEAN_PASS_TABLE_PATTERN = re.compile(
-    r"\|\s*🟢\s*CLEAN PASS\s*\|\s*(\d+)\s*\|", re.IGNORECASE
-)
+_CLEAN_PASS_TABLE_PATTERN = re.compile(r"\|\s*🟢\s*CLEAN PASS\s*\|\s*(\d+)\s*\|", re.IGNORECASE)
 
 # Alternative: "CLEAN PASS: 5" or "5 CLEAN PASS"
 _CLEAN_PASS_TEXT_PATTERN = re.compile(

@@ -35,11 +35,15 @@ class ResumeValidationResult:
         """Human-readable summary of validation actions."""
         parts: list[str] = []
         if self.stories_skipped:
-            parts.append(f"Skipped {len(self.stories_skipped)} done stories: "
-                         f"{', '.join(self.stories_skipped)}")
+            parts.append(
+                f"Skipped {len(self.stories_skipped)} done stories: "
+                f"{', '.join(self.stories_skipped)}"
+            )
         if self.epics_skipped:
-            parts.append(f"Skipped {len(self.epics_skipped)} done epics: "
-                         f"{', '.join(str(e) for e in self.epics_skipped)}")
+            parts.append(
+                f"Skipped {len(self.epics_skipped)} done epics: "
+                f"{', '.join(str(e) for e in self.epics_skipped)}"
+            )
         if self.project_complete:
             parts.append("All remaining work is complete")
         if not parts:

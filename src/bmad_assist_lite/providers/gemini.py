@@ -103,8 +103,12 @@ class GeminiProvider(BaseProvider):
                 final_prompt = prompt + restriction_warning
 
         command: list[str] = [
-            "gemini", "-m", effective_model,
-            "--output-format", "stream-json", "--yolo",
+            "gemini",
+            "-m",
+            effective_model,
+            "--output-format",
+            "stream-json",
+            "--yolo",
         ]
 
         last_error: ProviderExitCodeError | None = None
@@ -113,7 +117,9 @@ class GeminiProvider(BaseProvider):
         for attempt in range(MAX_RETRIES):
             if attempt > 0:
                 delay = min(RETRY_BASE_DELAY * (2 ** (attempt - 1)), RETRY_MAX_DELAY)
-                logger.warning("Gemini CLI retry %d/%d after %.1fs", attempt + 1, MAX_RETRIES, delay)
+                logger.warning(
+                    "Gemini CLI retry %d/%d after %.1fs", attempt + 1, MAX_RETRIES, delay
+                )
                 time.sleep(delay)
 
             response_text_parts: list[str] = []
@@ -133,9 +139,14 @@ class GeminiProvider(BaseProvider):
                 popen_kwargs = get_subprocess_kwargs()
                 process = Popen(
                     command,
-                    stdin=PIPE, stdout=PIPE, stderr=PIPE,
-                    text=True, encoding="utf-8", errors="replace",
-                    cwd=cwd, env=env,
+                    stdin=PIPE,
+                    stdout=PIPE,
+                    stderr=PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=cwd,
+                    env=env,
                     **popen_kwargs,
                 )
 
@@ -144,8 +155,10 @@ class GeminiProvider(BaseProvider):
                     process.stdin.close()
 
                 def process_json_stream(
-                    stream: Any, text_parts: list[str],
-                    raw_lines: list[str], color_idx: int | None,
+                    stream: Any,
+                    text_parts: list[str],
+                    raw_lines: list[str],
+                    color_idx: int | None,
                 ) -> None:
                     nonlocal session_id
                     for line in iter(stream.readline, ""):
@@ -164,7 +177,9 @@ class GeminiProvider(BaseProvider):
                                     if content:
                                         text_parts.append(content)
                                         if logger.isEnabledFor(logging.INFO):
-                                            preview = content[:200] + ("..." if len(content) > 200 else "")
+                                            preview = content[:200] + (
+                                                "..." if len(content) > 200 else ""
+                                            )
                                             tag = format_tag("ASSISTANT", color_idx)
                                             write_progress(f"{tag} {preview}")
                             elif msg_type == "tool_use":
@@ -239,7 +254,9 @@ class GeminiProvider(BaseProvider):
 
             if returncode != 0:
                 exit_status = ExitStatus.from_code(returncode)
-                stderr_truncated = stderr_content[:STDERR_TRUNCATE_LENGTH] if stderr_content else "(empty)"
+                stderr_truncated = (
+                    stderr_content[:STDERR_TRUNCATE_LENGTH] if stderr_content else "(empty)"
+                )
                 message = f"Gemini CLI failed with exit code {returncode}: {stderr_truncated}"
 
                 error = ProviderExitCodeError(
@@ -263,12 +280,14 @@ class GeminiProvider(BaseProvider):
 
         logger.info(
             "Gemini CLI completed: duration=%dms, exit_code=%d, text_len=%d",
-            duration_ms, returncode, len(response_text),
+            duration_ms,
+            returncode,
+            len(response_text),
         )
 
         return ProviderResult(
             stdout=response_text,
-            stderr="".join(stderr_chunks) if 'stderr_chunks' in dir() else "",
+            stderr="".join(stderr_chunks) if "stderr_chunks" in dir() else "",
             exit_code=returncode,
             duration_ms=duration_ms,
             model=effective_model,

@@ -55,6 +55,7 @@ _lazy_imports = {
 def __getattr__(name: str) -> type[Any]:
     if name in _lazy_imports:
         import importlib
+
         module = importlib.import_module(_lazy_imports[name], __package__)
         cls: type[Any] = getattr(module, name)
         return cls
@@ -71,10 +72,12 @@ def _init_default_providers() -> None:
     from .claude_sdk import ClaudeSDKProvider
     from .gemini import GeminiProvider
 
-    _REGISTRY.update({
-        "claude": ClaudeSDKProvider,
-        "gemini": GeminiProvider,
-    })
+    _REGISTRY.update(
+        {
+            "claude": ClaudeSDKProvider,
+            "gemini": GeminiProvider,
+        }
+    )
 
 
 def get_provider(name: str) -> BaseProvider:

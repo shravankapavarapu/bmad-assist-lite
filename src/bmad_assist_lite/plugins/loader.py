@@ -61,9 +61,11 @@ def _load_entry_point_plugins(registry: PluginRegistry) -> None:
     try:
         if sys.version_info >= (3, 12):
             from importlib.metadata import entry_points
+
             eps = entry_points(group=ENTRY_POINT_GROUP)
         else:
             from importlib.metadata import entry_points
+
             all_eps = entry_points()
             eps = all_eps.get(ENTRY_POINT_GROUP, [])
 
@@ -129,17 +131,15 @@ def _load_local_plugins(registry: PluginRegistry, plugins_dir: Path) -> None:
             # Look for plugin classes in the module
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
-                if (
-                    isinstance(attr, type)
-                    and attr_name != "type"
-                    and isinstance(attr, type)
-                ):
+                if isinstance(attr, type) and attr_name != "type" and isinstance(attr, type):
                     try:
                         instance = attr()
                         if isinstance(instance, (ProviderPlugin, PhasePlugin, WorkflowPlugin)):
                             instance.register(registry)
                             registry.mark_loaded(instance.name)
-                            logger.info("Loaded local plugin: %s from %s", instance.name, py_file.name)
+                            logger.info(
+                                "Loaded local plugin: %s from %s", instance.name, py_file.name
+                            )
                     except (TypeError, AttributeError):
                         continue
 

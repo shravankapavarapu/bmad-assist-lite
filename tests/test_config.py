@@ -25,9 +25,7 @@ class TestLoadConfig:
     def test_load_minimal_config(self):
         """Loading config with only providers.master succeeds and uses defaults."""
         _reset_config()
-        cfg = load_config(
-            {"providers": {"master": {"provider": "claude", "model": "opus"}}}
-        )
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
         assert isinstance(cfg, Config)
         assert cfg.providers.master.provider == "claude"
         assert cfg.providers.master.model == "opus"

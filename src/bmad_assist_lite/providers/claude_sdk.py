@@ -102,13 +102,17 @@ class ClaudeSDKProvider(BaseProvider):
                 f"Supported: {', '.join(sorted(SUPPORTED_MODELS))} or claude-* identifiers"
             )
 
-        validated_settings = validate_settings_file(
-            settings_file, self.provider_name, effective_model
-        ) if settings_file else None
+        validated_settings = (
+            validate_settings_file(settings_file, self.provider_name, effective_model)
+            if settings_file
+            else None
+        )
 
         logger.debug(
             "Invoking Claude SDK: model=%s, timeout=%ds, prompt_len=%d",
-            effective_model, effective_timeout, len(prompt),
+            effective_model,
+            effective_timeout,
+            len(prompt),
         )
 
         start_time = time.perf_counter()
@@ -129,9 +133,7 @@ class ClaudeSDKProvider(BaseProvider):
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             raise ProviderTimeoutError(f"SDK timeout after {effective_timeout}s") from e
         except CLINotFoundError as e:
-            raise ProviderError(
-                "Claude Code not found. Is 'claude' installed and in PATH?"
-            ) from e
+            raise ProviderError("Claude Code not found. Is 'claude' installed and in PATH?") from e
         except ProcessError as e:
             exit_code = e.exit_code if e.exit_code is not None else 1
             stderr = e.stderr or ""
@@ -147,7 +149,8 @@ class ClaudeSDKProvider(BaseProvider):
 
         logger.info(
             "Claude SDK completed: duration=%dms, response_len=%d",
-            duration_ms, len(response_text),
+            duration_ms,
+            len(response_text),
         )
 
         return ProviderResult(

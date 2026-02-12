@@ -42,9 +42,7 @@ class TestResumeValidation:
             current_story="1.1",
             current_phase=Phase.CREATE_STORY,
         )
-        result = validate_resume_state(
-            state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST
-        )
+        result = validate_resume_state(state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST)
         assert not result.advanced
         assert result.state.current_story == "1.1"
 
@@ -59,9 +57,7 @@ class TestResumeValidation:
             current_story="1.1",
             current_phase=Phase.DEV_STORY,
         )
-        result = validate_resume_state(
-            state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST
-        )
+        result = validate_resume_state(state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST)
         assert result.advanced
         assert result.state.current_story == "1.2"
         assert result.state.current_phase == Phase.CREATE_STORY
@@ -80,9 +76,7 @@ class TestResumeValidation:
             current_story="1.1",
             current_phase=Phase.CREATE_STORY,
         )
-        result = validate_resume_state(
-            state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST
-        )
+        result = validate_resume_state(state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST)
         assert result.advanced
         assert result.state.current_epic == 2
         assert result.state.current_story == "2.1"
@@ -100,9 +94,7 @@ class TestResumeValidation:
             current_story="1.1",
             current_phase=Phase.CREATE_STORY,
         )
-        result = validate_resume_state(
-            state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST
-        )
+        result = validate_resume_state(state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST)
         assert result.project_complete
         assert result.advanced
 
@@ -117,9 +109,7 @@ class TestResumeValidation:
             current_story="1.1",
             current_phase=Phase.RETROSPECTIVE,
         )
-        result = validate_resume_state(
-            state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST
-        )
+        result = validate_resume_state(state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST)
         # Should NOT advance past retrospective
         assert not result.advanced
         assert result.state.current_phase == Phase.RETROSPECTIVE
@@ -127,9 +117,7 @@ class TestResumeValidation:
     def test_no_current_epic(self, tmp_path):
         """None epic/story means no adjustments."""
         state = State(current_epic=None, current_story=None, current_phase=None)
-        result = validate_resume_state(
-            state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST
-        )
+        result = validate_resume_state(state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST)
         assert not result.advanced
 
     def test_summary_format(self, tmp_path):
@@ -143,9 +131,7 @@ class TestResumeValidation:
             current_story="1.1",
             current_phase=Phase.CREATE_STORY,
         )
-        result = validate_resume_state(
-            state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST
-        )
+        result = validate_resume_state(state, tmp_path, EPICS, STORIES_FOR_EPIC, PHASE_LIST)
         summary = result.summary()
         assert "1.1" in summary
         assert "Skipped" in summary

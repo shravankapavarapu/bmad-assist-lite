@@ -65,13 +65,15 @@ class TestBacklogStoryDiscovery:
 
     def test_backlog_stories_grouped_by_epic(self):
         """Backlog stories are correctly parsed and ordered."""
-        ss = SprintStatus(development_status={
-            "epic-1": "backlog",
-            "1-1-setup": "backlog",
-            "1-2-auth": "backlog",
-            "epic-2": "backlog",
-            "2-1-api": "backlog",
-        })
+        ss = SprintStatus(
+            development_status={
+                "epic-1": "backlog",
+                "1-1-setup": "backlog",
+                "1-2-auth": "backlog",
+                "epic-2": "backlog",
+                "2-1-api": "backlog",
+            }
+        )
         stories = ss.find_backlog_stories()
         assert len(stories) == 3
         assert stories[0] == (1, 1, "1-1-setup")
@@ -80,10 +82,12 @@ class TestBacklogStoryDiscovery:
 
     def test_no_backlog_stories_returns_empty(self):
         """Returns empty when all stories are done."""
-        ss = SprintStatus(development_status={
-            "1-1-setup": "done",
-            "1-2-auth": "done",
-        })
+        ss = SprintStatus(
+            development_status={
+                "1-1-setup": "done",
+                "1-2-auth": "done",
+            }
+        )
         stories = ss.find_backlog_stories()
         assert stories == []
 

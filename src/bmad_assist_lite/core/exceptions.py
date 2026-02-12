@@ -26,16 +26,19 @@ __all__ = [
 
 class BmadAssistError(Exception):
     """Base exception for all bmad-assist-lite errors."""
+
     pass
 
 
 class CancelledError(BmadAssistError):
     """Raised when operation is cancelled via shutdown event."""
+
     pass
 
 
 class ConfigError(BmadAssistError):
     """Configuration loading or validation error."""
+
     pass
 
 
@@ -49,16 +52,19 @@ class ConfigValidationError(ConfigError):
 
 class ParserError(BmadAssistError):
     """BMAD file parsing error."""
+
     pass
 
 
 class StateError(BmadAssistError):
     """State persistence or recovery error."""
+
     pass
 
 
 class ProviderError(BmadAssistError):
     """CLI provider execution error."""
+
     pass
 
 
@@ -96,16 +102,19 @@ class ProviderExitCodeError(ProviderError):
 
 class CompilerError(BmadAssistError):
     """BMAD workflow compilation error."""
+
     pass
 
 
 class TokenBudgetError(CompilerError):
     """Token budget exceeded during compilation."""
+
     pass
 
 
 class ContextError(CompilerError):
     """Context building error during compilation."""
+
     pass
 
 

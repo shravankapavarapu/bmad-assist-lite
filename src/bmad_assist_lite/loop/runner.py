@@ -141,9 +141,7 @@ def run_loop(
                     continue
 
                 # Check if current phase is in epic_teardown
-                current_phase_name = (
-                    state.current_phase.value if state.current_phase else ""
-                )
+                current_phase_name = state.current_phase.value if state.current_phase else ""
                 if current_phase_name in epic_teardown:
                     # Epic teardown phase - advance to next epic
                     idx = epic_teardown.index(current_phase_name)
@@ -152,9 +150,7 @@ def run_loop(
                         continue
 
                     # All teardown phases done - advance epic
-                    next_state = advance_epic(
-                        state, epics, stories_for_epic, story_phases
-                    )
+                    next_state = advance_epic(state, epics, stories_for_epic, story_phases)
                     if next_state is None:
                         logger.info("All epics completed!")
                         return LoopExitReason.COMPLETED
@@ -174,9 +170,7 @@ def run_loop(
                         state = state.with_phase(Phase(epic_teardown[0]))
                     else:
                         # No teardown - advance epic directly
-                        next_state = advance_epic(
-                            state, epics, stories_for_epic, story_phases
-                        )
+                        next_state = advance_epic(state, epics, stories_for_epic, story_phases)
                         if next_state is None:
                             logger.info("All epics completed!")
                             return LoopExitReason.COMPLETED

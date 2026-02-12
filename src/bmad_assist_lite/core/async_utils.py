@@ -44,9 +44,7 @@ def run_async_with_timeout(coro: Coroutine[Any, Any, T], executor_timeout: float
                 )
             )
         except TimeoutError:
-            logger.warning(
-                "Executor shutdown timed out after %.1fs", executor_timeout
-            )
+            logger.warning("Executor shutdown timed out after %.1fs", executor_timeout)
         except Exception as e:
             logger.debug("Executor shutdown error (ignored): %s", e)
 

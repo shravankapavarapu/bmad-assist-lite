@@ -26,7 +26,8 @@ class ValidateStoryHandler(BaseHandler):
         return self._build_common_context(state)
 
     def _calculate_evidence_aggregate(
-        self, validations: list[dict[str, Any]],
+        self,
+        validations: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
         """Parse evidence scores from validator outputs and aggregate.
 
@@ -50,7 +51,8 @@ class ValidateStoryHandler(BaseHandler):
                     reports.append(report)
                     logger.debug(
                         "Parsed evidence report for %s: score=%.1f",
-                        validator_id, report.total_score,
+                        validator_id,
+                        report.total_score,
                     )
 
             if not reports:
@@ -60,7 +62,9 @@ class ValidateStoryHandler(BaseHandler):
             aggregate = aggregate_evidence_scores(reports)
             logger.info(
                 "Evidence Score aggregate: total=%.1f, verdict=%s, validators=%d",
-                aggregate.total_score, aggregate.verdict.value, len(reports),
+                aggregate.total_score,
+                aggregate.verdict.value,
+                len(reports),
             )
 
             # Serialize for JSON cache storage
@@ -129,18 +133,22 @@ class ValidateStoryHandler(BaseHandler):
                     for i, future in enumerate(asyncio.as_completed(futures)):
                         try:
                             result = await future
-                            results.append({
-                                "validator": f"Validator-{i+1}",
-                                "response": result.stdout,
-                                "exit_code": result.exit_code,
-                            })
+                            results.append(
+                                {
+                                    "validator": f"Validator-{i + 1}",
+                                    "response": result.stdout,
+                                    "exit_code": result.exit_code,
+                                }
+                            )
                         except Exception as e:
                             logger.warning("Validator %d failed: %s", i + 1, e)
-                            results.append({
-                                "validator": f"Validator-{i+1}",
-                                "error": str(e),
-                                "exit_code": 1,
-                            })
+                            results.append(
+                                {
+                                    "validator": f"Validator-{i + 1}",
+                                    "error": str(e),
+                                    "exit_code": 1,
+                                }
+                            )
 
                 return results
 
