@@ -187,15 +187,26 @@ def run(
     planning_dir = paths.planning_artifacts
     epic_file_map: dict[int, Path] = {}
 
+    skipped_epics: list[int] = []
     for e_num in epic_stories:
         epic_file = _find_epic_file(planning_dir, e_num)
-        if epic_file is None:
+        if epic_file is None or not _is_dedicated_epic_file(epic_file, e_num):
             typer.echo(
-                f"No epic file found for epic {e_num} in {planning_dir}. Cannot continue.",
+                f"Warning: No dedicated epic file for epic {e_num} "
+                f"(e.g. epic-{e_num}.md) in {planning_dir} — skipping.",
                 err=True,
             )
-            raise typer.Exit(1)
+            skipped_epics.append(e_num)
+            continue
         epic_file_map[e_num] = epic_file
+
+    # Remove skipped epics from the story map
+    for e_num in skipped_epics:
+        del epic_stories[e_num]
+
+    if not epic_stories:
+        typer.echo("No epics with dedicated epic files found. Cannot continue.", err=True)
+        raise typer.Exit(1)
 
     # Build epics_list and stories_for_epic for the loop
     epics_list: list[int] = list(epic_stories.keys())
@@ -530,10 +541,11 @@ def _resolve_context_docs(
     typer.echo("Context7: fetching library docs...")
     for epic_num in epics_list:
         epic_file = epic_file_map.get(epic_num)
-        # Only use the epic file for context docs if it's a dedicated file
-        # for this epic (e.g. epic-6.md), not a master fallback (e.g. epics.md)
-        if epic_file and not _is_dedicated_epic_file(epic_file, epic_num):
-            epic_file = None
+        # Skip epics that don't have a dedicated file (e.g. epic-6.md).
+        # Without a dedicated file, resolve_epic_docs would auto-detect from
+        # package.json, pulling in irrelevant libraries for every epic.
+        if not epic_file or not _is_dedicated_epic_file(epic_file, epic_num):
+            continue
         try:
             docs = resolve_epic_docs(
                 epic_num=epic_num,
