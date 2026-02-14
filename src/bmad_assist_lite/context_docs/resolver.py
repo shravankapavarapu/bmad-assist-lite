@@ -75,10 +75,10 @@ def _resolve_library_id(
                 logger.debug("Resolved %s -> %s", library_name, lib_id)
                 return str(lib_id)
 
-        logger.debug("No Context7 match for library: %s", library_name)
+        logger.warning("Context7: no match found for '%s'", library_name)
         return None
     except Exception as e:
-        logger.warning("Context7 library search failed for %s: %s", library_name, e)
+        logger.warning("Context7: search failed for '%s': %s", library_name, e)
         return None
 
 
@@ -120,10 +120,10 @@ def _fetch_library_docs(
             logger.debug("Fetched %d chars of docs for %s", len(text), library_name)
             return text
 
-        logger.debug("Empty docs response for %s", library_name)
+        logger.warning("Context7: empty docs response for '%s'", library_name)
         return None
     except Exception as e:
-        logger.warning("Context7 doc fetch failed for %s (%s): %s", library_name, library_id, e)
+        logger.warning("Context7: doc fetch failed for '%s' (%s): %s", library_name, library_id, e)
         return None
 
 
@@ -190,6 +190,7 @@ def resolve_epic_docs(
 
     api_key = _get_api_key()
     fetched_libs: list[str] = []
+    skipped: list[str] = []
 
     for lib_name in libraries:
         # Check cache first
@@ -200,6 +201,7 @@ def resolve_epic_docs(
         # Resolve library ID
         lib_id = _resolve_library_id(httpx_mod, lib_name, api_key)
         if not lib_id:
+            skipped.append(lib_name)
             continue
 
         # Fetch docs
@@ -209,6 +211,18 @@ def resolve_epic_docs(
         if docs:
             cache.write_library(lib_name, docs)
             fetched_libs.append(lib_name)
+        else:
+            skipped.append(lib_name)
+
+    if skipped:
+        logger.warning(
+            "Context7: could not fetch docs for %d libraries: %s", len(skipped), skipped
+        )
+
+    if fetched_libs:
+        logger.info("Context7: fetched docs for %d libraries: %s", len(fetched_libs), fetched_libs)
+    else:
+        logger.warning("Context7: no library docs fetched for epic %d", epic_num)
 
     # 4. Record epic mapping and return
     cache.set_epic_libs(epic_key, fetched_libs)

@@ -521,6 +521,7 @@ def _resolve_context_docs(
     ctx_cfg = app_config.context_docs
     arch_file = paths.architecture_file if paths.architecture_file.exists() else None
 
+    typer.echo("Context7: fetching library docs...")
     for epic_num in epics_list:
         epic_file = epic_file_map.get(epic_num)
         try:
@@ -534,9 +535,14 @@ def _resolve_context_docs(
                 max_tokens_per_lib=ctx_cfg.max_tokens_per_lib,
             )
             if docs:
-                typer.echo(f"  Fetched library docs for epic {epic_num}: {list(docs.keys())}")
+                typer.echo(
+                    f"  Epic {epic_num}: fetched docs for {len(docs)} libraries"
+                    f" ({', '.join(docs.keys())})"
+                )
+            else:
+                typer.echo(f"  Epic {epic_num}: no library docs fetched")
         except Exception as e:
-            logger.warning("Context docs fetch failed for epic %d: %s", epic_num, e)
+            typer.echo(f"  Epic {epic_num}: context docs failed ({e})", err=True)
 
 
 @app.command(name="fetch-docs")
