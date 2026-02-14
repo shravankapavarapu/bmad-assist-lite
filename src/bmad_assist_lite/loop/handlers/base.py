@@ -13,7 +13,7 @@ from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
-from bmad_assist_lite.providers.base import BaseProvider, ProviderResult
+from bmad_assist_lite.providers.base import BaseProvider, ProviderResult, write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,9 @@ class BaseHandler(ABC):
         )
 
         try:
+            write_progress(f"  Compiling {workflow_name} prompt...")
             compiled = compile_workflow(workflow_name, context)
+            write_progress(f"  Prompt ready (~{compiled.token_estimate} tokens)")
             logger.info(
                 "Compiled prompt for %s (tokens: ~%d)",
                 workflow_name,
@@ -94,6 +96,13 @@ class BaseHandler(ABC):
         provider = self.get_provider()
         model = self.get_model()
         timeout = get_phase_timeout(self.config, self.phase_name)
+
+        model_display = model or provider.default_model or "default"
+        timeout_display = f"{timeout}s" if timeout else "no limit"
+        write_progress(
+            f"  Invoking {provider.provider_name} ({model_display})"
+            f" timeout={timeout_display}..."
+        )
 
         logger.info(
             "Invoking %s with model=%s, timeout=%s",

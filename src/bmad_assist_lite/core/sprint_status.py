@@ -8,6 +8,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
@@ -39,10 +40,36 @@ def _utc_now() -> datetime:
 
 
 class SprintStatus(BaseModel):
-    """Sprint-level development status tracking."""
+    """Sprint-level development status tracking.
+
+    Supports two entry formats in development_status:
+    - Simple: ``{"1-1-setup": "backlog"}`` (value is the status string)
+    - Rich:   ``{"1-1-setup": {"status": "done", "title": "...", ...}}``
+      (value is a dict with a ``status`` key)
+    """
 
     generated: datetime = Field(default_factory=_utc_now)
-    development_status: dict[str, str] = Field(default_factory=dict)
+    development_status: dict[str, str | dict[str, Any]] = Field(default_factory=dict)
+
+    # --- Entry helpers ---
+
+    @staticmethod
+    def _extract_status(entry: str | dict[str, Any]) -> str | None:
+        """Extract the status string from a simple or rich entry."""
+        if isinstance(entry, str):
+            return entry
+        if isinstance(entry, dict):
+            status = entry.get("status")
+            return str(status) if status is not None else None
+        return None
+
+    def _set_entry_status(self, key: str, status: str) -> None:
+        """Set status on an entry, preserving rich dict format if present."""
+        existing = self.development_status.get(key)
+        if isinstance(existing, dict):
+            existing["status"] = status
+        else:
+            self.development_status[key] = status
 
     # --- Story status ---
 
@@ -50,7 +77,7 @@ class SprintStatus(BaseModel):
         """Get status for a story. Supports dot notation (1.2) and dash (1-2)."""
         key = self._find_key(story_id)
         if key is not None:
-            return self.development_status[key]
+            return self._extract_status(self.development_status[key])
         return None
 
     def set_story_status(self, story_id: str, status: str) -> None:
@@ -59,7 +86,7 @@ class SprintStatus(BaseModel):
         if key is None:
             normalized = story_id.replace(".", "-")
             key = f"story-{normalized}"
-        self.development_status[key] = status
+        self._set_entry_status(key, status)
         self.generated = _utc_now()
 
     def is_story_done(self, story_id: str) -> bool:
@@ -72,12 +99,15 @@ class SprintStatus(BaseModel):
     def get_epic_status(self, epic_id: int | str) -> str | None:
         """Get status for an epic."""
         key = f"epic-{epic_id}"
-        return self.development_status.get(key)
+        entry = self.development_status.get(key)
+        if entry is None:
+            return None
+        return self._extract_status(entry)
 
     def set_epic_status(self, epic_id: int | str, status: str) -> None:
         """Set status for an epic."""
         key = f"epic-{epic_id}"
-        self.development_status[key] = status
+        self._set_entry_status(key, status)
         self.generated = _utc_now()
 
     def is_epic_done(self, epic_id: int | str) -> bool:
@@ -109,11 +139,12 @@ class SprintStatus(BaseModel):
             List of (epic_num, story_num, full_key) tuples in insertion order.
         """
         results: list[tuple[int, int, str]] = []
-        for key, status in self.development_status.items():
+        for key, entry in self.development_status.items():
             if key.startswith("epic-"):
                 continue
             if "retrospective" in key:
                 continue
+            status = self._extract_status(entry)
             if status != "backlog":
                 continue
             parsed = self._parse_story_key(key)

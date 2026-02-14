@@ -11,6 +11,7 @@ from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
+from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,13 @@ class ValidateStoryHandler(BaseHandler):
             import asyncio
             import concurrent.futures
 
+            providers_desc = ", ".join(
+                f"{mc.provider}({mc.model or 'default'})" for mc in multi_configs
+            )
+            write_progress(
+                f"  Running {len(multi_configs)} validators in parallel: {providers_desc}"
+            )
+
             async def _run_validations() -> list[dict[str, Any]]:
                 results: list[dict[str, Any]] = []
                 loop = asyncio.get_event_loop()
@@ -155,12 +163,22 @@ class ValidateStoryHandler(BaseHandler):
             validations = run_async_in_thread(_run_validations())
 
             successful = [v for v in validations if v.get("exit_code") == 0]
+            write_progress(
+                f"  Validators complete: {len(successful)}/{len(multi_configs)} succeeded"
+            )
 
             if not successful:
                 return PhaseResult.fail("All validators failed")
 
             # Calculate Evidence Score aggregate from validator outputs
             evidence_aggregate = self._calculate_evidence_aggregate(validations)
+            if evidence_aggregate:
+                write_progress(
+                    f"  Evidence Score: {evidence_aggregate['total_score']:.1f}"
+                    f" -> {evidence_aggregate['verdict']}"
+                )
+            else:
+                write_progress("  Evidence Score: could not be calculated")
 
             # Save validations and evidence aggregate for synthesis
             cache_dir = self.project_path / ".bmad-assist-lite" / "cache"

@@ -11,6 +11,7 @@ from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
+from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,13 @@ class CodeReviewHandler(BaseHandler):
             import asyncio
             import concurrent.futures
 
+            providers_desc = ", ".join(
+                f"{mc.provider}({mc.model or 'default'})" for mc in multi_configs
+            )
+            write_progress(
+                f"  Running {len(multi_configs)} reviewers in parallel: {providers_desc}"
+            )
+
             async def _run_reviews() -> list[dict[str, Any]]:
                 results: list[dict[str, Any]] = []
                 loop = asyncio.get_event_loop()
@@ -152,12 +160,22 @@ class CodeReviewHandler(BaseHandler):
             reviews = run_async_in_thread(_run_reviews())
 
             successful = [r for r in reviews if r.get("exit_code") == 0]
+            write_progress(
+                f"  Reviewers complete: {len(successful)}/{len(multi_configs)} succeeded"
+            )
 
             if not successful:
                 return PhaseResult.fail("All reviewers failed")
 
             # Calculate Evidence Score aggregate from reviewer outputs
             evidence_aggregate = self._calculate_evidence_aggregate(reviews)
+            if evidence_aggregate:
+                write_progress(
+                    f"  Evidence Score: {evidence_aggregate['total_score']:.1f}"
+                    f" -> {evidence_aggregate['verdict']}"
+                )
+            else:
+                write_progress("  Evidence Score: could not be calculated")
 
             # Save reviews and evidence aggregate for synthesis
             cache_dir = self.project_path / ".bmad-assist-lite" / "cache"

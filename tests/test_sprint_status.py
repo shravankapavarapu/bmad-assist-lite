@@ -235,6 +235,126 @@ class TestSprintStatusIO:
         assert loaded.development_status == {}
 
 
+class TestRichDictFormat:
+    """Tests for rich dict format entries (e.g., bmad-assist style)."""
+
+    def test_rich_dict_get_story_status(self):
+        """Extracts status from a dict entry."""
+        ss = SprintStatus(
+            development_status={
+                "1-1-setup": {"epic": "lp-v2", "title": "Setup", "status": "done"},
+            }
+        )
+        assert ss.get_story_status("1.1") is None  # no story- prefix match
+        status = ss._extract_status(ss.development_status["1-1-setup"])
+        assert status == "done"
+
+    def test_rich_dict_find_backlog_stories(self):
+        """Finds backlog stories from rich dict entries."""
+        ss = SprintStatus(
+            development_status={
+                "epic-1": {"title": "Epic One", "status": "in-progress"},
+                "1-1-setup": {"epic": 1, "status": "done", "title": "Setup"},
+                "1-2-auth": {"epic": 1, "status": "backlog", "title": "Auth"},
+                "1-3-api": {"epic": 1, "status": "in-progress", "title": "API"},
+            }
+        )
+        result = ss.find_backlog_stories()
+        assert result == [(1, 2, "1-2-auth")]
+
+    def test_rich_dict_is_story_done(self):
+        """is_story_done works with rich dict entries via _find_key."""
+        ss = SprintStatus(
+            development_status={
+                "story-1-1": {"status": "done", "title": "Setup"},
+                "story-1-2": {"status": "backlog", "title": "Auth"},
+            }
+        )
+        assert ss.is_story_done("1.1") is True
+        assert ss.is_story_done("1.2") is False
+
+    def test_rich_dict_is_epic_done(self):
+        """is_epic_done works with rich dict entries."""
+        ss = SprintStatus(
+            development_status={
+                "epic-1": {"title": "Epic One", "status": "done"},
+                "epic-2": {"title": "Epic Two", "status": "in-progress"},
+            }
+        )
+        assert ss.is_epic_done(1) is True
+        assert ss.is_epic_done(2) is False
+
+    def test_rich_dict_set_story_preserves_dict(self):
+        """Setting status on a rich dict entry updates status field, keeps other fields."""
+        ss = SprintStatus(
+            development_status={
+                "story-1-1": {"status": "backlog", "title": "Setup", "points": 3},
+            }
+        )
+        ss.set_story_status("1.1", "in-progress")
+        entry = ss.development_status["story-1-1"]
+        assert isinstance(entry, dict)
+        assert entry["status"] == "in-progress"
+        assert entry["title"] == "Setup"
+        assert entry["points"] == 3
+
+    def test_rich_dict_set_epic_preserves_dict(self):
+        """Setting status on a rich dict epic entry preserves other fields."""
+        ss = SprintStatus(
+            development_status={
+                "epic-1": {"title": "Epic One", "status": "backlog", "stories": 5},
+            }
+        )
+        ss.set_epic_status(1, "done")
+        entry = ss.development_status["epic-1"]
+        assert isinstance(entry, dict)
+        assert entry["status"] == "done"
+        assert entry["title"] == "Epic One"
+        assert entry["stories"] == 5
+
+    def test_mixed_format(self):
+        """Handles a mix of string and dict entries."""
+        ss = SprintStatus(
+            development_status={
+                "epic-1": "in-progress",
+                "1-1-setup": {"status": "done", "title": "Setup"},
+                "1-2-auth": "backlog",
+                "1-3-api": {"status": "backlog", "title": "API"},
+            }
+        )
+        result = ss.find_backlog_stories()
+        assert result == [(1, 2, "1-2-auth"), (1, 3, "1-3-api")]
+
+    def test_rich_dict_missing_status_key(self):
+        """Dict entry without a status key returns None."""
+        ss = SprintStatus(
+            development_status={
+                "1-1-setup": {"title": "Setup", "points": 3},
+            }
+        )
+        result = ss.find_backlog_stories()
+        assert result == []
+
+    def test_rich_dict_round_trip(self, tmp_path):
+        """Save and load preserves rich dict entries."""
+        ss = SprintStatus(
+            development_status={
+                "epic-1": {"title": "Epic One", "status": "done"},
+                "1-1-setup": {"epic": 1, "status": "done", "title": "Setup"},
+                "1-2-auth": "backlog",
+            }
+        )
+        path = tmp_path / "sprint-status.yaml"
+        save_sprint_status(ss, path)
+
+        loaded = load_sprint_status(path)
+        assert loaded._extract_status(loaded.development_status["epic-1"]) == "done"
+        assert loaded._extract_status(loaded.development_status["1-1-setup"]) == "done"
+        assert loaded._extract_status(loaded.development_status["1-2-auth"]) == "backlog"
+        result = loaded.find_backlog_stories()
+        assert result == [(1, 2, "1-2-auth")]
+
+
 class TestSprintStatusPath:
     """Tests for path resolution."""
 

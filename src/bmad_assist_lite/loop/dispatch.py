@@ -102,6 +102,10 @@ def execute_phase(state: State) -> PhaseResult:
         return replace(result, outputs={**result.outputs, "duration_ms": duration_ms})
 
     duration_ms = int((time.perf_counter() - start_time) * 1000)
+    duration_str = _format_duration(duration_ms)
+    status_icon = "\u2714" if handler_result.success else "\u2718"
+    print(f"  {status_icon} Phase completed in {duration_str}", flush=True)
+
     logger.info(
         "Phase %s completed: success=%s duration=%dms",
         phase_name,
@@ -111,3 +115,15 @@ def execute_phase(state: State) -> PhaseResult:
 
     new_outputs = {**handler_result.outputs, "duration_ms": duration_ms}
     return replace(handler_result, outputs=new_outputs)
+
+
+def _format_duration(ms: int) -> str:
+    """Format milliseconds into a human-readable duration string."""
+    if ms < 1000:
+        return f"{ms}ms"
+    seconds = ms / 1000
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes}m {secs}s"
