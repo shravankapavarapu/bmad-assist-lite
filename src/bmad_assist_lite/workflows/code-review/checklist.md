@@ -55,6 +55,23 @@
 - [ ] Mock overuse flagged
 - [ ] Edge case coverage assessed
 
+### Story Test Requirements (MANDATORY - BLOCKING)
+- [ ] Story's "Testing Requirements" section parsed
+- [ ] All mandatory test checkboxes are `[x]` (Unit Tests section)
+- [ ] Test files exist on disk for each claimed test
+- [ ] Tests include negative scenarios (empty/null input, invalid data, error states)
+- [ ] Negative Test Checklist items addressed
+- [ ] Integration/E2E tests present if marked applicable
+- [ ] Test coverage summary documented
+
+| Requirement | Status | Evidence |
+|-------------|--------|----------|
+| Unit test file(s) exist | ☐ | |
+| Tests pass (claimed) | ☐ | |
+| Negative scenarios covered | ☐ | |
+| Edge cases covered | ☐ | |
+| Integration tests (if applicable) | ☐ | |
+
 ### Performance
 - [ ] N+1 queries identified
 - [ ] Unnecessary allocations found
@@ -88,6 +105,30 @@
 - [ ] Clean pass categories counted
 - [ ] Evidence Score calculated
 - [ ] Verdict determined (EXEMPLARY/APPROVED/MAJOR REWORK/REJECT)
+
+## Runtime Verification (Deferred to Synthesis)
+
+> **NOTE:** Build, test, and lint command execution is performed by the code-review-synthesis
+> phase (single-provider, safe for command execution). Code-review runs multiple LLMs in
+> parallel — command execution here would cause conflicts.
+>
+> Reviewers should verify:
+> - [ ] Test FILE existence on disk (read-only check)
+> - [ ] Test assertions are real (not placeholders or always-passing)
+> - [ ] Test coverage of negative scenarios and edge cases
+> - [ ] Code compiles/parses without obvious syntax errors (visual inspection)
+
+## BLOCKING ISSUES
+
+Issues that MUST prevent approval:
+
+- [ ] Any mandatory test checkbox unchecked in Testing Requirements
+- [ ] Test file claimed but does not exist on disk
+- [ ] Happy-path-only tests with no negative scenario coverage
+- [ ] Task marked complete `[x]` but implementation not found in code
+- [ ] Acceptance Criteria marked MISSING
+- [ ] CRITICAL severity security vulnerability
+- [ ] Evidence Score verdict of MAJOR REWORK or REJECT
 
 ## Review Finalization
 - [ ] Minimum 3 issues found (adversarial requirement)

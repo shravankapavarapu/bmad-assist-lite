@@ -64,6 +64,23 @@
       4. Code Quality: Complex functions, magic numbers, poor naming
       5. Test Quality: Are tests real assertions or placeholders?
 
+      Story Test Requirements Check (READ-ONLY):
+      Parse the story's "Testing Requirements" section and verify:
+      1. All mandatory checkboxes in "Unit Tests (Mandatory - BLOCKING)" are [x]
+         - Unchecked mandatory test checkbox = CRITICAL finding
+      2. Verify test files actually exist on disk (read file listing only)
+         - Test marked [x] but test file doesn't exist = CRITICAL finding
+      3. Read test files and verify they contain real assertions
+         - Placeholder tests (empty test bodies, pass-only, no assertions) = HIGH finding
+      4. Check for negative scenario coverage
+         - Happy-path-only tests with no negative scenarios = MEDIUM finding
+      5. Check Negative Test Checklist items are addressed
+      6. Verify Integration/E2E test claims if section is marked applicable
+
+      IMPORTANT: Do NOT execute any build, test, or lint commands.
+      This phase runs multiple LLMs in parallel - command execution is NOT safe here.
+      Runtime verification is deferred to code-review-synthesis (single-provider phase).
+
       If fewer than 3 issues found: NOT LOOKING HARD ENOUGH!
       Re-examine for edge cases, architecture violations, documentation gaps,
       integration issues, dependency problems.
@@ -186,6 +203,7 @@
       | Git vs Story Discrepancies | (count) |
       | AC Implementation Gaps | (count) |
       | Task Completion Lies | (count) |
+      | Story Test Requirements | (count) |
       | SOLID Violations | (count) |
       | Hidden Bugs | (count) |
       | Performance Footguns | (count) |

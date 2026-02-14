@@ -210,13 +210,51 @@ loop:
 
 | Phase | Role | Provider |
 |-------|------|----------|
-| **create_story** | Create story file with context from epic/PRD/architecture | Master |
+| **create_story** | Create story file with testing requirements & quality gates | Master |
 | **validate_story** | Multi-LLM quality validation with Evidence Score | Multi (parallel) |
 | **validate_story_synthesis** | Synthesize validator findings with pre-calculated Evidence Score | Master |
-| **dev_story** | Implement the story (TDD: write tests first, then code) | Master |
-| **code_review** | Multi-LLM adversarial code review with security scan + Evidence Score | Multi (parallel) |
-| **code_review_synthesis** | Synthesize review findings with pre-calculated Evidence Score | Master |
+| **dev_story** | Implement story with toolchain detection, review continuation, quality gate enforcement (9 steps) | Master |
+| **code_review** | Multi-LLM adversarial review with story test requirements verification (read-only) + Evidence Score | Multi (parallel) |
+| **code_review_synthesis** | Synthesize findings, apply fixes, runtime verification with detected toolchain (8 steps) | Master |
 | **retrospective** | Epic retrospective after all stories complete | Master |
+
+## Battle-Hardened Workflow Patterns
+
+The workflow templates include patterns ported from production usage in bmad-assist, made **tech-stack agnostic** (works with Python, Node, Java, Rust, Go, etc.).
+
+### Toolchain Auto-Detection
+
+Dev-story and code-review-synthesis automatically detect the project's build system and determine lint/typecheck/build/test commands:
+
+| Indicator | Ecosystem | Detected Commands |
+|-----------|-----------|-------------------|
+| `package.json` + lockfile | npm/pnpm/yarn | `{pkg} run lint`, `{pkg} run typecheck`, `{pkg} run build`, `{pkg} test` |
+| `pyproject.toml` / `setup.py` | Python | `ruff check`, `mypy`, `pytest`, `python -m build` |
+| `pom.xml` | Maven | `mvn compile`, `mvn test`, `mvn verify` |
+| `build.gradle` | Gradle | `gradle build`, `gradle test`, `gradle check` |
+| `Makefile` | Make | `make lint`, `make test`, `make build` |
+| `Cargo.toml` | Rust | `cargo check`, `cargo clippy`, `cargo build`, `cargo test` |
+
+### Quality Gates (BLOCKING)
+
+Stories created by `create_story` include mandatory quality gate sections with `<!-- QUALITY-GATE: BLOCKING -->` markers. Dev-story enforces these gates before marking a story complete:
+
+- **Testing Requirements** — Unit tests (mandatory), negative test checklist, integration/E2E tests
+- **Quality Gates Table** — Lint, Type Check, Build, Unit Tests, Integration Tests, Runtime Verification
+- **Runtime Verification** — App starts without errors, no runtime errors, affected functionality works
+
+### Review Continuation
+
+When dev-story detects a "Senior Developer Review" section from a prior code-review, it prioritizes fixing review items (`[AI-Review]` tags) before implementing remaining regular tasks.
+
+### Multi-LLM Safety Architecture
+
+Code-review runs multiple LLMs in parallel, so it only performs **read-only** checks (file existence, assertion quality, git reality). All command execution (build, test, lint) is deferred to **code-review-synthesis**, which runs a single Master LLM.
+
+| Phase | Command Execution | Why |
+|-------|-------------------|-----|
+| code-review | **NO** (read-only) | Multiple LLMs run in parallel — commands would conflict |
+| code-review-synthesis | **YES** (full runtime verification) | Single Master LLM — safe for commands |
 
 ## Sprint Status Tracking
 
@@ -527,6 +565,9 @@ ruff format src/
 | **Source files** | ~150+ | ~60 |
 | **Evidence Score** | Built-in (validation + code review) | Built-in (full port) |
 | **Security Review** | Built-in (6-category scan) | Built-in (full port) |
+| **Quality Gates** | Built-in (Next.js-specific) | Built-in (tech-stack agnostic, auto-detect toolchain) |
+| **Runtime Verification** | Built-in (pnpm-specific) | Built-in (auto-detect: npm/pnpm/yarn/pytest/maven/gradle/cargo) |
+| **Review Continuation** | Built-in | Built-in (detect prior review, prioritize `[AI-Review]` fixes) |
 | **Providers** | 9 (Claude, Gemini, Codex, OpenCode, Amp, Cursor, Copilot, Kimi, Claude-subprocess) | 2 (Claude SDK, Gemini) |
 | **Windows support** | Partial (uses SIGKILL, killpg) | Native (taskkill, CREATE_NO_WINDOW, ctypes PID check) |
 | **Config tiers** | 3 (global + CWD + project) | 2 (global + project) |

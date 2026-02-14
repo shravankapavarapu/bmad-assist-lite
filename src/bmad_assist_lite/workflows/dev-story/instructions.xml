@@ -7,32 +7,146 @@
     <step id="1" name="Load Story">
       Load the story file and extract all tasks, acceptance criteria,
       and developer notes.
+
+      Also parse:
+      - Testing Requirements section (unit tests, negative tests, integration tests)
+      - Quality Gates section (lint, type check, build, tests, runtime verification)
+      - Any existing "Senior Developer Review" section from prior reviews
+
+      Note all BLOCKING quality gate checkboxes that must be satisfied before completion.
     </step>
 
     <step id="2" name="Load Project Context">
       Load project context for coding standards, patterns, and conventions.
+
+      Identify:
+      - Architecture docs and coding standards
+      - Existing patterns and conventions in the codebase
+      - Testing patterns already used in the project
     </step>
 
-    <step id="3" name="Implement Tasks">
-      For each task in the story:
+    <step id="3" name="Detect Project Toolchain">
+      Examine project root for build system indicators and determine commands
+      for lint, typecheck, build, test, and integration test:
+
+      - package.json + lockfile: package-lock.json=npm, pnpm-lock.yaml=pnpm, yarn.lock=yarn
+        Commands: {pkg_mgr} run lint, {pkg_mgr} run typecheck, {pkg_mgr} run build, {pkg_mgr} test
+      - pyproject.toml / setup.py: pip/poetry/uv + pytest/ruff/flake8/mypy
+        Commands: ruff check, mypy, pytest, python -m build (vary by config)
+      - pom.xml: Maven
+        Commands: mvn compile, mvn test, mvn verify
+      - build.gradle / build.gradle.kts: Gradle
+        Commands: gradle build, gradle test, gradle check
+      - Makefile: make
+        Commands: make lint, make test, make build (examine Makefile targets)
+      - Cargo.toml: Rust/Cargo
+        Commands: cargo check, cargo clippy, cargo build, cargo test
+
+      Store detected commands for use in steps 6 and 7.
+      If no recognizable build system found, note this and skip automated verification.
+    </step>
+
+    <step id="4" name="Detect Review Continuation">
+      Check if the story contains a "Senior Developer Review" section from a prior
+      code-review phase.
+
+      If a review section exists:
+      1. Extract all issues marked with [AI-Review] tags or listed as action items
+      2. Prioritize fixing these review items BEFORE implementing remaining regular tasks
+      3. Track which review items are addressed during implementation
+
+      If no review section exists, proceed directly to step 5.
+    </step>
+
+    <step id="5" name="Implement Tasks">
+      For each task in the story (review follow-up items first, then regular tasks):
+
       1. Write failing tests first (red)
+         - Create test files if they don't exist
+         - Include both positive and negative test cases
+         - Cover edge cases identified in Testing Requirements
       2. Implement the minimum code to pass (green)
       3. Refactor for quality (refactor)
-      4. Mark task checkbox complete
+      4. Verify tests actually exist and pass for this task
+      5. Mark task checkbox complete [x]
+      6. If addressing a review item, cross-reference the original finding
+
+      For each task, ensure:
+      - Test file exists with real assertions (not placeholders)
+      - Tests cover the negative scenarios from the Testing Requirements checklist
+      - All new tests pass before moving to the next task
     </step>
 
-    <step id="4" name="Run Validations">
-      Run all tests and ensure:
+    <step id="6" name="Run Validations">
+      Using the toolchain detected in step 3, run all validations:
+
+      1. Run lint check (detected lint command)
+      2. Run type check (detected typecheck command)
+      3. Run build (detected build command)
+      4. Run full test suite (detected test command)
+      5. Run integration tests if applicable (detected integration test command)
+
+      Ensure:
       - All new tests pass
       - No existing tests broken
       - Code quality checks pass (linting, type checking)
+      - Build succeeds without errors
+
+      Fix any failures before proceeding.
     </step>
 
-    <step id="5" name="Story Completion">
-      - Verify all acceptance criteria met
-      - Update story status to "review"
-      - Update Dev Agent Record with model info and file list
-      - Ensure all task checkboxes are checked
+    <step id="7" name="Quality Gate Validation - BLOCKING">
+      Parse the story's QUALITY-GATE: BLOCKING sections and verify all mandatory
+      checkboxes are satisfied:
+
+      Testing Requirements:
+      - All mandatory test checkboxes [x] in Unit Tests section
+      - Negative Test Checklist items addressed
+      - Integration/E2E tests passing (if applicable)
+
+      Quality Gates table:
+      - Lint: Run detected lint command, mark Pass/Fail
+      - Type Check: Run detected typecheck command, mark Pass/Fail
+      - Build: Run detected build command, mark Pass/Fail
+      - Unit Tests: Run detected test command, mark Pass/Fail
+      - Integration Tests: Run detected integration test command, mark Pass/Fail
+      - Runtime Verification: Verify app starts and affected modules work
+
+      Update the Quality Gates table in the story with actual results.
+
+      BLOCKING: If ANY mandatory gate fails, fix the issue and re-run.
+      Do NOT proceed to completion with failing quality gates.
+    </step>
+
+    <step id="8" name="Story Completion">
+      Definition of done:
+      - All acceptance criteria met and verified
+      - All task checkboxes checked [x]
+      - All BLOCKING quality gates passing
+      - Testing Requirements checkboxes updated
+      - Quality Gates table updated with Pass/Fail status
+
+      Update story file:
+      - Set status to "review"
+      - Update Dev Agent Record with:
+        - Agent Model Used
+        - File List (all created/modified files)
+        - Completion Notes (summary of what was done)
+        - Debug Log References (if any issues encountered)
+      - Update Change Log with summary of changes
+    </step>
+
+    <step id="9" name="Completion Communication">
+      Provide a summary of accomplishments:
+
+      1. Tasks completed (with count)
+      2. Tests written (unit, integration, negative scenarios)
+      3. Quality gate results (all pass/fail status)
+      4. Files created or modified
+      5. Any review items addressed (if this was a review continuation)
+
+      Suggest: "Story is ready for code-review. Consider running code-review
+      with a different LLM than was used for implementation for best results."
     </step>
   </steps>
 </instructions>

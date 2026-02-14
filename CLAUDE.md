@@ -33,7 +33,7 @@ Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 4 comman
 - **`plugins/`** — Plugin architecture: ProviderPlugin, PhasePlugin, WorkflowPlugin protocols with entry point + local directory discovery
 - **`validation/`** — Evidence Score system: deterministic scoring, parsing from LLM output, multi-validator aggregation, synthesis prompt injection
 - **`bmad/`** — Epic/story markdown parser
-- **`workflows/`** — Bundled workflow templates (package data)
+- **`workflows/`** — Bundled workflow templates (package data). Includes battle-hardened patterns: quality gates, toolchain auto-detection, review continuation, runtime verification
 
 ### Sprint Status Tracking
 
@@ -44,6 +44,20 @@ Sprint-status.yaml is the **single source of truth** for story discovery and pro
 - **`core/resume_validation.py`** — On `--resume`, cross-checks state against sprint-status to skip done stories/epics. Safety: never advances past RETROSPECTIVE phase
 - **`loop/cleanup.py`** — Crash recovery: cleans `*.tmp` files from cache on resume, warns about uncommitted git changes for DEV_STORY
 - **Story discovery** — At load time (in `cli.py`), reads sprint-status.yaml for backlog stories, validates epic files exist in `planning-artifacts/`, caches resolved queue to `.bmad-assist-lite/cache/story-queue.yaml`
+
+### Workflow Enhancements (Battle-Hardened Patterns)
+
+Workflow templates include tech-stack agnostic patterns ported from production bmad-assist usage:
+
+- **`create-story/template.md`** — Includes `<!-- QUALITY-GATE: BLOCKING -->` sections: Testing Requirements (unit/negative/integration tests) and Quality Gates table (lint, typecheck, build, tests, runtime)
+- **`dev-story/instructions.xml`** — 9 steps: Load Story → Load Context → Detect Toolchain → Detect Review Continuation → Implement Tasks (TDD + negative tests) → Run Validations → Quality Gate Validation (BLOCKING) → Story Completion → Completion Communication
+- **`code-review/checklist.md`** — Includes Story Test Requirements (BLOCKING), Runtime Verification (deferred to synthesis), and BLOCKING ISSUES summary
+- **`code-review/instructions.xml`** — Step 3 includes read-only Story Test Requirements Check (NO command execution — multi-LLM parallel safety)
+- **`code-review-synthesis/instructions.xml`** — 8 steps: adds Detect Toolchain + Runtime Verification (BLOCKING) before report generation. Safe for command execution (single Master LLM)
+
+**Multi-LLM safety constraint:** Code-review runs multiple LLMs in parallel → read-only checks only. Code-review-synthesis runs single Master LLM → safe for build/test/lint execution.
+
+**Toolchain auto-detection:** Both dev-story (step 3) and code-review-synthesis (step 6) examine project root for build system indicators (package.json, pyproject.toml, pom.xml, build.gradle, Makefile, Cargo.toml) and determine lint/typecheck/build/test commands automatically.
 
 ### Key Patterns
 
