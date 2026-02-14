@@ -154,4 +154,8 @@ context_docs:
   enabled: true
   max_libs: 8
   max_tokens_per_lib: 5000
+
+# Auto-commit story changes after code review synthesis
+auto_commit:
+  enabled: true  # default
 ```

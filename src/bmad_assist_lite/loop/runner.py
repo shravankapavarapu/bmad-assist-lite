@@ -37,6 +37,25 @@ def _print_phase_banner(phase_name: str, epic: int | str | None, story: str | No
     print(separator)
 
 
+def _auto_commit_after_synthesis(
+    config: Config, project_path: Path, state: State
+) -> None:
+    """Auto-commit story changes after code_review_synthesis."""
+    from bmad_assist_lite.cli import load_story_queue_cache
+    from bmad_assist_lite.core.git import auto_commit_story
+
+    story_key: str | None = None
+    cache_dir = project_path / ".bmad-assist-lite" / "cache"
+    cache = load_story_queue_cache(cache_dir)
+    if cache:
+        key_map = cache.get("story_key_map", {})
+        story_key = key_map.get(state.current_story or "", None)
+
+    success = auto_commit_story(project_path, state.current_story or "", story_key)
+    if success:
+        print(f"  Git: committed story {state.current_story} changes")
+
+
 def run_loop(
     config: Config,
     project_path: Path,
@@ -136,6 +155,14 @@ def run_loop(
                         result.error,
                     )
                     return LoopExitReason.ERROR
+
+                # Auto-commit after code_review_synthesis
+                if (
+                    config.auto_commit.enabled
+                    and state.current_phase is not None
+                    and state.current_phase.value == "code_review_synthesis"
+                ):
+                    _auto_commit_after_synthesis(config, project_path, state)
 
                 # Check for phase override
                 if result.next_phase is not None:

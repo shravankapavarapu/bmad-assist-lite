@@ -137,6 +137,14 @@ class ContextDocsConfig(BaseModel):
     )
 
 
+class AutoCommitConfig(BaseModel):
+    """Configuration for auto-committing story changes after code review synthesis."""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(default=True, description="Auto-commit after code_review_synthesis")
+
+
 class LoopConfig(BaseModel):
     """Loop phase ordering configuration."""
 
@@ -172,6 +180,7 @@ class Config(BaseModel):
     context_docs: ContextDocsConfig | None = Field(
         default=None, description="Context7 library documentation fetching"
     )
+    auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
 
 
 # ============================================================================
