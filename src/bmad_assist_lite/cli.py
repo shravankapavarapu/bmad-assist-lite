@@ -439,6 +439,12 @@ def reset_lock(
 # --- Helper functions for sprint-status-driven discovery ---
 
 
+def _is_dedicated_epic_file(epic_file: Path, epic_num: int) -> bool:
+    """Check if an epic file is specifically for this epic (not a master fallback)."""
+    stem = epic_file.stem.lower()
+    return f"epic-{epic_num}" in stem or f"epic{epic_num}" in stem
+
+
 def _find_epic_file(planning_dir: Path, epic_num: int) -> Path | None:
     """Find an epic file for a given epic number in planning-artifacts.
 
@@ -524,6 +530,10 @@ def _resolve_context_docs(
     typer.echo("Context7: fetching library docs...")
     for epic_num in epics_list:
         epic_file = epic_file_map.get(epic_num)
+        # Only use the epic file for context docs if it's a dedicated file
+        # for this epic (e.g. epic-6.md), not a master fallback (e.g. epics.md)
+        if epic_file and not _is_dedicated_epic_file(epic_file, epic_num):
+            epic_file = None
         try:
             docs = resolve_epic_docs(
                 epic_num=epic_num,
