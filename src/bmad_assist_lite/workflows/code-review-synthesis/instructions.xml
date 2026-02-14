@@ -1,6 +1,11 @@
 <instructions>
   <mission>Synthesize multi-LLM code review findings and apply fixes</mission>
 
+  <constraints>
+    - Do NOT perform web searches or web fetches. Work only from provided files and code.
+    - Be concise. Focus on applying fixes, not verbose analysis.
+  </constraints>
+
   <steps>
     <step id="1" name="Analyze Reviewer Findings">
       Cross-reference findings from all code reviewers.
@@ -14,7 +19,7 @@
     </step>
 
     <step id="3" name="Prioritize by Severity">
-      Order fixes: Critical &gt; High &gt; Medium &gt; Low.
+      Order fixes: Critical > High > Medium > Low.
       Group related fixes together.
     </step>
 
@@ -29,71 +34,24 @@
       Keep refactoring scope minimal and targeted.
     </step>
 
-    <step id="6" name="Detect Project Toolchain">
-      Examine project root for build system indicators and determine commands
-      for lint, typecheck, build, test, and integration test:
+    <step id="6" name="Runtime Verification">
+      Detect project toolchain from build system files (package.json, pyproject.toml,
+      pom.xml, build.gradle, Cargo.toml, Makefile) and run verification:
 
-      - package.json + lockfile: package-lock.json=npm, pnpm-lock.yaml=pnpm, yarn.lock=yarn
-        Commands: {pkg_mgr} run lint, {pkg_mgr} run typecheck, {pkg_mgr} run build, {pkg_mgr} test
-      - pyproject.toml / setup.py: pip/poetry/uv + pytest/ruff/flake8/mypy
-        Commands: ruff check, mypy, pytest, python -m build (vary by config)
-      - pom.xml: Maven
-        Commands: mvn compile, mvn test, mvn verify
-      - build.gradle / build.gradle.kts: Gradle
-        Commands: gradle build, gradle test, gradle check
-      - Makefile: make
-        Commands: make lint, make test, make build (examine Makefile targets)
-      - Cargo.toml: Rust/Cargo
-        Commands: cargo check, cargo clippy, cargo build, cargo test
-
-      Store detected commands for use in step 7.
-      If no recognizable build system found, note this and skip automated verification.
-    </step>
-
-    <step id="7" name="Runtime Verification - BLOCKING">
-      This is the master-only (single-provider) phase — safe for command execution.
-
-      Using detected toolchain commands, run full runtime verification:
-
-      1. Lint Check: Run detected lint command
-         - If lint fails, fix issues introduced by applied fixes
-         - Do NOT fix pre-existing lint issues unrelated to review fixes
-      2. Type Check: Run detected typecheck command
-         - Fix type errors introduced by applied fixes
-      3. Build: Run detected build command
-         - Verify project builds successfully
-      4. Test Suite: Run full test suite (detected test command)
-         - All tests must pass
-         - If tests fail, determine if failure was caused by applied fixes
-         - Revert fixes that caused test failures
-      5. Integration Tests: Run detected integration test command (if applicable)
-      6. Runtime Smoke Check: Verify app starts without errors (if applicable)
-
-      BLOCKING: If any verification fails due to applied fixes:
-      - Identify which fix caused the failure
-      - Revert that specific fix
-      - Document as "Fix attempted but caused regression — reverted"
-      - Re-run verification after revert
+      1. Lint/Type Check: Run detected lint and typecheck commands
+      2. Build: Verify project builds successfully
+      3. Test Suite: Run full test suite — all tests must pass
+      4. If failures caused by applied fixes: revert that fix, re-run verification
 
       Record all verification results for the synthesis report.
     </step>
 
-    <step id="8" name="Generate Synthesis Report">
+    <step id="7" name="Generate Synthesis Report">
       Create report with:
       - Applied fixes with before/after
       - Rejected findings with rationale
       - Reverted fixes with regression details (if any)
-      - Quality metrics
-      - Runtime verification results:
-        | Check | Status | Notes |
-        |-------|--------|-------|
-        | Lint | Pass/Fail | |
-        | Type Check | Pass/Fail | |
-        | Build | Pass/Fail | |
-        | Unit Tests | Pass/Fail (X/Y passed) | |
-        | Integration Tests | Pass/Fail/N-A | |
-        | Runtime Smoke | Pass/Fail/N-A | |
-      - Test results after fixes (pass/fail summary)
+      - Runtime verification results (Lint, Type Check, Build, Tests: Pass/Fail)
       - Final quality assessment
     </step>
   </steps>

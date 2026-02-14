@@ -74,6 +74,35 @@ class TestSprintStatusModel:
         assert ss.get_story_status("1.2") == "done"
         assert ss.is_story_done("1.2") is True
 
+    def test_bare_key_resolution(self):
+        """Finds 6-1-blog-data-layer without story- prefix."""
+        ss = SprintStatus(
+            development_status={"6-1-blog-data-layer-unit-tests": "backlog"}
+        )
+        assert ss.get_story_status("6.1") == "backlog"
+
+    def test_bare_key_set_updates_existing(self):
+        """Setting status on bare key updates existing entry, not creates new."""
+        ss = SprintStatus(
+            development_status={"6-1-blog-data-layer": "backlog"}
+        )
+        ss.set_story_status("6.1", "in-progress")
+        assert "6-1-blog-data-layer" in ss.development_status
+        assert ss.development_status["6-1-blog-data-layer"] == "in-progress"
+        # Should NOT create a story-6-1 key
+        assert "story-6-1" not in ss.development_status
+
+    def test_bare_key_no_false_match(self):
+        """6-1 prefix doesn't falsely match 6-10-something."""
+        ss = SprintStatus(
+            development_status={
+                "6-10-other-story": "backlog",
+                "6-1-blog-data": "done",
+            }
+        )
+        assert ss.get_story_status("6.1") == "done"
+        assert ss.get_story_status("6.10") == "backlog"
+
 
 class TestBacklogDiscovery:
     """Tests for find_next_backlog_story and find_backlog_stories."""
@@ -239,13 +268,14 @@ class TestRichDictFormat:
     """Tests for rich dict format entries (e.g., bmad-assist style)."""
 
     def test_rich_dict_get_story_status(self):
-        """Extracts status from a dict entry."""
+        """Extracts status from a dict entry via bare key match."""
         ss = SprintStatus(
             development_status={
                 "1-1-setup": {"epic": "lp-v2", "title": "Setup", "status": "done"},
             }
         )
-        assert ss.get_story_status("1.1") is None  # no story- prefix match
+        # Now matches bare key format 1-1-* for story_id 1.1
+        assert ss.get_story_status("1.1") == "done"
         status = ss._extract_status(ss.development_status["1-1-setup"])
         assert status == "done"
 
@@ -353,6 +383,168 @@ class TestRichDictFormat:
         assert loaded._extract_status(loaded.development_status["1-2-auth"]) == "backlog"
         result = loaded.find_backlog_stories()
         assert result == [(1, 2, "1-2-auth")]
+
+    def test_extra_fields_preserved_on_round_trip(self, tmp_path):
+        """Extra top-level fields (project, totals, etc.) survive load/save."""
+        path = tmp_path / "sprint-status.yaml"
+        path.write_text(
+            'generated: "2026-02-09"\n'
+            'project: "webdozo-v1"\n'
+            "totals:\n"
+            "  epics: 3\n"
+            "  stories: 10\n"
+            "current_sprint:\n"
+            '  name: "Sprint 1"\n'
+            "development_status:\n"
+            "  1-1-setup: backlog\n"
+        )
+
+        loaded = load_sprint_status(path)
+        loaded.set_story_status("1.1", "in-progress")
+        save_sprint_status(loaded, path)
+
+        # Re-read raw YAML to verify extra fields preserved
+        import yaml
+
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert raw["project"] == "webdozo-v1"
+        assert raw["totals"]["epics"] == 3
+        assert raw["totals"]["stories"] == 10
+        assert raw["current_sprint"]["name"] == "Sprint 1"
+
+    def test_generated_stays_date_format(self, tmp_path):
+        """Generated field stays as YYYY-MM-DD, not ISO datetime."""
+        path = tmp_path / "sprint-status.yaml"
+        path.write_text(
+            'generated: "2026-02-09"\n'
+            "development_status:\n"
+            "  1-1-setup: backlog\n"
+        )
+
+        loaded = load_sprint_status(path)
+        loaded.set_story_status("1.1", "done")
+        save_sprint_status(loaded, path)
+
+        content = path.read_text(encoding="utf-8")
+        # Should be a date string, not ISO datetime with time component
+        import re
+
+        match = re.search(r"generated: ['\"]?(\d{4}-\d{2}-\d{2})['\"]?", content)
+        assert match is not None, f"Generated should be date format, got: {content[:100]}"
+
+
+class TestSurgicalSave:
+    """Tests for surgical YAML save preserving comments and formatting."""
+
+    def test_comments_preserved(self, tmp_path):
+        """Save preserves YAML comments."""
+        path = tmp_path / "sprint-status.yaml"
+        original = (
+            "# Sprint Status Tracking\n"
+            'generated: "2026-02-09"\n'
+            "# Project info\n"
+            'project: "webdozo-v1"\n'
+            "\n"
+            "development_status:\n"
+            "  # Epic 1 stories\n"
+            "  1-1-setup: backlog\n"
+        )
+        path.write_text(original)
+
+        loaded = load_sprint_status(path)
+        loaded.set_story_status("1.1", "in-progress")
+        save_sprint_status(loaded, path)
+
+        content = path.read_text(encoding="utf-8")
+        assert "# Sprint Status Tracking" in content
+        assert "# Project info" in content
+        assert "# Epic 1 stories" in content
+
+    def test_quoting_style_preserved(self, tmp_path):
+        """Save preserves double-quoted strings."""
+        path = tmp_path / "sprint-status.yaml"
+        original = (
+            'generated: "2026-02-09"\n'
+            'project: "webdozo-v1"\n'
+            "development_status:\n"
+            "  1-1-setup: backlog\n"
+        )
+        path.write_text(original)
+
+        loaded = load_sprint_status(path)
+        loaded.set_story_status("1.1", "done")
+        save_sprint_status(loaded, path)
+
+        content = path.read_text(encoding="utf-8")
+        # project should keep its double-quoting
+        assert 'project: "webdozo-v1"' in content
+        # status should be updated
+        assert "1-1-setup: done" in content
+
+    def test_rich_dict_status_updated(self, tmp_path):
+        """Save updates status inside rich dict entries."""
+        path = tmp_path / "sprint-status.yaml"
+        original = (
+            'generated: "2026-02-09"\n'
+            "development_status:\n"
+            "  epic-lp-v2:\n"
+            '    title: "Landing Page V2"\n'
+            "    status: in-progress\n"
+            "    points: 36\n"
+        )
+        path.write_text(original)
+
+        loaded = load_sprint_status(path)
+        loaded.set_epic_status("lp-v2", "done")
+        save_sprint_status(loaded, path)
+
+        content = path.read_text(encoding="utf-8")
+        assert "status: done" in content
+        assert 'title: "Landing Page V2"' in content
+        assert "points: 36" in content
+
+    def test_section_separators_preserved(self, tmp_path):
+        """Save preserves section separator comments."""
+        path = tmp_path / "sprint-status.yaml"
+        original = (
+            'generated: "2026-02-09"\n'
+            "\n"
+            "# ============================================================\n"
+            "# CURRENT STATE: Between Sprints\n"
+            "# ============================================================\n"
+            "\n"
+            "development_status:\n"
+            "  1-1-setup: backlog\n"
+        )
+        path.write_text(original)
+
+        loaded = load_sprint_status(path)
+        loaded.set_story_status("1.1", "done")
+        save_sprint_status(loaded, path)
+
+        content = path.read_text(encoding="utf-8")
+        assert "# ============" in content
+        assert "# CURRENT STATE: Between Sprints" in content
+
+    def test_no_duplicate_keys_on_bare_format(self, tmp_path):
+        """Save with bare key format doesn't create duplicate story- keys."""
+        path = tmp_path / "sprint-status.yaml"
+        original = (
+            'generated: "2026-02-09"\n'
+            "development_status:\n"
+            "  6-1-blog-data-layer: backlog\n"
+            "  6-2-blog-ui: backlog\n"
+        )
+        path.write_text(original)
+
+        loaded = load_sprint_status(path)
+        loaded.set_story_status("6.1", "ready-for-dev")
+        save_sprint_status(loaded, path)
+
+        content = path.read_text(encoding="utf-8")
+        assert "6-1-blog-data-layer: ready-for-dev" in content
+        assert "story-6-1" not in content
+        assert "6-2-blog-ui: backlog" in content
 
 
 class TestSprintStatusPath:

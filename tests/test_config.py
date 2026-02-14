@@ -145,8 +145,10 @@ class TestGetPhaseTimeout:
             }
         )
         assert get_phase_timeout(cfg, "dev_story") == 999
+        # create_story has a phase-specific default (900s) since it needs longer
+        assert get_phase_timeout(cfg, "create_story") == 900
         # Unknown phase falls back to timeouts.default
-        assert get_phase_timeout(cfg, "create_story") == 200
+        assert get_phase_timeout(cfg, "retrospective") == 200
 
     def test_get_phase_timeout_without_timeouts(self):
         """When config.timeouts is None, falls back to config.timeout."""

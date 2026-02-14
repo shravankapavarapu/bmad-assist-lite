@@ -1,154 +1,59 @@
 <instructions>
   <mission>Quality validation of story context for Epic {epic_num} Story {story_num}</mission>
 
-  <requirement>You are an independent quality validator competing against the original create-story LLM.
-  Thoroughly review the story file and systematically identify mistakes, omissions, or disasters the original LLM missed.</requirement>
+  <constraints>
+    - Do NOT perform web searches or web fetches. All context is in the provided artifacts.
+    - Do NOT run shell commands (git log, etc.). Work only from provided files.
+    - Be concise. Focus on actionable findings, not verbose analysis.
+  </constraints>
 
-  <requirement>Common LLM mistakes to prevent: reinventing wheels, wrong libraries, wrong file locations, breaking regressions, ignoring UX, vague implementations, lying about completion, not learning from past work.</requirement>
+  <requirement>You are an independent quality validator. Identify mistakes, omissions, or risks
+  the original create-story LLM missed. Common LLM mistakes: reinventing wheels, wrong libraries,
+  wrong file locations, breaking regressions, vague implementations.</requirement>
 
   <steps>
-    <step id="1" name="Load and Understand the Target Story">
-      Load the story file and extract metadata: epic number, story number, title, current status.
-      Extract acceptance criteria, tasks, and implementation details.
+    <step id="1" name="Load Story and Source Documents">
+      Load the story file. Extract acceptance criteria, tasks, and implementation details.
+      Cross-reference against the epic definition and architecture document.
     </step>
 
-    <step id="2" name="Exhaustive Source Document Re-Analysis">
-      Independently re-analyze all source documents as if creating the story from scratch:
-
-      a) Epic Analysis: Load the epic definition. Extract complete epic context including objectives,
-         all stories, cross-story dependencies, technical requirements, and BDD scenarios.
-         Compare extracted requirements against current story file.
-
-      b) Architecture Deep-Dive: Load architecture document. Systematically scan for anything relevant:
-         - Technical stack with versions (languages, frameworks, libraries)
-         - Code structure and organization patterns
-         - API design patterns and contracts
-         - Database schemas and relationships
-         - Security requirements and patterns
-         - Performance requirements and optimization strategies
-         - Testing standards and frameworks
-         - Integration patterns and external services
-
-      c) Previous Story Intelligence: If this is not the first story, load the previous story
-         and extract: dev notes, review feedback, files modified, testing approaches,
-         problems encountered, code patterns established.
-
-      d) Git History Analysis: Analyze recent commits for relevance to current story,
-         including files modified, code patterns, library dependencies, architecture decisions.
-
-      e) Latest Technical Research: Research any libraries/frameworks mentioned for
-         breaking changes, security updates, performance improvements, deprecations.
-    </step>
-
-    <step id="3" name="Story Quality Gate - INVEST Validation">
-      Validate each INVEST criterion with severity score (1-10):
-
-      - I - Independent: Can be developed independently? Hidden dependencies? Circular dependencies?
-      - N - Negotiable: Overly prescriptive about HOW vs WHAT? Room for technical decisions?
-      - V - Valuable: Clear business value? Contributes to epic/product goals?
-      - E - Estimable: Requirements clear enough to estimate? Well-defined scope?
-      - S - Small: Appropriately sized? Completable in single sprint?
-      - T - Testable: Specific and measurable acceptance criteria? Edge cases covered?
-
-      Deep Acceptance Criteria Analysis:
-      - Hunt for ambiguous criteria (vague language like "should work well", "fast")
-      - Untestable criteria that cannot be objectively verified
-      - Missing criteria for expected behaviors
-      - Conflicting criteria
+    <step id="2" name="Validate Story Quality">
+      Check INVEST criteria (Independent, Negotiable, Valuable, Estimable, Small, Testable).
+      Focus on:
+      - Ambiguous or untestable acceptance criteria
       - Missing edge cases, error handling, boundary conditions
-
-      Hidden Dependencies Discovery:
-      - Undocumented technical dependencies (libraries, services, APIs)
-      - Infrastructure dependencies (databases, queues, caches)
-      - Data dependencies (migrations, seeds, external data)
-      - Sequential dependencies on other stories
-
-      Technical Alignment Verification:
-      - Does story follow established architectural patterns?
-      - Are correct technologies/frameworks specified?
-      - Does it respect defined boundaries and layers?
+      - Hidden dependencies (libraries, services, data, other stories)
+      - Technical alignment with architecture document
+      - Wrong libraries/frameworks, API contract issues, security gaps
     </step>
 
-    <step id="4" name="Disaster Prevention Gap Analysis">
-      Identify every mistake the original LLM missed that could cause disasters:
+    <step id="3" name="Calculate Evidence Score">
+      CRITICAL: Output the Evidence Score in this EXACT format for parsing.
 
-      a) Reinvention Prevention: Areas where developer might create duplicate functionality,
-         code reuse opportunities not identified, existing solutions not mentioned.
+      Map findings to severity:
+      - CRITICAL (+3): Security vulnerabilities, blocking issues, missing essential requirements
+      - IMPORTANT (+1): Missing guidance, unclear specs, integration risks
+      - MINOR (+0.3): Typos, style issues, minor clarifications
 
-      b) Technical Specification Gaps: Wrong libraries/frameworks, API contract violations,
-         database schema conflicts, security vulnerabilities, performance disasters.
+      Count CLEAN PASS categories (-0.5 each): INVEST (6), Acceptance Criteria,
+      Dependencies, Technical Alignment, Implementation
 
-      c) File Structure Issues: Wrong file locations, coding standard violations,
-         integration pattern breaks, deployment failures.
-
-      d) Regression Risks: Breaking changes, test failures, UX violations,
-         learning failures from previous stories.
-
-      e) Implementation Issues: Vague implementations, completion lies,
-         scope creep, quality failures.
-    </step>
-
-    <step id="5" name="LLM Developer Agent Optimization">
-      Analyze story for LLM consumption optimization:
-      - Verbosity problems wasting tokens without adding value
-      - Ambiguity that could lead to multiple interpretations
-      - Context overload with irrelevant information
-      - Missing critical signals buried in verbose text
-      - Poor structure for efficient LLM processing
-    </step>
-
-    <step id="6" name="Calculate Evidence Score">
-      CRITICAL: You MUST calculate and output the Evidence Score for synthesis!
-
-      Categorize all findings:
-      - critical_issues: Must fix (essential requirements, security, blocking issues)
-      - enhancements: Should add (helpful guidance, better specifications)
-      - optimizations: Nice to have (performance hints, development tips)
-      - llm_optimizations: Token efficiency and clarity improvements
-
-      Map each finding to Evidence Score severity:
-      - CRITICAL (+3 points): Security vulnerabilities, data corruption risks, blocking issues, missing essential requirements
-      - IMPORTANT (+1 point): Missing guidance, unclear specifications, integration risks
-      - MINOR (+0.3 points): Typos, style issues, minor clarifications
-
-      Count CLEAN PASS categories (areas with NO issues found):
-      - Each clean category: -0.5 points
-      - Categories: INVEST criteria (6), Acceptance Criteria, Dependencies, Technical Alignment, Implementation
-
-      Calculate Evidence Score:
       evidence_score = SUM(finding_scores) + (clean_pass_count x -0.5)
 
-      Determine Evidence Verdict:
-      - EXCELLENT (score &lt;= -3): Many clean passes, minimal issues
-      - PASS (score &lt; 3): Acceptable quality, minor issues only
-      - MAJOR REWORK (3 &lt;= score &lt; 7): Significant issues require attention
-      - REJECT (score &gt;= 7): Critical problems, needs complete rewrite
-
-      OUTPUT the Evidence Score in this EXACT format for parsing:
+      Verdict: EXCELLENT (&lt;= -3), PASS (&lt; 3), MAJOR REWORK (3-7), REJECT (&gt;= 7)
 
       ## Evidence Score Summary
 
       | Severity | Description | Source | Score |
       |----------|-------------|--------|-------|
-      (list each finding as a table row with emoji: 🔴 CRITICAL, 🟠 IMPORTANT, 🟡 MINOR)
-      | 🟢 CLEAN PASS | (count) |
+      (one row per finding with emoji: 🔴 CRITICAL, 🟠 IMPORTANT, 🟡 MINOR)
+      | 🟢 CLEAN PASS | (count) categories | -X.X |
 
-      ### Evidence Score: (calculated score)
+      ### Evidence Score: (score)
 
       | Score | Verdict |
       |-------|---------|
       | **(score)** | **(verdict)** |
-    </step>
-
-    <step id="7" name="Present Findings">
-      Present complete validation report with:
-      - Executive summary
-      - Evidence Score summary (formatted as above)
-      - Story quality gate results (INVEST)
-      - Critical issues section
-      - Enhancements section
-      - Optimizations section
-      - LLM optimization suggestions
     </step>
   </steps>
 </instructions>

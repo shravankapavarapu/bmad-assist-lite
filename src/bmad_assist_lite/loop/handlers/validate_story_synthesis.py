@@ -91,7 +91,7 @@ class ValidateStorySynthesisHandler(BaseHandler):
             if not cache_file.exists():
                 return PhaseResult.fail("No cached validations found for synthesis")
 
-            cache_data = json.loads(cache_file.read_text())
+            cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
             validations = cache_data.get("validations", cache_data)
             evidence_data = cache_data.get("evidence_score")
 

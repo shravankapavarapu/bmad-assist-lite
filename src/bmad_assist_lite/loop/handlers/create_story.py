@@ -7,6 +7,7 @@ from bmad_assist_lite.cli import load_story_queue_cache
 from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.handlers.base import BaseHandler
+from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,9 @@ class CreateStoryHandler(BaseHandler):
         )
 
         try:
+            write_progress(f"  Compiling {workflow_name} prompt...")
             compiled = compile_workflow(workflow_name, context)
+            write_progress(f"  Prompt ready (~{compiled.token_estimate} tokens)")
             logger.info(
                 "Compiled prompt for %s (tokens: ~%d)",
                 workflow_name,

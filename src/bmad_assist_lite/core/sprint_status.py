@@ -2,16 +2,18 @@
 
 Provides a human-readable view of development progress via sprint-status.yaml.
 Uses atomic write (temp + os.replace) for safe persistence.
+Surgical text updates preserve YAML comments, quoting, and formatting.
 """
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,12 @@ class SprintStatus(BaseModel):
     - Simple: ``{"1-1-setup": "backlog"}`` (value is the status string)
     - Rich:   ``{"1-1-setup": {"status": "done", "title": "...", ...}}``
       (value is a dict with a ``status`` key)
+
+    Extra top-level fields (project, totals, current_sprint, etc.) are preserved
+    via ``extra="allow"`` so they survive load/save round-trips.
     """
+
+    model_config = ConfigDict(extra="allow")
 
     generated: datetime = Field(default_factory=_utc_now)
     development_status: dict[str, str | dict[str, Any]] = Field(default_factory=dict)
@@ -173,18 +180,31 @@ class SprintStatus(BaseModel):
     def _find_key(self, story_id: str) -> str | None:
         """Find matching key for a story ID.
 
-        Supports dot notation (1.2) and searches for dash variant (1-2) prefix.
+        Supports dot notation (1.2) and searches for:
+        1. story-X-Y exact match
+        2. story-X-Y-* prefix match (e.g., story-1-2-title)
+        3. X-Y exact match (bare key without story- prefix)
+        4. X-Y-* prefix match (e.g., 6-1-blog-data-layer)
         """
         normalized = story_id.replace(".", "-")
-        prefix = f"story-{normalized}"
+        story_prefix = f"story-{normalized}"
+        bare_prefix = f"{normalized}-"
 
-        # Exact match first
-        if prefix in self.development_status:
-            return prefix
+        # Exact match: story-X-Y
+        if story_prefix in self.development_status:
+            return story_prefix
 
-        # Prefix search (e.g., "story-1-2" matches "story-1-2-title")
+        # Exact match: X-Y (bare)
+        if normalized in self.development_status:
+            return normalized
+
+        # Prefix search: story-X-Y-* then X-Y-*
         for key in self.development_status:
-            if key.startswith(prefix):
+            if key.startswith(story_prefix):
+                return key
+
+        for key in self.development_status:
+            if key.startswith(bare_prefix):
                 return key
 
         return None
@@ -200,17 +220,120 @@ def get_sprint_status_path(project_root: Path) -> Path:
     ).resolve()
 
 
+def _patch_yaml_value(text: str, key: str, new_value: str) -> tuple[str, bool]:
+    """Surgically update a key's value in raw YAML text, preserving formatting.
+
+    Handles both simple (``key: value``) and rich dict (``key:\\n  status: value``) formats.
+    Preserves the original quoting style (double, single, or unquoted).
+
+    Returns:
+        (modified_text, was_found) tuple.
+    """
+    lines = text.split("\n")
+    escaped_key = re.escape(key)
+    key_pattern = re.compile(rf"^(\s*){escaped_key}:(.*)$")
+
+    for i, line in enumerate(lines):
+        m = key_pattern.match(line)
+        if not m:
+            continue
+        indent = m.group(1)
+        rest = m.group(2).strip()
+
+        if rest:
+            # Simple format: "  key: value" — replace preserving quote style
+            lines[i] = f"{indent}{key}: {_preserve_quoting(rest, new_value)}"
+            return "\n".join(lines), True
+
+        # Rich dict format: "  key:" with no inline value
+        # Search for "status:" within the indented block
+        for j in range(i + 1, min(i + 20, len(lines))):
+            next_line = lines[j]
+            stripped = next_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            # Check if we've exited the block (same or lower indent)
+            next_indent = len(next_line) - len(next_line.lstrip())
+            if next_indent <= len(indent) and stripped:
+                break
+            status_match = re.match(r"^(\s*)status:\s*(.*)$", next_line)
+            if status_match:
+                s_indent = status_match.group(1)
+                old_val = status_match.group(2).strip()
+                lines[j] = f"{s_indent}status: {_preserve_quoting(old_val, new_value)}"
+                return "\n".join(lines), True
+
+    return text, False
+
+
+def _preserve_quoting(old_value: str, new_value: str) -> str:
+    """Apply the quoting style from old_value to new_value."""
+    if old_value.startswith('"') and old_value.endswith('"'):
+        return f'"{new_value}"'
+    if old_value.startswith("'") and old_value.endswith("'"):
+        return f"'{new_value}'"
+    return new_value
+
+
 def save_sprint_status(sprint_status: SprintStatus, path: str | Path) -> None:
-    """Save sprint status to YAML file using atomic write (temp + os.replace)."""
+    """Save sprint status to YAML file using atomic write (temp + os.replace).
+
+    When file exists: uses surgical text updates to preserve YAML comments,
+    quoting style, and formatting. Only changed status values are modified.
+    When file is new: uses yaml.dump for initial creation.
+    """
     path = Path(path).expanduser()
     temp_path = path.with_suffix(path.suffix + TEMP_FILE_SUFFIX)
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = sprint_status.model_dump(mode="json")
 
+        if not path.exists():
+            # Fresh file — use yaml.dump
+            _write_fresh_sprint_status(sprint_status, temp_path)
+            os.replace(temp_path, path)
+            return
+
+        # Existing file — surgical updates to preserve formatting
+        raw_text = path.read_text(encoding="utf-8")
+
+        # Parse original to detect what changed
+        try:
+            original_data = yaml.safe_load(raw_text)
+            if not isinstance(original_data, dict):
+                original_data = {}
+        except Exception:
+            original_data = {}
+
+        original_dev = original_data.get("development_status", {})
+        new_dev = sprint_status.development_status
+
+        # Update generated date
+        gen = sprint_status.generated
+        date_str = gen.strftime("%Y-%m-%d") if gen else _utc_now().strftime("%Y-%m-%d")
+        gen_pattern = re.compile(r"^(generated:\s*)(.+)$", re.MULTILINE)
+        gen_match = gen_pattern.search(raw_text)
+        if gen_match:
+            old_gen_val = gen_match.group(2).strip()
+            new_gen_val = _preserve_quoting(old_gen_val, date_str)
+            raw_text = raw_text[: gen_match.start()] + (
+                f"{gen_match.group(1)}{new_gen_val}"
+            ) + raw_text[gen_match.end():]
+
+        # Update changed development_status entries
+        for key, new_entry in new_dev.items():
+            old_entry = original_dev.get(key)
+            new_status = SprintStatus._extract_status(new_entry)
+            old_status = SprintStatus._extract_status(old_entry) if old_entry else None
+
+            if new_status and new_status != old_status:
+                raw_text, found = _patch_yaml_value(raw_text, key, new_status)
+                if not found:
+                    logger.debug("Key %s not found in file for surgical update", key)
+
+        # Atomic write
         with open(temp_path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            f.write(raw_text)
 
         os.replace(temp_path, path)
 
@@ -219,6 +342,22 @@ def save_sprint_status(sprint_status: SprintStatus, path: str | Path) -> None:
             temp_path.unlink()
         logger.error("Failed to save sprint status to %s: %s", path, e)
         raise
+
+
+def _write_fresh_sprint_status(sprint_status: SprintStatus, path: Path) -> None:
+    """Write a brand new sprint-status.yaml file."""
+    gen = sprint_status.generated
+    data: dict[str, Any] = {
+        "generated": gen.strftime("%Y-%m-%d") if gen else _utc_now().strftime("%Y-%m-%d"),
+        "development_status": sprint_status.development_status,
+    }
+    # Include extra fields from model
+    if sprint_status.model_extra:
+        for k, v in sprint_status.model_extra.items():
+            data[k] = v
+
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
 def load_sprint_status(path: str | Path) -> SprintStatus:

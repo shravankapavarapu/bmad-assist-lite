@@ -1,6 +1,11 @@
 <instructions>
   <mission>Synthesize multi-LLM validation findings and apply improvements</mission>
 
+  <constraints>
+    - Do NOT perform web searches or web fetches. Work only from provided files.
+    - Be concise. Focus on applying improvements, not verbose analysis.
+  </constraints>
+
   <steps>
     <step id="1" name="Analyze Validator Findings">
       Cross-reference findings from all validators.

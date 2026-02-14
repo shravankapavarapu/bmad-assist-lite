@@ -84,7 +84,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
             if not cache_file.exists():
                 return PhaseResult.fail("No cached reviews found for synthesis")
 
-            cache_data = json.loads(cache_file.read_text())
+            cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
             reviews = cache_data.get("reviews", cache_data)
             evidence_data = cache_data.get("evidence_score")
 

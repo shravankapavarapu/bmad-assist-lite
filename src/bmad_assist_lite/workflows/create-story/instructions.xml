@@ -1,52 +1,43 @@
 <instructions>
   <mission>Create comprehensive story context for Epic {epic_num} Story {story_num}</mission>
 
+  <constraints>
+    - Do NOT perform web searches or web fetches. All needed context is in the provided artifacts.
+    - Do NOT run shell commands (git log, etc.). Work only from the provided files.
+    - Focus on synthesis from existing artifacts, not research.
+  </constraints>
+
   <steps>
     <step id="1" name="Determine Target Story">
       The target story is already determined from the sprint status queue.
       Epic: {epic_num}, Story: {story_num}, Key: {story_key}
     </step>
 
-    <step id="2" name="Load and Analyze Core Artifacts">
-      Load and analyze:
-      - Epic definition and story requirements from the epic file
-      - Previous story learnings (if story_num > 1, check for prior story files
-        in the implementation artifacts directory)
-      - Recent git history (last 5 commits) for project context
+    <step id="2" name="Analyze Artifacts">
+      From the provided project artifacts, extract:
+      - Story scope and requirements from the epic file
+      - Architectural guardrails, design patterns, and stack from the architecture document
+      - Any relevant UX or PRD context (if provided)
+      - If story_num > 1, check for prior story files in implementation artifacts
+        to understand what was already built
     </step>
 
-    <step id="3" name="Architecture Analysis">
-      Extract from the architecture document:
-      - Architectural guardrails and constraints
-      - Design patterns to follow
-      - Stack requirements and dependencies
-      - File structure conventions
-    </step>
-
-    <step id="4" name="Web Research">
-      Verify latest information:
-      - Library versions and compatibility
-      - API documentation for referenced services
-      - Best practices for the technology stack
-    </step>
-
-    <step id="5" name="Generate Story File">
-      Create the story file using the template with:
+    <step id="3" name="Generate Story File">
+      Create the story file using the template. Fill in:
       - User story statement (As a... I want... So that...)
-      - Acceptance criteria derived from the epic
+      - Acceptance criteria derived from the epic's story definition
       - Tasks and subtasks mapped to acceptance criteria
-      - Developer notes with architecture patterns and constraints
-      - Source tree components to create or modify
-      - Testing standards and requirements
+      - Dev notes: architecture patterns, constraints, file structure, dependencies
+      - Testing approach (what to test, not the detailed checklist — that comes later)
     </step>
 
-    <step id="6" name="Update Sprint Status">
+    <step id="4" name="Update Sprint Status">
       Mark the story as "ready-for-dev" in sprint-status.yaml.
       Update the story key {story_key} status from "backlog" to "ready-for-dev".
     </step>
   </steps>
 
   <output>
-    Save story to: {story_dir}/{epic_num}-{story_num}.md
+    Save story to: {story_dir}/{story_key}.md
   </output>
 </instructions>

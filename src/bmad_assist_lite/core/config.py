@@ -92,11 +92,26 @@ class TimeoutsConfig(BaseModel):
     code_review_synthesis: int | None = None
     retrospective: int | None = None
 
+    # Phases that need longer timeouts than default (300s)
+    _PHASE_DEFAULTS: dict[str, int] = {
+        "create_story": 900,
+        "validate_story": 600,
+        "validate_story_synthesis": 600,
+        "dev_story": 900,
+        "code_review": 600,
+        "code_review_synthesis": 600,
+    }
+
     def get_timeout(self, phase: str) -> int:
-        """Get timeout for a specific phase."""
+        """Get timeout for a specific phase.
+
+        Priority: explicit per-phase config > phase-specific default > global default.
+        """
         phase_key = phase.replace("-", "_")
         value = getattr(self, phase_key, None)
-        return value if value is not None else self.default
+        if value is not None:
+            return value
+        return self._PHASE_DEFAULTS.get(phase_key, self.default)
 
 
 class ProjectPathsConfig(BaseModel):

@@ -29,59 +29,12 @@ so that [benefit].
 
 ## Testing Requirements
 
-<!-- QUALITY-GATE: BLOCKING -->
+- Key test scenarios to cover (describe what, not how)
+- Negative/edge cases to watch for
 
-### Unit Tests (Mandatory - BLOCKING)
+## Quality Gates
 
-- [ ] Test file(s) created for new/modified modules
-- [ ] All unit tests pass locally
-- [ ] Positive scenario tests (happy path for each AC)
-- [ ] Negative scenario tests (see checklist below)
-- [ ] Edge case tests where applicable
-
-### Negative Test Checklist (Required)
-
-- [ ] Empty/null/missing input handled
-- [ ] Invalid data types or formats rejected
-- [ ] Error states produce meaningful messages
-- [ ] Boundary conditions tested (min/max values, empty collections)
-- [ ] Concurrent/async edge cases addressed (if applicable)
-
-### Integration/E2E Tests (If applicable - BLOCKING)
-
-- [ ] Integration tests cover cross-module interactions
-- [ ] E2E tests verify user-facing workflows (if applicable)
-- [ ] All integration/E2E tests pass locally
-
-<!-- /QUALITY-GATE -->
-
-## Quality Gates (MANDATORY - BLOCKING)
-
-<!-- QUALITY-GATE: BLOCKING -->
-
-| Gate | Status | Notes |
-|------|--------|-------|
-| Lint | ☐ Pass | |
-| Type Check | ☐ Pass | |
-| Build | ☐ Pass | |
-| Unit Tests | ☐ Pass | |
-| Integration Tests | ☐ Pass | |
-| Runtime Verification | ☐ Pass | |
-
-### Runtime Verification Checklist (BLOCKING)
-
-- [ ] Application starts without errors
-- [ ] No runtime errors in affected modules
-- [ ] No type errors at runtime
-- [ ] Affected functionality works as expected
-
-### Integration Smoke Test (BLOCKING)
-
-- [ ] Navigate/invoke affected routes or entry points
-- [ ] Verify expected output or content
-- [ ] No regressions in adjacent functionality
-
-<!-- /QUALITY-GATE -->
+<!-- Populated during dev-story phase -->
 
 ## Dev Agent Record
 

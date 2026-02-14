@@ -113,47 +113,44 @@ class CodeReviewHandler(BaseHandler):
             )
 
             async def _run_reviews() -> list[dict[str, Any]]:
-                results: list[dict[str, Any]] = []
+                results: list[dict[str, Any]] = [None] * len(multi_configs)  # type: ignore[list-item]
                 loop = asyncio.get_event_loop()
+                timeout = get_phase_timeout(self.config, self.phase_name)
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(multi_configs)
                 ) as executor:
-                    futures = []
+                    future_to_idx: dict[asyncio.Future[Any], int] = {}
                     for i, mc in enumerate(multi_configs):
                         provider = get_provider(mc.provider)
-                        timeout = get_phase_timeout(self.config, self.phase_name)
-                        futures.append(
-                            loop.run_in_executor(
-                                executor,
-                                lambda p=provider, m=mc.model, t=timeout: p.invoke(
-                                    prompt,
-                                    model=m,
-                                    timeout=t,
-                                    cwd=self.project_path,
-                                ),
-                            )
+                        future = loop.run_in_executor(
+                            executor,
+                            lambda p=provider, m=mc.model, t=timeout: p.invoke(
+                                prompt,
+                                model=m,
+                                timeout=t,
+                                cwd=self.project_path,
+                            ),
                         )
+                        future_to_idx[future] = i
 
-                    for i, future in enumerate(asyncio.as_completed(futures)):
+                    for future in asyncio.as_completed(future_to_idx):
+                        idx = future_to_idx[future]
+                        reviewer_label = f"Reviewer-{idx + 1}"
                         try:
                             result = await future
-                            results.append(
-                                {
-                                    "reviewer": f"Reviewer-{i + 1}",
-                                    "response": result.stdout,
-                                    "exit_code": result.exit_code,
-                                }
-                            )
+                            results[idx] = {
+                                "reviewer": reviewer_label,
+                                "response": result.stdout,
+                                "exit_code": result.exit_code,
+                            }
                         except Exception as e:
-                            logger.warning("Reviewer %d failed: %s", i + 1, e)
-                            results.append(
-                                {
-                                    "reviewer": f"Reviewer-{i + 1}",
-                                    "error": str(e),
-                                    "exit_code": 1,
-                                }
-                            )
+                            logger.warning("%s failed: %s", reviewer_label, e)
+                            results[idx] = {
+                                "reviewer": reviewer_label,
+                                "error": str(e),
+                                "exit_code": 1,
+                            }
 
                 return results
 
