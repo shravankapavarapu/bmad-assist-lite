@@ -5,6 +5,7 @@ Commands:
     init        Initialize a new project
     compile     Compile a workflow (debug/inspect)
     reset-lock  Remove stale lock file
+    fetch-docs  Pre-fetch library documentation from Context7
 """
 
 import logging
@@ -217,6 +218,12 @@ def run(
         story_key_map,
         epic_file_map,
     )
+
+    # Pre-fetch library documentation if context_docs is enabled
+    if app_config.context_docs is not None and app_config.context_docs.enabled:
+        _resolve_context_docs(
+            app_config, project, paths, epics_list, epic_file_map, logger
+        )
 
     typer.echo(
         f"Found {len(epics_list)} epic(s) with "
@@ -490,3 +497,104 @@ def load_story_queue_cache(cache_dir: Path) -> dict[str, Any] | None:
         return data if isinstance(data, dict) else None
     except (yaml.YAMLError, OSError):
         return None
+
+
+def _resolve_context_docs(
+    app_config: Any,
+    project: Path,
+    paths: Any,
+    epics_list: list[int],
+    epic_file_map: dict[int, Path],
+    logger: logging.Logger,
+) -> None:
+    """Pre-fetch library documentation from Context7 for each epic."""
+    from bmad_assist_lite.context_docs.resolver import resolve_epic_docs
+
+    ctx_cfg = app_config.context_docs
+    arch_file = paths.architecture_file if paths.architecture_file.exists() else None
+
+    for epic_num in epics_list:
+        epic_file = epic_file_map.get(epic_num)
+        try:
+            docs = resolve_epic_docs(
+                epic_num=epic_num,
+                project_root=project,
+                cache_dir=paths.cache_dir,
+                epic_file=epic_file,
+                architecture_file=arch_file,
+                max_libs=ctx_cfg.max_libs,
+                max_tokens_per_lib=ctx_cfg.max_tokens_per_lib,
+            )
+            if docs:
+                typer.echo(f"  Fetched library docs for epic {epic_num}: {list(docs.keys())}")
+        except Exception as e:
+            logger.warning("Context docs fetch failed for epic %d: %s", epic_num, e)
+
+
+@app.command(name="fetch-docs")
+def fetch_docs(
+    project: Path = typer.Option(
+        Path("."),
+        "--project",
+        "-p",
+        help="Path to project directory.",
+        exists=True,
+        dir_okay=True,
+        file_okay=False,
+    ),
+    epic_num: int = typer.Option(
+        ...,
+        "--epic",
+        "-e",
+        help="Epic number to fetch docs for.",
+    ),
+    max_libs: int = typer.Option(8, "--max-libs", help="Maximum libraries to fetch."),
+    max_tokens: int = typer.Option(5000, "--max-tokens", help="Max tokens per library."),
+    verbose: int = typer.Option(
+        0,
+        "--verbose",
+        "-v",
+        count=True,
+        help="Increase verbosity.",
+    ),
+) -> None:
+    """Pre-fetch library documentation from Context7.
+
+    Detects project libraries and fetches their documentation for use
+    during dev-story and code-review-synthesis phases.
+    """
+    _setup_logging(verbose)
+
+    project = project.resolve()
+
+    from bmad_assist_lite.core.paths import init_paths
+
+    paths = init_paths(project)
+
+    # Find epic and architecture files
+    planning_dir = paths.planning_artifacts
+    epic_file = _find_epic_file(planning_dir, epic_num)
+    arch_file = paths.architecture_file if paths.architecture_file.exists() else None
+
+    from bmad_assist_lite.context_docs.resolver import resolve_epic_docs
+
+    try:
+        docs = resolve_epic_docs(
+            epic_num=epic_num,
+            project_root=project,
+            cache_dir=paths.cache_dir,
+            epic_file=epic_file,
+            architecture_file=arch_file,
+            max_libs=max_libs,
+            max_tokens_per_lib=max_tokens,
+        )
+    except ImportError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    if docs:
+        typer.echo(f"Fetched documentation for {len(docs)} libraries:")
+        for name in docs:
+            typer.echo(f"  - {name}")
+    else:
+        typer.echo("No library documentation found or fetched.")

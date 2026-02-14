@@ -123,6 +123,11 @@ class ProjectPaths:
     def cache_dir(self) -> Path:
         return self.bmad_assist_dir / "cache"
 
+    @cached_property
+    def lib_docs_dir(self) -> Path:
+        """Directory for cached library documentation from Context7."""
+        return self.cache_dir / "lib-docs"
+
     # Helpers
 
     def ensure_directories(self) -> None:

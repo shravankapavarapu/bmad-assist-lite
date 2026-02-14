@@ -125,6 +125,18 @@ class ProjectPathsConfig(BaseModel):
     project_knowledge: str | None = None
 
 
+class ContextDocsConfig(BaseModel):
+    """Configuration for Context7 library documentation fetching."""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(default=True, description="Enable library doc fetching")
+    max_libs: int = Field(default=8, description="Maximum libraries to fetch docs for")
+    max_tokens_per_lib: int = Field(
+        default=5000, description="Max tokens of docs per library from Context7"
+    )
+
+
 class LoopConfig(BaseModel):
     """Loop phase ordering configuration."""
 
@@ -157,6 +169,9 @@ class Config(BaseModel):
     paths: ProjectPathsConfig = Field(default_factory=ProjectPathsConfig)
     loop: LoopConfig = Field(default_factory=LoopConfig)
     parallel_delay: float = Field(default=1.0, description="Delay between parallel LLM calls")
+    context_docs: ContextDocsConfig | None = Field(
+        default=None, description="Context7 library documentation fetching"
+    )
 
 
 # ============================================================================

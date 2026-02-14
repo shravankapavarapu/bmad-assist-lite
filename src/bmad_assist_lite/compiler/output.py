@@ -66,6 +66,7 @@ FILE_ORDER_PATTERNS: tuple[tuple[str, ...], ...] = (
     ("prd",),
     ("ux",),
     ("architecture",),
+    ("library-docs",),
     ("epics", "epic-"),
 )
 
