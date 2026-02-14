@@ -66,9 +66,10 @@ def _resolve_library_id(
         response.raise_for_status()
         data = response.json()
 
-        if isinstance(data, list) and data:
-            # Return the first (best) match
-            best = data[0]
+        # API returns {"results": [...]} or a bare list
+        results = data.get("results", data) if isinstance(data, dict) else data
+        if isinstance(results, list) and results:
+            best = results[0]
             lib_id = best.get("id")
             if lib_id:
                 logger.debug("Resolved %s -> %s", library_name, lib_id)
