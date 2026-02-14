@@ -120,18 +120,20 @@ class TestBacklogDiscovery:
         result = ss.find_backlog_stories()
         assert result == [(1, 1, "1-1-setup"), (1, 2, "1-2-auth")]
 
-    def test_find_backlog_stories_skips_done(self):
-        """Skips stories that are not backlog."""
+    def test_find_backlog_stories_skips_inactive(self):
+        """Skips done/blocked/deferred stories, includes active ones."""
         ss = SprintStatus(
             development_status={
                 "epic-1": "in-progress",
                 "1-1-setup": "done",
                 "1-2-auth": "backlog",
                 "1-3-api": "in-progress",
+                "1-4-blocked": "blocked",
+                "1-5-deferred": "deferred",
             }
         )
         result = ss.find_backlog_stories()
-        assert result == [(1, 2, "1-2-auth")]
+        assert result == [(1, 2, "1-2-auth"), (1, 3, "1-3-api")]
 
     def test_find_backlog_stories_skips_epic_entries(self):
         """Skips entries starting with 'epic-'."""
@@ -156,11 +158,11 @@ class TestBacklogDiscovery:
         assert result == [(1, 1, "1-1-setup")]
 
     def test_find_backlog_stories_empty(self):
-        """Returns empty list when no backlog stories."""
+        """Returns empty list when all stories are inactive."""
         ss = SprintStatus(
             development_status={
                 "1-1-setup": "done",
-                "1-2-auth": "in-progress",
+                "1-2-auth": "blocked",
             }
         )
         result = ss.find_backlog_stories()
@@ -280,17 +282,18 @@ class TestRichDictFormat:
         assert status == "done"
 
     def test_rich_dict_find_backlog_stories(self):
-        """Finds backlog stories from rich dict entries."""
+        """Finds actionable stories from rich dict entries."""
         ss = SprintStatus(
             development_status={
                 "epic-1": {"title": "Epic One", "status": "in-progress"},
                 "1-1-setup": {"epic": 1, "status": "done", "title": "Setup"},
                 "1-2-auth": {"epic": 1, "status": "backlog", "title": "Auth"},
                 "1-3-api": {"epic": 1, "status": "in-progress", "title": "API"},
+                "1-4-blocked": {"epic": 1, "status": "blocked", "title": "Blocked"},
             }
         )
         result = ss.find_backlog_stories()
-        assert result == [(1, 2, "1-2-auth")]
+        assert result == [(1, 2, "1-2-auth"), (1, 3, "1-3-api")]
 
     def test_rich_dict_is_story_done(self):
         """is_story_done works with rich dict entries via _find_key."""

@@ -113,11 +113,13 @@ def run_loop(
                 if state.current_phase is None:
                     break
 
-                # Print phase banner
+                # Print phase banner (hide story for epic-level teardown phases)
+                current_phase_name = state.current_phase.value if state.current_phase else ""
+                is_teardown = current_phase_name in epic_teardown
                 _print_phase_banner(
-                    state.current_phase.value,
+                    current_phase_name,
                     state.current_epic,
-                    state.current_story,
+                    None if is_teardown else state.current_story,
                 )
 
                 # Execute phase

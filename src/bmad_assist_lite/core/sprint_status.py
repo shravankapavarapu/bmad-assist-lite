@@ -35,6 +35,9 @@ VALID_STATUSES = frozenset(
 
 DONE_STATUSES = frozenset({"done", "complete", "completed"})
 
+# Statuses that should NOT appear in the work queue
+INACTIVE_STATUSES = DONE_STATUSES | frozenset({"blocked", "deferred", "optional"})
+
 
 def _utc_now() -> datetime:
     """Get current UTC datetime without timezone info."""
@@ -137,13 +140,17 @@ class SprintStatus(BaseModel):
         return result[0] if result else None
 
     def find_backlog_stories(self) -> list[tuple[int, int, str]]:
-        """Find all backlog stories in development_status order.
+        """Find all actionable stories in development_status order.
 
-        Skips epic entries (keys starting with 'epic-') and retrospective entries.
+        Returns stories that still need work: backlog, drafted, ready-for-dev,
+        in-progress, review. Skips done/blocked/deferred/optional stories,
+        epic entries, and retrospective entries.
+
         Parses key format '{epic_num}-{story_num}-{title}' (e.g., '1-2-user-auth').
 
         Returns:
             List of (epic_num, story_num, full_key) tuples in insertion order.
+
         """
         results: list[tuple[int, int, str]] = []
         for key, entry in self.development_status.items():
@@ -152,7 +159,7 @@ class SprintStatus(BaseModel):
             if "retrospective" in key:
                 continue
             status = self._extract_status(entry)
-            if status != "backlog":
+            if status is None or status.lower() in INACTIVE_STATUSES:
                 continue
             parsed = self._parse_story_key(key)
             if parsed is not None:
