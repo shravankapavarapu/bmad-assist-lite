@@ -22,7 +22,7 @@ ruff format src/
 
 ### Package Layout
 
-Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 4 commands: run, init, compile, reset-lock).
+Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 5 commands: run, init, compile, reset-lock, fetch-docs).
 
 ### Core Subsystems
 
@@ -31,6 +31,7 @@ Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 4 comman
 - **`compiler/`** — Workflow compilation: parse workflow.yaml → resolve variables → discover files → generate XML prompt
 - **`loop/`** — Main BMAD loop orchestration with 7 phase handlers, crash recovery cleanup, sprint sync, Windows-safe signals/locking
 - **`plugins/`** — Plugin architecture: ProviderPlugin, PhasePlugin, WorkflowPlugin protocols with entry point + local directory discovery
+- **`context_docs/`** — Context7 library documentation: `detector.py` (dependency parsing + doc scanning), `cache.py` (flat file cache + epic tracking), `resolver.py` (orchestrator + compiler injection). Opt-in via `context_docs` config
 - **`validation/`** — Evidence Score system: deterministic scoring, parsing from LLM output, multi-validator aggregation, synthesis prompt injection
 - **`bmad/`** — Epic/story markdown parser
 - **`workflows/`** — Bundled workflow templates (package data). Includes battle-hardened patterns: quality gates, toolchain auto-detection, review continuation, runtime verification
@@ -147,4 +148,10 @@ timeouts:
 
 paths:
   output_folder: _bmad-output
+
+# Opt-in: fetch library docs from Context7 for dev-story/code-review-synthesis
+context_docs:
+  enabled: true
+  max_libs: 8
+  max_tokens_per_lib: 5000
 ```

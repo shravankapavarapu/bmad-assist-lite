@@ -334,6 +334,14 @@ timeouts:
 
 paths:
   output_folder: _bmad-output
+
+# Uncomment to enable library documentation fetching from Context7.
+# Fetches up-to-date API docs for detected project dependencies and injects
+# them into dev-story and code-review-synthesis prompts.
+# context_docs:
+#   enabled: true
+#   max_libs: 8              # max libraries to fetch docs for
+#   max_tokens_per_lib: 5000 # max tokens of docs per library
 """
     config_path.write_text(default_config)
     typer.echo(f"Created config: {config_path}")

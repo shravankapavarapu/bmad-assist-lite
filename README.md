@@ -115,6 +115,9 @@ bmad-assist-lite run -vv
 # Compile and inspect a workflow prompt (for debugging)
 bmad-assist-lite compile create-story --epic 1 --story 1
 
+# Pre-fetch library docs from Context7 (requires context_docs enabled)
+bmad-assist-lite fetch-docs --epic 1
+
 # Remove a stale lock file from a crashed run
 bmad-assist-lite reset-lock
 
@@ -154,6 +157,12 @@ timeouts:
 
 paths:
   output_folder: _bmad-output
+
+# Library documentation fetching (opt-in)
+context_docs:
+  enabled: true
+  max_libs: 8               # max libraries to fetch docs for
+  max_tokens_per_lib: 5000  # max tokens per library from Context7
 ```
 
 ### Global Config (`~/.bmad-assist-lite/config.yaml`)
@@ -256,6 +265,52 @@ Code-review runs multiple LLMs in parallel, so it only performs **read-only** ch
 | code-review | **NO** (read-only) | Multiple LLMs run in parallel — commands would conflict |
 | code-review-synthesis | **YES** (full runtime verification) | Single Master LLM — safe for commands |
 
+## Library Documentation (Context7)
+
+When enabled, bmad-assist-lite fetches up-to-date API documentation for your project's dependencies from [Context7](https://context7.com) and injects them into dev-story and code-review-synthesis prompts. This helps LLMs use correct, current APIs instead of hallucinating outdated patterns.
+
+**This feature is opt-in.** Add to your `bmad-assist-lite.yaml`:
+
+```yaml
+context_docs:
+  enabled: true
+  max_libs: 8               # max libraries to fetch (default: 8)
+  max_tokens_per_lib: 5000  # max tokens per library (default: 5000)
+```
+
+### How It Works
+
+1. **Detection** — Parses `package.json`, `pyproject.toml`, `requirements.txt`, or `Cargo.toml` for dependencies. Also scans epic and architecture docs for framework mentions.
+2. **Fetching** — Resolves each library via Context7's API, fetches documentation as markdown.
+3. **Caching** — Docs are cached per-library in `.bmad-assist-lite/cache/lib-docs/`. Fetched once, reused across epics.
+4. **Injection** — Cached docs are injected into the compiler context for dev-story and code-review-synthesis phases.
+
+### Requirements
+
+```bash
+# httpx is required (included in [dev] and [context7] extras)
+pip install -e ".[context7]"
+```
+
+### Manual Pre-fetch
+
+```bash
+# Fetch docs for a specific epic (useful for debugging/inspection)
+bmad-assist-lite fetch-docs --epic 1 -p /path/to/project -vv
+```
+
+### Optional: API Key
+
+Context7 works without an API key (anonymous tier, rate-limited). For higher limits, set:
+
+```bash
+# In .env file (auto-loaded by bmad-assist-lite)
+CONTEXT7_API_KEY=your-key-here
+
+# Or as environment variable
+export CONTEXT7_API_KEY=your-key-here
+```
+
 ## Sprint Status Tracking
 
 Sprint status lives at `_bmad-output/implementation-artifacts/sprint-status.yaml` and serves as the **single source of truth** for story discovery and progress tracking.
@@ -301,7 +356,7 @@ You can manually edit this file to mark stories as `done` or `deferred` — the 
 
 ```
 src/bmad_assist_lite/
-  cli.py                    # 4 Typer commands: run, init, compile, reset-lock
+  cli.py                    # 5 Typer commands: run, init, compile, reset-lock, fetch-docs
                             # Sprint-status-driven story discovery + epic file validation
   core/                     # Config, state, paths, exceptions, async utils
     sprint_status.py        # Sprint status model + YAML I/O + backlog discovery
@@ -314,6 +369,7 @@ src/bmad_assist_lite/
   loop/                     # Main loop, dispatch, transitions, signals, locking
     handlers/               # 7 phase handler implementations
     cleanup.py              # Crash recovery (temp file cleanup)
+  context_docs/             # Context7 library doc fetching, caching, injection
   validation/               # Evidence Score system (scoring, parsing, aggregation)
   plugins/                  # Plugin protocols, registry, loader
   bmad/                     # Epic/story markdown parser
@@ -340,6 +396,8 @@ your-project/
     state.yaml                        # Loop state (current epic/story/phase)
     cache/
       story-queue.yaml                # Cached resolved story queue
+      lib-docs/                       # Cached library documentation (Context7)
+      epic-libs.yaml                  # Epic → libraries mapping
     plugins/                          # Local plugins
 ```
 
@@ -576,7 +634,7 @@ ruff format src/
 | **Notifications** | Telegram/Discord | None (add via plugin) |
 | **TestArch** | Built-in (8 handlers) | None (add via plugin) |
 | **Deep Verify** | Built-in | None (add via plugin) |
-| **Dependencies** | ~12+ (ruamel.yaml, httpx, scipy, jinja2, etc.) | 5 (typer, pydantic, pyyaml, claude-agent-sdk, python-dotenv) |
+| **Dependencies** | ~12+ (ruamel.yaml, httpx, scipy, jinja2, etc.) | 5 core (typer, pydantic, pyyaml, claude-agent-sdk, python-dotenv) + optional httpx for Context7 |
 
 ## License
 
