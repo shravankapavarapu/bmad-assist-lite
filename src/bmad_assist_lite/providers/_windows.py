@@ -11,13 +11,14 @@ import os
 import signal
 import subprocess
 import sys
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 IS_WINDOWS = sys.platform == "win32"
 
 
-def get_subprocess_kwargs() -> dict:
+def get_subprocess_kwargs() -> dict[str, Any]:
     """Get platform-specific kwargs for subprocess.Popen.
 
     Returns dict with:
@@ -53,8 +54,8 @@ def terminate_process(pid: int) -> bool:
             return True
         else:
             try:
-                pgid = os.getpgid(pid)
-                os.killpg(pgid, signal.SIGTERM)
+                pgid = os.getpgid(pid)  # type: ignore[attr-defined]
+                os.killpg(pgid, signal.SIGTERM)  # type: ignore[attr-defined]
             except ProcessLookupError:
                 return False
             return True
@@ -76,7 +77,7 @@ def is_pid_alive(pid: int) -> bool:
         try:
             import ctypes
 
-            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined,unused-ignore]
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if handle:

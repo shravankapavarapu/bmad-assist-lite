@@ -108,7 +108,7 @@ class TimeoutsConfig(BaseModel):
         Priority: explicit per-phase config > phase-specific default > global default.
         """
         phase_key = phase.replace("-", "_")
-        value = getattr(self, phase_key, None)
+        value: int | None = getattr(self, phase_key, None)
         if value is not None:
             return value
         return self._PHASE_DEFAULTS.get(phase_key, self.default)

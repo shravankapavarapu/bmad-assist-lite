@@ -119,6 +119,11 @@ class ValidateStoryHandler(BaseHandler):
                 loop = asyncio.get_event_loop()
                 timeout = get_phase_timeout(self.config, self.phase_name)
 
+                def _make_invoker(
+                    p: Any, m: str, t: int
+                ) -> Any:
+                    return lambda: p.invoke(prompt, model=m, timeout=t, cwd=self.project_path)
+
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(multi_configs)
                 ) as executor:
@@ -128,12 +133,7 @@ class ValidateStoryHandler(BaseHandler):
                         futures.append(
                             loop.run_in_executor(
                                 executor,
-                                lambda p=provider, m=mc.model, t=timeout: p.invoke(
-                                    prompt,
-                                    model=m,
-                                    timeout=t,
-                                    cwd=self.project_path,
-                                ),
+                                _make_invoker(provider, mc.model, timeout),
                             )
                         )
 
@@ -142,7 +142,7 @@ class ValidateStoryHandler(BaseHandler):
                 results: list[dict[str, Any]] = []
                 for i, raw in enumerate(raw_results):
                     label = f"Validator-{i + 1}"
-                    if isinstance(raw, Exception):
+                    if isinstance(raw, BaseException):
                         logger.warning("%s failed: %s", label, raw)
                         results.append(
                             {"validator": label, "error": str(raw), "exit_code": 1}

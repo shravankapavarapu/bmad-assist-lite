@@ -75,8 +75,8 @@ def advance_epic(
     if current_epic is None:
         return None
 
-    if current_epic in epics:
-        epic_idx = epics.index(current_epic)
+    if current_epic is not None and current_epic in epics:
+        epic_idx = epics.index(int(current_epic))
         if epic_idx + 1 < len(epics):
             next_epic = epics[epic_idx + 1]
             next_stories = stories_for_epic.get(next_epic, [])

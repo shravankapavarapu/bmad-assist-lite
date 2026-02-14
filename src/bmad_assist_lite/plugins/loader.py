@@ -13,6 +13,7 @@ import importlib.util
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 from bmad_assist_lite.plugins.protocols import PhasePlugin, ProviderPlugin, WorkflowPlugin
 from bmad_assist_lite.plugins.registry import PluginRegistry
@@ -67,7 +68,7 @@ def _load_entry_point_plugins(registry: PluginRegistry) -> None:
             from importlib.metadata import entry_points
 
             all_eps = entry_points()
-            eps = all_eps.get(ENTRY_POINT_GROUP, [])
+            eps: Any = all_eps.get(ENTRY_POINT_GROUP, [])
 
         for ep in eps:
             try:

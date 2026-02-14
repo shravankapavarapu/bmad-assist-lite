@@ -158,7 +158,8 @@ def run_loop(
                     continue
 
                 # Normal story phase advancement
-                stories = stories_for_epic.get(state.current_epic or 0, [])
+                epic_key = int(state.current_epic) if state.current_epic is not None else 0
+                stories = stories_for_epic.get(epic_key, [])
                 new_state = advance_story(state, story_phases, stories)
 
                 if (
