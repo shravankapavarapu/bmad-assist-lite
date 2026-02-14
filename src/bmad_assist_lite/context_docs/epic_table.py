@@ -52,14 +52,14 @@ def _find_column_indices(header_cells: list[str]) -> dict[str, int] | None:
     mapping: dict[str, int] = {}
     for i, cell in enumerate(header_cells):
         normalized = cell.strip().lower()
-        if "library" in normalized and "name" in normalized:
-            mapping["name"] = i
-        elif "context7" in normalized and "id" in normalized:
+        if "context7" in normalized and "id" in normalized:
             mapping["context7_id"] = i
         elif "query" in normalized or "focus" in normalized:
             mapping["query_focus"] = i
         elif "stories" in normalized or "story" in normalized:
             mapping["stories"] = i
+        elif "library" in normalized or "name" in normalized:
+            mapping["name"] = i
 
     required = {"name", "context7_id", "query_focus", "stories"}
     if not required.issubset(mapping.keys()):

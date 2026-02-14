@@ -416,7 +416,7 @@ Some description text.
 
 ### Context7 Library Documentation
 
-| Library Name | Context7 ID | Query Focus | Stories |
+| Library | Context7 ID | Query Focus | Stories |
 |---|---|---|---|
 | Vitest | /vitest-dev/vitest | vi.mock patterns, vi.fn | 6-1, 6-2, 6-4 |
 | Testing Library | /testing-library/react-testing-library | render, screen, userEvent | 6-2, 6-3 |
@@ -523,6 +523,19 @@ class TestParseContext7Table:
 """
         specs = parse_context7_table(content)
         assert specs is not None
+
+    def test_library_name_header_variant(self) -> None:
+        """'Library Name' header should also work."""
+        content = """\
+### Context7 Library Documentation
+
+| Library Name | Context7 ID | Query Focus | Stories |
+|---|---|---|---|
+| React | /facebook/react | hooks | 1 |
+"""
+        specs = parse_context7_table(content)
+        assert specs is not None
+        assert specs[0].name == "React"
 
     def test_returns_none_for_empty_table(self) -> None:
         content = """\
