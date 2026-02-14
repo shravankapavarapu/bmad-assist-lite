@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -102,8 +103,13 @@ class GeminiProvider(BaseProvider):
                 )
                 final_prompt = prompt + restriction_warning
 
+        # Resolve full path to gemini CLI (needed on Windows for .cmd scripts)
+        gemini_bin = shutil.which("gemini")
+        if gemini_bin is None:
+            raise ProviderError("Gemini CLI not found. Is 'gemini' in PATH?")
+
         command: list[str] = [
-            "gemini",
+            gemini_bin,
             "-m",
             effective_model,
             "--output-format",
