@@ -153,7 +153,7 @@ loop:
 
 timeouts:
   default: 300              # 5 min default
-  dev_story: 600            # 10 min for implementation
+  dev_story: 1200           # 20 min for implementation
 
 paths:
   output_folder: _bmad-output

@@ -330,7 +330,7 @@ loop:
 
 timeouts:
   default: 300
-  dev_story: 600
+  dev_story: 1200
 
 paths:
   output_folder: _bmad-output

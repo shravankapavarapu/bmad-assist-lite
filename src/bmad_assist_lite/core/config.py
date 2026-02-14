@@ -97,7 +97,7 @@ class TimeoutsConfig(BaseModel):
         "create_story": 900,
         "validate_story": 600,
         "validate_story_synthesis": 600,
-        "dev_story": 900,
+        "dev_story": 1200,
         "code_review": 600,
         "code_review_synthesis": 600,
     }
