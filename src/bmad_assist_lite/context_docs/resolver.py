@@ -11,6 +11,11 @@ from typing import TYPE_CHECKING
 
 from bmad_assist_lite.context_docs.cache import LibDocsCache
 from bmad_assist_lite.context_docs.detector import detect_libraries
+from bmad_assist_lite.context_docs.epic_table import (
+    EpicLibrarySpec,
+    get_story_lib_mapping,
+    parse_context7_table,
+)
 
 if TYPE_CHECKING:
     from bmad_assist_lite.compiler.types import CompilerContext
@@ -89,10 +94,15 @@ def _fetch_library_docs(
     api_key: str | None,
     max_tokens: int = 5000,
     timeout: float = 30.0,
+    query: str | None = None,
 ) -> str | None:
     """Fetch documentation for a library from Context7.
 
+    Args:
+        query: Custom query string. Defaults to ``"{library_name} API usage examples"``.
+
     Returns markdown documentation text or None on failure.
+
     """
     import httpx as _httpx
 
@@ -103,7 +113,7 @@ def _fetch_library_docs(
     try:
         params: dict[str, str | int] = {
             "libraryId": library_id,
-            "query": f"{library_name} API usage examples",
+            "query": query or f"{library_name} API usage examples",
             "tokens": max_tokens,
             "type": "txt",
         }
@@ -125,6 +135,70 @@ def _fetch_library_docs(
     except Exception as e:
         logger.warning("Context7: doc fetch failed for '%s' (%s): %s", library_name, library_id, e)
         return None
+
+
+def _resolve_epic_table_docs(
+    epic_num: int,
+    specs: list[EpicLibrarySpec],
+    cache: LibDocsCache,
+    max_tokens_per_lib: int,
+) -> dict[str, str]:
+    """Resolve library docs using explicit Context7 table specs.
+
+    Skips ``_resolve_library_id()`` — the Context7 ID is provided directly.
+    Uses the spec's ``query_focus`` instead of a generic query.
+    """
+    try:
+        httpx_mod = _get_httpx()
+    except ImportError as e:
+        logger.warning("%s", e)
+        return {}
+
+    api_key = _get_api_key()
+    epic_key = f"epic-{epic_num}"
+    fetched_libs: list[str] = []
+    skipped: list[str] = []
+
+    for spec in specs:
+        if cache.has_library(spec.name):
+            fetched_libs.append(spec.name)
+            continue
+
+        docs = _fetch_library_docs(
+            httpx_mod,
+            spec.context7_id,
+            spec.name,
+            api_key,
+            max_tokens=max_tokens_per_lib,
+            query=spec.query_focus,
+        )
+        if docs:
+            cache.write_library(spec.name, docs)
+            fetched_libs.append(spec.name)
+        else:
+            skipped.append(spec.name)
+
+    if skipped:
+        logger.warning(
+            "Context7 table: could not fetch docs for %d libraries: %s",
+            len(skipped),
+            skipped,
+        )
+
+    if fetched_libs:
+        logger.info(
+            "Context7 table: resolved %d libraries for epic %d: %s",
+            len(fetched_libs),
+            epic_num,
+            fetched_libs,
+        )
+    else:
+        logger.warning("Context7 table: no library docs fetched for epic %d", epic_num)
+
+    # Build story mapping and store in table format
+    story_libs = get_story_lib_mapping(specs)
+    cache.set_epic_table_libs(epic_key, fetched_libs, story_libs)
+    return cache.get_libs_for_epic(epic_key)
 
 
 def resolve_epic_docs(
@@ -166,7 +240,24 @@ def resolve_epic_docs(
         logger.info("Epic %d already resolved (%d libraries)", epic_num, len(existing))
         return cache.get_libs_for_epic(epic_key)
 
-    # 2. Detect libraries
+    # 2. Check for Context7 table in epic file
+    if epic_file and epic_file.exists():
+        try:
+            epic_content = epic_file.read_text(encoding="utf-8")
+            specs = parse_context7_table(epic_content)
+            if specs is not None:
+                logger.info(
+                    "Found Context7 table in epic %d with %d libraries",
+                    epic_num,
+                    len(specs),
+                )
+                return _resolve_epic_table_docs(
+                    epic_num, specs, cache, max_tokens_per_lib
+                )
+        except OSError as e:
+            logger.warning("Failed to read epic file for table check: %s", e)
+
+    # 3. Detect libraries
     libraries = detect_libraries(
         project_root,
         epic_file=epic_file,
@@ -235,6 +326,9 @@ def inject_library_docs(context: "CompilerContext") -> None:
     Reads the epic number from context.resolved_variables and loads any
     cached library docs into context.file_contents with a 'library-docs/' prefix.
 
+    For table-sourced epics with a story_num in context, only injects
+    the libraries mapped to that specific story.
+
     This is a no-op if context_docs is not configured or no docs are cached.
     """
     epic_num = context.resolved_variables.get("epic_num")
@@ -246,7 +340,12 @@ def inject_library_docs(context: "CompilerContext") -> None:
     cache = LibDocsCache(cache_dir)
     epic_key = f"epic-{epic_num}"
 
-    docs = cache.get_libs_for_epic(epic_key)
+    story_num = context.resolved_variables.get("story_num")
+    if story_num is not None and cache.is_table_source(epic_key):
+        docs = cache.get_libs_for_story(epic_key, str(story_num))
+    else:
+        docs = cache.get_libs_for_epic(epic_key)
+
     if not docs:
         return
 

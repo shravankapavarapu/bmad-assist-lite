@@ -1,10 +1,13 @@
 """Flat file cache and per-epic tracking for library documentation."""
 
+from __future__ import annotations
+
 import contextlib
 import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -61,7 +64,7 @@ class LibDocsCache:
 
     # --- Epic-level tracking ---
 
-    def _load_epic_libs(self) -> dict[str, list[str]]:
+    def _load_epic_libs(self) -> dict[str, Any]:
         """Load the epic-libs mapping. Returns empty dict on error."""
         if not self._epic_libs_path.exists():
             return {}
@@ -72,7 +75,7 @@ class LibDocsCache:
             logger.warning("Failed to read epic-libs.yaml: %s", e)
             return {}
 
-    def _save_epic_libs(self, data: dict[str, list[str]]) -> None:
+    def _save_epic_libs(self, data: dict[str, Any]) -> None:
         """Atomically save the epic-libs mapping."""
         temp_path = self._epic_libs_path.with_suffix(".yaml.tmp")
         try:
@@ -87,15 +90,76 @@ class LibDocsCache:
                     temp_path.unlink()
 
     def get_epic_libs(self, epic_key: str) -> list[str] | None:
-        """Get libraries associated with an epic. None means not yet resolved."""
+        """Get libraries associated with an epic. None means not yet resolved.
+
+        For table-format entries (dict with ``_source: table``), returns the
+        ``libs`` list.  For legacy entries (plain list), returns it directly.
+        """
         data = self._load_epic_libs()
-        return data.get(epic_key)
+        value = data.get(epic_key)
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            libs = value.get("libs", [])
+            return list(libs) if isinstance(libs, list) else []
+        return list(value) if isinstance(value, list) else []
 
     def set_epic_libs(self, epic_key: str, libraries: list[str]) -> None:
-        """Set libraries associated with an epic."""
+        """Set libraries associated with an epic (legacy format)."""
         data = self._load_epic_libs()
         data[epic_key] = libraries
         self._save_epic_libs(data)
+
+    def set_epic_table_libs(
+        self,
+        epic_key: str,
+        all_libs: list[str],
+        story_libs: dict[str, list[str]],
+    ) -> None:
+        """Store table-format epic libraries with per-story mapping."""
+        data = self._load_epic_libs()
+        data[epic_key] = {
+            "_source": "table",
+            "libs": all_libs,
+            "story_libs": story_libs,
+        }
+        self._save_epic_libs(data)
+
+    def is_table_source(self, epic_key: str) -> bool:
+        """Check if an epic's library data came from an epic table."""
+        data = self._load_epic_libs()
+        value = data.get(epic_key)
+        return isinstance(value, dict) and value.get("_source") == "table"
+
+    def get_libs_for_story(
+        self, epic_key: str, story_num: str
+    ) -> dict[str, str]:
+        """Get cached library docs for a specific story within an epic.
+
+        For table-format epics, returns only the docs mapped to the given
+        story number.  Falls back to all epic libs if no story mapping exists.
+        """
+        data = self._load_epic_libs()
+        value = data.get(epic_key)
+        if value is None:
+            return {}
+
+        if isinstance(value, dict) and value.get("_source") == "table":
+            story_map = value.get("story_libs", {})
+            lib_names = story_map.get(story_num)
+            if lib_names is None:
+                # Story not in mapping — fall back to all libs
+                lib_names = value.get("libs", [])
+        else:
+            # Legacy format — return all
+            lib_names = value if isinstance(value, list) else []
+
+        result: dict[str, str] = {}
+        for name in lib_names:
+            content = self.read_library(name)
+            if content:
+                result[name] = content
+        return result
 
     def get_libs_for_epic(self, epic_key: str) -> dict[str, str]:
         """Get all cached library docs for an epic. Returns {name: content}."""
