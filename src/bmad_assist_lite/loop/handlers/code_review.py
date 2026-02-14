@@ -113,45 +113,45 @@ class CodeReviewHandler(BaseHandler):
             )
 
             async def _run_reviews() -> list[dict[str, Any]]:
-                results: list[dict[str, Any]] = [None] * len(multi_configs)  # type: ignore[list-item]
                 loop = asyncio.get_event_loop()
                 timeout = get_phase_timeout(self.config, self.phase_name)
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(multi_configs)
                 ) as executor:
-                    future_to_idx: dict[asyncio.Future[Any], int] = {}
-                    for i, mc in enumerate(multi_configs):
+                    futures = []
+                    for mc in multi_configs:
                         provider = get_provider(mc.provider)
-                        future = loop.run_in_executor(
-                            executor,
-                            lambda p=provider, m=mc.model, t=timeout: p.invoke(
-                                prompt,
-                                model=m,
-                                timeout=t,
-                                cwd=self.project_path,
-                            ),
+                        futures.append(
+                            loop.run_in_executor(
+                                executor,
+                                lambda p=provider, m=mc.model, t=timeout: p.invoke(
+                                    prompt,
+                                    model=m,
+                                    timeout=t,
+                                    cwd=self.project_path,
+                                ),
+                            )
                         )
-                        future_to_idx[future] = i
 
-                    for future in asyncio.as_completed(future_to_idx):
-                        idx = future_to_idx[future]
-                        reviewer_label = f"Reviewer-{idx + 1}"
-                        try:
-                            result = await future
-                            results[idx] = {
-                                "reviewer": reviewer_label,
-                                "response": result.stdout,
-                                "exit_code": result.exit_code,
-                            }
-                        except Exception as e:
-                            logger.warning("%s failed: %s", reviewer_label, e)
-                            results[idx] = {
-                                "reviewer": reviewer_label,
-                                "error": str(e),
-                                "exit_code": 1,
-                            }
+                    raw_results = await asyncio.gather(*futures, return_exceptions=True)
 
+                results: list[dict[str, Any]] = []
+                for i, raw in enumerate(raw_results):
+                    label = f"Reviewer-{i + 1}"
+                    if isinstance(raw, Exception):
+                        logger.warning("%s failed: %s", label, raw)
+                        results.append(
+                            {"reviewer": label, "error": str(raw), "exit_code": 1}
+                        )
+                    else:
+                        results.append(
+                            {
+                                "reviewer": label,
+                                "response": raw.stdout,
+                                "exit_code": raw.exit_code,
+                            }
+                        )
                 return results
 
             reviews = run_async_in_thread(_run_reviews())
