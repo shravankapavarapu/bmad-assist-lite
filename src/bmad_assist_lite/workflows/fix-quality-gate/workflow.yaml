@@ -1,0 +1,6 @@
+name: fix-quality-gate
+description: Fix quality gate failures
+
+variables:
+  - epic_num
+  - story_num

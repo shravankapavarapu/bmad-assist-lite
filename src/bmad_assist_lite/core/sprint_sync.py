@@ -27,6 +27,9 @@ PHASE_TO_STATUS: dict[str, str] = {
     Phase.DEV_STORY.value: "in-progress",
     Phase.CODE_REVIEW.value: "review",
     Phase.CODE_REVIEW_SYNTHESIS.value: "review",
+    Phase.QUALITY_GATE.value: "review",
+    Phase.FIX_QUALITY_GATE.value: "in-progress",
+    Phase.EPIC_QUALITY_GATE.value: "review",
     Phase.RETROSPECTIVE.value: "done",
 }
 
@@ -50,6 +53,10 @@ def sync_state_to_sprint(state: State, sprint_status: SprintStatus) -> SprintSta
     for story_id in state.completed_stories:
         if not sprint_status.is_story_done(story_id):
             sprint_status.set_story_status(story_id, "done")
+
+    # Mark failed QA stories as blocked
+    for story_id in state.failed_qa_stories:
+        sprint_status.set_story_status(story_id, "blocked")
 
     # Mark completed epics as done
     for epic_id in state.completed_epics:

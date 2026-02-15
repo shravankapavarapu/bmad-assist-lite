@@ -6,7 +6,7 @@ from bmad_assist_lite.core.state import Phase, State
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["advance_story", "advance_epic"]
+__all__ = ["advance_story", "advance_epic", "skip_to_next_story"]
 
 
 def advance_story(
@@ -52,6 +52,30 @@ def advance_story(
     # All stories completed
     logger.info("All stories in epic %s completed", state.current_epic)
     return state
+
+
+def skip_to_next_story(
+    state: State,
+    phase_list: list[str],
+    stories: list[str],
+) -> State | None:
+    """Skip to next story's first phase. Returns None if no more stories.
+
+    Unlike advance_story, this always jumps to the next story regardless
+    of current phase position.
+    """
+    current_story = state.current_story
+    if not current_story or current_story not in stories:
+        return None
+
+    story_idx = stories.index(current_story)
+    if story_idx + 1 >= len(stories):
+        return None
+
+    next_story = stories[story_idx + 1]
+    first_phase = Phase(phase_list[0])
+    logger.info("Skipping to next story: %s -> %s", current_story, next_story)
+    return state.with_story(next_story).with_phase(first_phase)
 
 
 def advance_epic(

@@ -31,6 +31,8 @@ class TestStateDefaults:
         assert s.current_phase is None
         assert s.completed_stories == []
         assert s.completed_epics == []
+        assert s.failed_qa_stories == []
+        assert s.qa_retry_count == 0
         assert s.started_at is None
         assert s.updated_at is None
         assert s.story_started_at is None
@@ -46,8 +48,8 @@ class TestPhaseEnum:
     """Tests for the Phase enum."""
 
     def test_phase_enum_values(self):
-        """Phase enum has exactly 7 members with expected string values."""
-        assert len(Phase) == 7
+        """Phase enum has exactly 10 members with expected string values."""
+        assert len(Phase) == 10
         expected = {
             "CREATE_STORY": "create_story",
             "VALIDATE_STORY": "validate_story",
@@ -55,6 +57,9 @@ class TestPhaseEnum:
             "DEV_STORY": "dev_story",
             "CODE_REVIEW": "code_review",
             "CODE_REVIEW_SYNTHESIS": "code_review_synthesis",
+            "QUALITY_GATE": "quality_gate",
+            "FIX_QUALITY_GATE": "fix_quality_gate",
+            "EPIC_QUALITY_GATE": "epic_quality_gate",
             "RETROSPECTIVE": "retrospective",
         }
         for name, value in expected.items():

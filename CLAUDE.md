@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**bmad-assist-lite** is a lightweight, Windows-native Python CLI tool that automates the BMAD (Breakthrough Method of Agile AI Driven Development) methodology with Multi-LLM orchestration. It coordinates Claude Code CLI + Gemini CLI to run a 7-phase development loop: create story → validate → synthesize → implement → code-review → synthesize-review → retrospective.
+**bmad-assist-lite** is a lightweight, Windows-native Python CLI tool that automates the BMAD (Breakthrough Method of Agile AI Driven Development) methodology with Multi-LLM orchestration. It coordinates Claude Code CLI + Gemini CLI to run a 10-phase development loop: create story → validate → synthesize → implement → code-review → synthesize-review → quality-gate → (fix-quality-gate) → epic-quality-gate → retrospective.
 
 Derived from bmad-assist, with ~60 source files, 13 test files, and 16 workflow templates. Plugin architecture for extensibility.
 
@@ -26,10 +26,10 @@ Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 5 comman
 
 ### Core Subsystems
 
-- **`core/`** — Config (2-tier YAML: global + project), paths singleton, state machine (7 phases), sprint status tracking, resume validation, exceptions, async utilities
+- **`core/`** — Config (2-tier YAML: global + project), paths singleton, state machine (10 phases), sprint status tracking, resume validation, toolchain detection (`toolchain.py`), quality gates parser (`quality_gates.py`), command runner (`command_runner.py`), exceptions, async utilities
 - **`providers/`** — BaseProvider ABC with Claude SDK + Gemini implementations. Windows-safe process management in `_windows.py`
 - **`compiler/`** — Workflow compilation: parse workflow.yaml → resolve variables → discover files → generate XML prompt
-- **`loop/`** — Main BMAD loop orchestration with 7 phase handlers, crash recovery cleanup, sprint sync, Windows-safe signals/locking
+- **`loop/`** — Main BMAD loop orchestration with 10 phase handlers (7 LLM + 3 non-LLM quality gate), crash recovery cleanup, sprint sync, Windows-safe signals/locking
 - **`plugins/`** — Plugin architecture: ProviderPlugin, PhasePlugin, WorkflowPlugin protocols with entry point + local directory discovery
 - **`context_docs/`** — Context7 library documentation: `detector.py` (dependency parsing + doc scanning), `cache.py` (flat file cache + epic tracking with story-level filtering), `resolver.py` (orchestrator + compiler injection), `epic_table.py` (parses `### Context7 Library Documentation` markdown tables from epic files for explicit library-to-story mapping, skipping auto-detection and `_resolve_library_id()` calls). Opt-in via `context_docs` config
 - **`validation/`** — Evidence Score system: deterministic scoring, parsing from LLM output, multi-validator aggregation, synthesis prompt injection
@@ -59,6 +59,18 @@ Workflow templates include tech-stack agnostic patterns ported from production b
 **Multi-LLM safety constraint:** Code-review runs multiple LLMs in parallel → read-only checks only. Code-review-synthesis runs single Master LLM → safe for build/test/lint execution.
 
 **Toolchain auto-detection:** Both dev-story (step 3) and code-review-synthesis (step 6) examine project root for build system indicators (package.json, pyproject.toml, pom.xml, build.gradle, Makefile, Cargo.toml) and determine lint/typecheck/build/test commands automatically.
+
+### Quality Gate Phases
+
+Deterministic, non-LLM quality gate enforcement after code review synthesis:
+
+- **`quality_gate`** (non-LLM) — Runs lint/typecheck/build/test commands. Sources commands from: story file Quality Gates table → config `quality_gate` → auto-detected toolchain. Updates story file with PASS/FAIL. On all-pass: auto-commit + mark done. On fail (first try): writes failure report to cache, routes to `fix_quality_gate`. On fail (retry): auto-commit + mark blocked, skip to next story.
+- **`fix_quality_gate`** (LLM) — Reads failure report from cache, renders `fix-quality-gate` workflow, asks master LLM to fix. Always returns to `quality_gate` for re-check. NOT in the story phase list — only reached via `next_phase` override.
+- **`epic_quality_gate`** (non-LLM, epic teardown) — Runs full project test suite before retrospective. If `failed_qa_stories` exist, reports them and exits with error for manual fix.
+
+**State fields:** `failed_qa_stories` tracks stories that failed QA after retry. `qa_retry_count` tracks retry attempts per story (reset on pass or skip).
+
+**Auto-commit timing:** Moved from after code_review_synthesis to after quality_gate outcomes (both pass and skip_story).
 
 ### Key Patterns
 
@@ -139,8 +151,8 @@ providers:
 
 loop:
   story: [create_story, validate_story, validate_story_synthesis,
-          dev_story, code_review, code_review_synthesis]
-  epic_teardown: [retrospective]
+          dev_story, code_review, code_review_synthesis, quality_gate]
+  epic_teardown: [epic_quality_gate, retrospective]
 
 timeouts:
   default: 300
@@ -155,7 +167,14 @@ context_docs:
   max_libs: 8
   max_tokens_per_lib: 5000
 
-# Auto-commit story changes after code review synthesis
+# Fallback quality gate commands (auto-detected if omitted)
+quality_gate:
+  lint: "ruff check src/"
+  typecheck: "mypy src/"
+  test: "pytest -q --tb=short --no-header"
+  command_timeout: 120  # per-command timeout in seconds
+
+# Auto-commit story changes after quality gate pass/fail
 auto_commit:
   enabled: true  # default
 ```

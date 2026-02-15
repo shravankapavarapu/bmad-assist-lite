@@ -28,14 +28,17 @@ def _utc_now() -> datetime:
 class Phase(Enum):
     """Workflow phases for the development loop.
 
-    7 phases in configurable order:
+    10 phases in configurable order:
         1. CREATE_STORY - Create story context from epic
         2. VALIDATE_STORY - Multi-LLM validation of story
         3. VALIDATE_STORY_SYNTHESIS - Master LLM synthesizes validation
         4. DEV_STORY - Master LLM implements story
         5. CODE_REVIEW - Multi-LLM code review
         6. CODE_REVIEW_SYNTHESIS - Master LLM synthesizes review
-        7. RETROSPECTIVE - Epic retrospective (after last story)
+        7. QUALITY_GATE - Deterministic quality gate checks (non-LLM)
+        8. FIX_QUALITY_GATE - LLM fix attempt for failed quality gates
+        9. EPIC_QUALITY_GATE - Project-wide quality gate (non-LLM, epic teardown)
+       10. RETROSPECTIVE - Epic retrospective (after last story)
     """
 
     CREATE_STORY = "create_story"
@@ -44,6 +47,9 @@ class Phase(Enum):
     DEV_STORY = "dev_story"
     CODE_REVIEW = "code_review"
     CODE_REVIEW_SYNTHESIS = "code_review_synthesis"
+    QUALITY_GATE = "quality_gate"
+    FIX_QUALITY_GATE = "fix_quality_gate"
+    EPIC_QUALITY_GATE = "epic_quality_gate"
     RETROSPECTIVE = "retrospective"
 
 
@@ -55,6 +61,8 @@ class State(BaseModel):
     current_phase: Phase | None = None
     completed_stories: list[str] = Field(default_factory=list)
     completed_epics: list[int | str] = Field(default_factory=list)
+    failed_qa_stories: list[str] = Field(default_factory=list)
+    qa_retry_count: int = 0
     started_at: datetime | None = None
     updated_at: datetime | None = None
     story_started_at: datetime | None = None

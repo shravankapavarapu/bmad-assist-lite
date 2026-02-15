@@ -1,0 +1,39 @@
+<instructions>
+  <mission>Fix quality gate failures for Epic {epic_num} Story {story_num}</mission>
+
+  <context>
+    Quality gate checks have failed. A failure report is attached below with
+    the exact commands that failed, their exit codes, and full output.
+    Your job is to apply minimal, targeted fixes so the quality gates pass.
+  </context>
+
+  <steps>
+    <step number="1" name="Analyze Failure Report">
+      Read the qa-failure-report section below carefully. For each failure:
+      - Identify the specific errors and their file locations
+      - Determine the root cause (lint issue, type error, test failure, build error)
+      - Note whether failures are related or independent
+    </step>
+
+    <step number="2" name="Apply Minimal Fixes">
+      Fix ONLY what is broken. For each failure:
+      - Lint errors: fix the specific lint violations reported
+      - Type errors: add or correct type annotations as needed
+      - Test failures: fix the failing tests or the code they test
+      - Build errors: resolve compilation/build issues
+
+      CRITICAL CONSTRAINTS:
+      - Do NOT refactor unrelated code
+      - Do NOT add new features or improvements
+      - Do NOT change code that is not directly causing failures
+      - Keep changes as small and focused as possible
+    </step>
+
+    <step number="3" name="Summary">
+      Provide a brief summary of changes made:
+      - Which quality gates were failing and why
+      - What fixes were applied
+      - Note: quality gates will re-run automatically after this step
+    </step>
+  </steps>
+</instructions>

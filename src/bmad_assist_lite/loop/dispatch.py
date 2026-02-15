@@ -4,7 +4,7 @@ import logging
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bmad_assist_lite.core.exceptions import StateError
 from bmad_assist_lite.core.state import Phase, State
@@ -12,13 +12,13 @@ from bmad_assist_lite.loop.types import PhaseHandler, PhaseResult
 
 if TYPE_CHECKING:
     from bmad_assist_lite.core.config import Config
-    from bmad_assist_lite.loop.handlers.base import BaseHandler
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["init_handlers", "get_handler", "execute_phase"]
 
-_handler_instances: dict[Phase, "BaseHandler"] = {}
+# Any because non-LLM handlers (QualityGateHandler, EpicQualityGateHandler) don't extend BaseHandler
+_handler_instances: dict[Phase, Any] = {}
 _handlers_initialized: bool = False
 
 
@@ -31,6 +31,9 @@ def init_handlers(config: "Config", project_path: Path) -> None:
         CodeReviewSynthesisHandler,
         CreateStoryHandler,
         DevStoryHandler,
+        EpicQualityGateHandler,
+        FixQualityGateHandler,
+        QualityGateHandler,
         RetrospectiveHandler,
         ValidateStoryHandler,
         ValidateStorySynthesisHandler,
@@ -43,6 +46,9 @@ def init_handlers(config: "Config", project_path: Path) -> None:
         Phase.DEV_STORY: DevStoryHandler(config, project_path),
         Phase.CODE_REVIEW: CodeReviewHandler(config, project_path),
         Phase.CODE_REVIEW_SYNTHESIS: CodeReviewSynthesisHandler(config, project_path),
+        Phase.QUALITY_GATE: QualityGateHandler(config, project_path),
+        Phase.FIX_QUALITY_GATE: FixQualityGateHandler(config, project_path),
+        Phase.EPIC_QUALITY_GATE: EpicQualityGateHandler(config, project_path),
         Phase.RETROSPECTIVE: RetrospectiveHandler(config, project_path),
     }
     _handlers_initialized = True
@@ -59,7 +65,8 @@ def reset_handlers() -> None:
 def get_handler(phase: Phase) -> PhaseHandler:
     """Get the handler function for a workflow phase."""
     if _handlers_initialized and phase in _handler_instances:
-        return _handler_instances[phase].execute
+        handler_fn: PhaseHandler = _handler_instances[phase].execute
+        return handler_fn
 
     raise StateError(f"No handler registered for phase: {phase!r}")
 

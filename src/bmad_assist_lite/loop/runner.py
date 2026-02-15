@@ -4,7 +4,15 @@ import logging
 from pathlib import Path
 
 from bmad_assist_lite.core.config import Config
-from bmad_assist_lite.core.state import Phase, State, get_state_path, load_state, save_state
+from bmad_assist_lite.core.state import (
+    Phase,
+    State,
+    get_state_path,
+    mark_story_completed,
+    save_state,
+)
+from bmad_assist_lite.core.sprint_sync import trigger_sync
+from bmad_assist_lite.loop.cleanup import cleanup_for_phase
 from bmad_assist_lite.loop.dispatch import execute_phase, init_handlers
 from bmad_assist_lite.loop.locking import running_lock
 from bmad_assist_lite.loop.signals import (
@@ -13,9 +21,7 @@ from bmad_assist_lite.loop.signals import (
     shutdown_requested,
     unregister_signal_handlers,
 )
-from bmad_assist_lite.core.sprint_sync import trigger_sync
-from bmad_assist_lite.loop.cleanup import cleanup_for_phase
-from bmad_assist_lite.loop.transitions import advance_epic, advance_story
+from bmad_assist_lite.loop.transitions import advance_epic, advance_story, skip_to_next_story
 from bmad_assist_lite.loop.types import LoopExitReason
 
 logger = logging.getLogger(__name__)
@@ -156,16 +162,62 @@ def run_loop(
                     )
                     return LoopExitReason.ERROR
 
-                # Auto-commit after code_review_synthesis
+                # Quality gate action handling
                 if (
-                    config.auto_commit.enabled
-                    and state.current_phase is not None
-                    and state.current_phase.value == "code_review_synthesis"
+                    state.current_phase == Phase.QUALITY_GATE
+                    and result.success
                 ):
-                    _auto_commit_after_synthesis(config, project_path, state)
+                    action = result.outputs.get("quality_gate_action")
+                    epic_key = (
+                        int(state.current_epic) if state.current_epic is not None else 0
+                    )
+                    stories = stories_for_epic.get(epic_key, [])
+
+                    if action == "pass":
+                        if config.auto_commit.enabled:
+                            _auto_commit_after_synthesis(config, project_path, state)
+                        mark_story_completed(state)
+                        state.qa_retry_count = 0
+                        save_state(state, state_path)
+                        trigger_sync(state, project_path)
+                        print(
+                            f"  Story {state.current_story}: quality gates PASSED",
+                            flush=True,
+                        )
+                        # Fall through to normal advance_story below
+
+                    elif action == "skip_story":
+                        if config.auto_commit.enabled:
+                            _auto_commit_after_synthesis(config, project_path, state)
+                        state.failed_qa_stories.append(state.current_story or "")
+                        state.qa_retry_count = 0
+                        save_state(state, state_path)
+                        trigger_sync(state, project_path)
+                        print(
+                            f"  Story {state.current_story}: quality gates FAILED"
+                            " — marked blocked, continuing",
+                            flush=True,
+                        )
+                        next_state = skip_to_next_story(state, story_phases, stories)
+                        if next_state is not None:
+                            state = next_state
+                            continue
+                        # No more stories — start epic teardown
+                        if epic_teardown:
+                            state = state.with_phase(Phase(epic_teardown[0]))
+                        else:
+                            ep = advance_epic(state, epics, stories_for_epic, story_phases)
+                            if ep is None:
+                                logger.info("All epics completed!")
+                                return LoopExitReason.COMPLETED
+                            state = ep
+                        continue
 
                 # Check for phase override
                 if result.next_phase is not None:
+                    # Increment retry counter when entering FIX_QUALITY_GATE
+                    if result.next_phase == Phase.FIX_QUALITY_GATE:
+                        state.qa_retry_count += 1
                     state = state.with_phase(result.next_phase)
                     continue
 

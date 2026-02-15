@@ -5,6 +5,7 @@ import pytest
 from bmad_assist_lite.core.config import (
     Config,
     LoopConfig,
+    QualityGateConfig,
     _deep_merge,
     _reset_config,
     get_config,
@@ -190,11 +191,48 @@ class TestGetConfigSingleton:
 # ============================================================================
 
 
+class TestQualityGateConfig:
+    """Tests for QualityGateConfig."""
+
+    def test_quality_gate_defaults(self):
+        """Default QualityGateConfig has all None commands and 120s timeout."""
+        qg = QualityGateConfig()
+        assert qg.lint is None
+        assert qg.typecheck is None
+        assert qg.build is None
+        assert qg.test is None
+        assert qg.command_timeout == 120
+
+    def test_quality_gate_in_config(self):
+        """quality_gate config section is parsed correctly."""
+        _reset_config()
+        cfg = load_config({
+            "providers": {"master": {"provider": "claude", "model": "opus"}},
+            "quality_gate": {
+                "lint": "ruff check src/",
+                "test": "pytest",
+                "command_timeout": 60,
+            },
+        })
+        assert cfg.quality_gate is not None
+        assert cfg.quality_gate.lint == "ruff check src/"
+        assert cfg.quality_gate.test == "pytest"
+        assert cfg.quality_gate.command_timeout == 60
+
+    def test_quality_gate_optional(self):
+        """quality_gate is None by default."""
+        _reset_config()
+        cfg = load_config({
+            "providers": {"master": {"provider": "claude", "model": "opus"}},
+        })
+        assert cfg.quality_gate is None
+
+
 class TestLoopConfigDefaults:
     """Tests for default loop configuration."""
 
     def test_loop_config_defaults(self):
-        """Default LoopConfig has 6 story phases and 1 epic_teardown phase."""
+        """Default LoopConfig has 7 story phases and 2 epic_teardown phases."""
         lc = LoopConfig()
         assert lc.story == [
             "create_story",
@@ -203,7 +241,8 @@ class TestLoopConfigDefaults:
             "dev_story",
             "code_review",
             "code_review_synthesis",
+            "quality_gate",
         ]
-        assert lc.epic_teardown == ["retrospective"]
-        assert len(lc.story) == 6
-        assert len(lc.epic_teardown) == 1
+        assert lc.epic_teardown == ["epic_quality_gate", "retrospective"]
+        assert len(lc.story) == 7
+        assert len(lc.epic_teardown) == 2

@@ -90,6 +90,9 @@ class TimeoutsConfig(BaseModel):
     dev_story: int | None = None
     code_review: int | None = None
     code_review_synthesis: int | None = None
+    quality_gate: int | None = None
+    fix_quality_gate: int | None = None
+    epic_quality_gate: int | None = None
     retrospective: int | None = None
 
     # Phases that need longer timeouts than default (300s)
@@ -100,6 +103,9 @@ class TimeoutsConfig(BaseModel):
         "dev_story": 1200,
         "code_review": 600,
         "code_review_synthesis": 600,
+        "quality_gate": 300,
+        "fix_quality_gate": 600,
+        "epic_quality_gate": 600,
     }
 
     def get_timeout(self, phase: str) -> int:
@@ -137,6 +143,18 @@ class ContextDocsConfig(BaseModel):
     )
 
 
+class QualityGateConfig(BaseModel):
+    """Fallback commands for quality gate checks."""
+
+    model_config = ConfigDict(frozen=True)
+
+    lint: str | None = None
+    typecheck: str | None = None
+    build: str | None = None
+    test: str | None = None
+    command_timeout: int = Field(default=120, description="Timeout per command in seconds")
+
+
 class AutoCommitConfig(BaseModel):
     """Configuration for auto-committing story changes after code review synthesis."""
 
@@ -158,9 +176,12 @@ class LoopConfig(BaseModel):
             "dev_story",
             "code_review",
             "code_review_synthesis",
+            "quality_gate",
         ]
     )
-    epic_teardown: list[str] = Field(default_factory=lambda: ["retrospective"])
+    epic_teardown: list[str] = Field(
+        default_factory=lambda: ["epic_quality_gate", "retrospective"]
+    )
 
 
 DEFAULT_LOOP_CONFIG = LoopConfig()
@@ -179,6 +200,9 @@ class Config(BaseModel):
     parallel_delay: float = Field(default=1.0, description="Delay between parallel LLM calls")
     context_docs: ContextDocsConfig | None = Field(
         default=None, description="Context7 library documentation fetching"
+    )
+    quality_gate: QualityGateConfig | None = Field(
+        default=None, description="Fallback quality gate commands"
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
 
