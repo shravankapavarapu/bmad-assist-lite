@@ -2,10 +2,11 @@
 
 Lightweight, Windows-native Python CLI that automates the **BMAD** (Breakthrough Method of Agile AI Driven Development) methodology with Multi-LLM orchestration.
 
-Coordinates **Claude Code CLI** and **Gemini CLI** to run a 7-phase development loop:
+Coordinates **Claude Code CLI** and **Gemini CLI** to run a 10-phase development loop:
 
 ```
-create story → validate → synthesize → implement → code review → synthesize review → retrospective
+create story → validate → synthesize → implement → code review → synthesize review →
+quality gate → (fix quality gate) → epic quality gate → retrospective
 ```
 
 Multiple LLMs validate and review in parallel, then a single Master LLM synthesizes findings. Only the Master modifies files.
@@ -148,7 +149,9 @@ loop:
     - dev_story
     - code_review
     - code_review_synthesis
+    - quality_gate
   epic_teardown:            # Phases after all stories in an epic
+    - epic_quality_gate
     - retrospective
 
 timeouts:
@@ -163,6 +166,13 @@ context_docs:
   enabled: true
   max_libs: 8               # max libraries to fetch docs for
   max_tokens_per_lib: 5000  # max tokens per library from Context7
+
+# Fallback quality gate commands (auto-detected if omitted)
+# quality_gate:
+#   lint: "ruff check src/"
+#   typecheck: "mypy src/"
+#   test: "pytest -q --tb=short --no-header"
+#   command_timeout: 120     # per-command timeout in seconds
 ```
 
 ### Global Config (`~/.bmad-assist-lite/config.yaml`)
@@ -212,10 +222,13 @@ loop:
     - dev_story          # Skip validation, go straight to implementation
     - code_review
     - code_review_synthesis
-  epic_teardown: []      # Skip retrospective
+    - quality_gate
+  epic_teardown: []      # Skip epic quality gate and retrospective
 ```
 
-## The 7-Phase Loop
+## The 10-Phase Loop
+
+### Story Phases
 
 | Phase | Role | Provider |
 |-------|------|----------|
@@ -225,6 +238,28 @@ loop:
 | **dev_story** | Implement story with toolchain detection, review continuation, quality gate enforcement (9 steps) | Master |
 | **code_review** | Multi-LLM adversarial review with story test requirements verification (read-only) + Evidence Score | Multi (parallel) |
 | **code_review_synthesis** | Synthesize findings, apply fixes, runtime verification with detected toolchain (8 steps) | Master |
+| **quality_gate** | Run lint/typecheck/build/test commands deterministically, update story file with PASS/FAIL | None (non-LLM) |
+
+### Quality Gate Flow
+
+```
+quality_gate
+  ✓ all pass → auto-commit, mark story "done", advance to next story
+  ✗ fail (1st attempt) → fix_quality_gate (LLM) → quality_gate (retry)
+  ✗ fail (2nd attempt) → auto-commit, mark story "blocked", skip to next story
+```
+
+| Phase | Role | Provider |
+|-------|------|----------|
+| **fix_quality_gate** | Read failure report, apply minimal targeted fixes | Master |
+
+The reason quality gates run deterministically instead of relying on LLMs: it keeps the flow simple and is faster — no LLM invocation needed for pass/fail decisions that `subprocess` can resolve in seconds.
+
+### Epic Teardown Phases
+
+| Phase | Role | Provider |
+|-------|------|----------|
+| **epic_quality_gate** | Run full project test suite; block if any stories failed QA | None (non-LLM) |
 | **retrospective** | Epic retrospective after all stories complete | Master |
 
 ## Battle-Hardened Workflow Patterns
@@ -348,7 +383,11 @@ development_status:
 | `validate_story` / `validate_story_synthesis` | `in-progress` |
 | `dev_story` | `in-progress` |
 | `code_review` / `code_review_synthesis` | `review` |
+| `quality_gate` / `epic_quality_gate` | `review` |
+| `fix_quality_gate` | `in-progress` |
 | `retrospective` | `done` |
+| quality gate pass | `done` (via `completed_stories`) |
+| quality gate fail after retry | `blocked` (via `failed_qa_stories`) |
 
 You can manually edit this file to mark stories as `done` or `deferred` — the loop will respect those statuses on next run.
 
@@ -363,11 +402,13 @@ src/bmad_assist_lite/
     sprint_sync.py          # State → sprint-status one-way sync
     resume_validation.py    # Resume state validation against sprint-status
     paths.py                # Centralized path resolution (planning-artifacts, implementation-artifacts)
+    toolchain.py            # Auto-detect project build commands (Node/Python/Rust)
+    quality_gates.py        # Parse/update Quality Gates markdown table in story files
+    command_runner.py       # Run shell commands with timeout, capture output
   providers/                # Claude SDK + Gemini CLI implementations
   compiler/                 # Workflow compilation pipeline
-    workflows/              # 7 workflow-specific compiler modules
   loop/                     # Main loop, dispatch, transitions, signals, locking
-    handlers/               # 7 phase handler implementations
+    handlers/               # 10 phase handler implementations (7 LLM + 3 non-LLM)
     cleanup.py              # Crash recovery (temp file cleanup)
   context_docs/             # Context7 library doc fetching, caching, injection
   validation/               # Evidence Score system (scoring, parsing, aggregation)
@@ -623,7 +664,7 @@ ruff format src/
 | **Source files** | ~150+ | ~60 |
 | **Evidence Score** | Built-in (validation + code review) | Built-in (full port) |
 | **Security Review** | Built-in (6-category scan) | Built-in (full port) |
-| **Quality Gates** | Built-in (Next.js-specific) | Built-in (tech-stack agnostic, auto-detect toolchain) |
+| **Quality Gates** | Built-in (Next.js-specific) | Built-in (tech-stack agnostic, auto-detect toolchain, deterministic non-LLM enforcement) |
 | **Runtime Verification** | Built-in (pnpm-specific) | Built-in (auto-detect: npm/pnpm/yarn/pytest/maven/gradle/cargo) |
 | **Review Continuation** | Built-in | Built-in (detect prior review, prioritize `[AI-Review]` fixes) |
 | **Providers** | 9 (Claude, Gemini, Codex, OpenCode, Amp, Cursor, Copilot, Kimi, Claude-subprocess) | 2 (Claude SDK, Gemini) |

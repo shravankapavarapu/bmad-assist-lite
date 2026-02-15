@@ -109,8 +109,9 @@ def run(
 ) -> None:
     """Run the BMAD development loop.
 
-    Executes the 7-phase BMAD loop: create story -> validate -> synthesize ->
-    implement -> code-review -> synthesize-review -> retrospective.
+    Executes the 10-phase BMAD loop: create story -> validate -> synthesize ->
+    implement -> code-review -> synthesize-review -> quality-gate ->
+    (fix-quality-gate) -> epic-quality-gate -> retrospective.
     """
     _setup_logging(verbose)
     logger = logging.getLogger("bmad_assist_lite")
@@ -336,7 +337,9 @@ loop:
     - dev_story
     - code_review
     - code_review_synthesis
+    - quality_gate
   epic_teardown:
+    - epic_quality_gate
     - retrospective
 
 timeouts:

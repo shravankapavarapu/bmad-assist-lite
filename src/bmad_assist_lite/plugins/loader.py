@@ -34,18 +34,21 @@ def _load_builtin_providers(registry: PluginRegistry) -> None:
 
 
 def _load_builtin_phase_handlers(registry: PluginRegistry) -> None:
-    """Register built-in phase handlers (7 phases)."""
-    from bmad_assist_lite.loop.handlers.create_story import CreateStoryHandler
-    from bmad_assist_lite.loop.handlers.validate_story import ValidateStoryHandler
-    from bmad_assist_lite.loop.handlers.validate_story_synthesis import (
-        ValidateStorySynthesisHandler,
-    )
-    from bmad_assist_lite.loop.handlers.dev_story import DevStoryHandler
+    """Register built-in phase handlers (10 phases)."""
     from bmad_assist_lite.loop.handlers.code_review import CodeReviewHandler
     from bmad_assist_lite.loop.handlers.code_review_synthesis import (
         CodeReviewSynthesisHandler,
     )
+    from bmad_assist_lite.loop.handlers.create_story import CreateStoryHandler
+    from bmad_assist_lite.loop.handlers.dev_story import DevStoryHandler
+    from bmad_assist_lite.loop.handlers.epic_quality_gate import EpicQualityGateHandler
+    from bmad_assist_lite.loop.handlers.fix_quality_gate import FixQualityGateHandler
+    from bmad_assist_lite.loop.handlers.quality_gate import QualityGateHandler
     from bmad_assist_lite.loop.handlers.retrospective import RetrospectiveHandler
+    from bmad_assist_lite.loop.handlers.validate_story import ValidateStoryHandler
+    from bmad_assist_lite.loop.handlers.validate_story_synthesis import (
+        ValidateStorySynthesisHandler,
+    )
 
     registry.register_phase_handler("create_story", CreateStoryHandler)
     registry.register_phase_handler("validate_story", ValidateStoryHandler)
@@ -53,8 +56,11 @@ def _load_builtin_phase_handlers(registry: PluginRegistry) -> None:
     registry.register_phase_handler("dev_story", DevStoryHandler)
     registry.register_phase_handler("code_review", CodeReviewHandler)
     registry.register_phase_handler("code_review_synthesis", CodeReviewSynthesisHandler)
+    registry.register_phase_handler("quality_gate", QualityGateHandler)
+    registry.register_phase_handler("fix_quality_gate", FixQualityGateHandler)
+    registry.register_phase_handler("epic_quality_gate", EpicQualityGateHandler)
     registry.register_phase_handler("retrospective", RetrospectiveHandler)
-    logger.debug("Loaded built-in phase handlers (7 phases)")
+    logger.debug("Loaded built-in phase handlers (10 phases)")
 
 
 def _load_entry_point_plugins(registry: PluginRegistry) -> None:

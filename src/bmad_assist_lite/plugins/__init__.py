@@ -6,7 +6,7 @@ Three plugin protocols enable extensibility:
 - WorkflowPlugin: Add new workflow templates and compilers
 
 Discovery mechanisms (in order):
-1. Built-in defaults (Claude + Gemini, 7 phase handlers)
+1. Built-in defaults (Claude + Gemini, 10 phase handlers)
 2. Python entry points (bmad_assist_lite.plugins group)
 3. Local directory ({project}/.bmad-assist-lite/plugins/*.py)
 """
