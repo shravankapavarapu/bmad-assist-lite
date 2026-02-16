@@ -6,8 +6,8 @@ input_file_patterns:
   story_file:
     pattern: "**/{epic_num}-{story_num}*.md"
     strategy: FULL_LOAD
-  epics_file:
-    pattern: "**/epics*.md"
+  epic_file:
+    pattern: "**/epic-{epic_num}*.md"
     strategy: FULL_LOAD
   architecture_file:
     pattern: "**/architecture*.md"

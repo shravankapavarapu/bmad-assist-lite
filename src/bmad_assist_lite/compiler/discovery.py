@@ -45,6 +45,32 @@ def discover_files(context: CompilerContext) -> dict[str, list[Path]]:
     return discovered
 
 
+def _resolve_pattern_variables(pattern: str, context: CompilerContext) -> str:
+    """Resolve variable placeholders in a file discovery pattern."""
+    result = pattern
+
+    # Resolve path placeholders
+    if "{project-root}" in result:
+        result = result.replace("{project-root}", str(context.project_root))
+    if "{output_folder}" in result:
+        result = result.replace("{output_folder}", str(context.output_folder))
+
+    # Resolve variables from context.resolved_variables
+    for key, value in context.resolved_variables.items():
+        placeholder = "{" + key + "}"
+        if placeholder in result and isinstance(value, (str, int, float)):
+            result = result.replace(placeholder, str(value))
+
+    # Warn about unresolved placeholders
+    remaining = re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_-]*)\}", result)
+    if remaining:
+        logger.warning(
+            "Unresolved variables in pattern '%s': %s", pattern, remaining
+        )
+
+    return result
+
+
 def _discover_pattern(
     pattern_name: str,
     pattern_config: dict[str, Any],
@@ -53,7 +79,14 @@ def _discover_pattern(
     """Discover files for a single pattern configuration."""
     sharded_pattern = pattern_config.get("sharded")
     whole_pattern = pattern_config.get("whole")
-    strategy_str = pattern_config.get("load_strategy", "FULL_LOAD")
+    # Support 'pattern' key as fallback for 'whole'
+    if not whole_pattern:
+        whole_pattern = pattern_config.get("pattern")
+
+    # Support both 'load_strategy' and 'strategy' keys
+    strategy_str = pattern_config.get("load_strategy") or pattern_config.get(
+        "strategy", "FULL_LOAD"
+    )
 
     try:
         strategy = LoadStrategy(strategy_str)
@@ -63,12 +96,14 @@ def _discover_pattern(
     files: list[Path] = []
 
     if sharded_pattern:
-        sharded_files = _glob_files(sharded_pattern, pattern_name, context.project_root)
+        resolved_sharded = _resolve_pattern_variables(sharded_pattern, context)
+        sharded_files = _glob_files(resolved_sharded, pattern_name, context.project_root)
         if sharded_files:
             files = sharded_files
 
     if not files and whole_pattern:
-        files = _glob_files(whole_pattern, pattern_name, context.project_root)
+        resolved_whole = _resolve_pattern_variables(whole_pattern, context)
+        files = _glob_files(resolved_whole, pattern_name, context.project_root)
 
     files = _apply_load_strategy(files, strategy, pattern_name)
     return files

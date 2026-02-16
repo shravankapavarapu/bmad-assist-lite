@@ -24,7 +24,7 @@ class ValidateStoryCompiler:
         return Path(str(ref))
 
     def get_required_files(self) -> list[str]:
-        return ["**/epics*.md", "**/prd*.md"]
+        return ["**/epic-*.md", "**/prd*.md"]
 
     def get_variables(self) -> dict[str, Any]:
         return {}
