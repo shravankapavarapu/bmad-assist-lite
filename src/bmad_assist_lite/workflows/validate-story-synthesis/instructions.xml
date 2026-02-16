@@ -30,11 +30,15 @@
     </step>
 
     <step id="4" name="Generate Synthesis Report">
-      Create synthesis report with:
+      Create synthesis report and save it to {report_dir}/{story_key}-validation-synthesis.md
+
+      Report must include:
       - Agreed findings across validators
       - Unique findings from individual validators
       - Disputed findings with resolution
       - Quality metrics (actionable_ratio, specificity_score, evidence_quality)
+
+      IMPORTANT: Create the {report_dir} directory if it does not exist. Do NOT write reports to any other location.
     </step>
 
     <step id="5" name="Final Verification">

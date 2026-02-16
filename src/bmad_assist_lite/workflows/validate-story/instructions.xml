@@ -4,6 +4,7 @@
   <constraints>
     - Do NOT perform web searches or web fetches. All context is in the provided artifacts.
     - Do NOT run shell commands (git log, etc.). Work only from provided files.
+    - Do NOT create or write any files. Your analysis is captured via stdout only.
     - Be concise. Focus on actionable findings, not verbose analysis.
   </constraints>
 

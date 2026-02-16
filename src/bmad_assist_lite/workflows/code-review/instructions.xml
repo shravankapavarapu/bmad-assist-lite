@@ -4,6 +4,7 @@
   <constraints>
     - Do NOT perform web searches or web fetches. All context is in the provided files.
     - Do NOT run build, test, or lint commands. This phase runs multiple LLMs in parallel.
+    - Do NOT create new report files. Your analysis is captured via stdout only. You may update the story file per Step 5.
     - Runtime verification is deferred to code-review-synthesis (single-provider phase).
     - Be concise. Focus on specific, actionable findings with file:line references.
   </constraints>
