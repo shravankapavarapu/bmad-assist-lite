@@ -4,6 +4,7 @@ import importlib.resources
 from pathlib import Path
 from typing import Any
 
+from bmad_assist_lite.compiler.context_filter import apply_context_filter
 from bmad_assist_lite.compiler.discovery import discover_files, load_file_contents
 from bmad_assist_lite.compiler.output import generate_output
 from bmad_assist_lite.compiler.types import CompiledWorkflow, CompilerContext
@@ -49,6 +50,7 @@ class CreateStoryCompiler:
         # Discover and load files
         discover_files(context)
         load_file_contents(context)
+        apply_context_filter(context)
 
         # Build context from loaded files
         context_text = "\n\n".join(
