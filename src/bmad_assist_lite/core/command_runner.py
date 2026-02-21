@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from bmad_assist_lite.providers._windows import get_subprocess_kwargs
+from bmad_assist_lite.providers._windows import get_subprocess_kwargs, terminate_process
 
 logger = logging.getLogger(__name__)
 
@@ -29,37 +29,49 @@ class CommandResult:
 def run_command(command: str, cwd: Path, timeout: int = 120) -> CommandResult:
     """Run a shell command and capture its output.
 
+    Uses Popen instead of subprocess.run so we can kill the entire process
+    tree on timeout (Windows shell=True only kills cmd.exe, leaving children).
+
     Non-fatal: catches TimeoutExpired and FileNotFoundError,
     returning a CommandResult with non-zero exit code.
     """
     start = time.perf_counter()
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             command,
             shell=True,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=str(cwd),
-            timeout=timeout,
             **get_subprocess_kwargs(),
         )
+        try:
+            stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Kill entire process tree, not just the shell
+            terminate_process(proc.pid)
+            # Drain any remaining pipe data after kill
+            try:
+                stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
+            except (subprocess.TimeoutExpired, OSError):
+                proc.kill()
+                stdout_bytes, stderr_bytes = b"", b""
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            logger.warning("Command timed out after %ds: %s", timeout, command)
+            return CommandResult(
+                command=command,
+                exit_code=124,
+                stdout=stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else "",
+                stderr=f"Command timed out after {timeout}s",
+                duration_ms=duration_ms,
+            )
+
         duration_ms = int((time.perf_counter() - start) * 1000)
         return CommandResult(
             command=command,
-            exit_code=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            duration_ms=duration_ms,
-        )
-    except subprocess.TimeoutExpired:
-        duration_ms = int((time.perf_counter() - start) * 1000)
-        logger.warning("Command timed out after %ds: %s", timeout, command)
-        return CommandResult(
-            command=command,
-            exit_code=124,
-            stdout="",
-            stderr=f"Command timed out after {timeout}s",
+            exit_code=proc.returncode or 0,
+            stdout=stdout_bytes.decode("utf-8", errors="replace"),
+            stderr=stderr_bytes.decode("utf-8", errors="replace"),
             duration_ms=duration_ms,
         )
     except FileNotFoundError as e:
