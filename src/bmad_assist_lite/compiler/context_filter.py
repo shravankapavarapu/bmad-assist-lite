@@ -113,22 +113,22 @@ def parse_context_requirements(epic_content: str) -> list[ContextRequirement] | 
             logger.debug("Skipping short table row: %s", line)
             continue
 
-        document = cells[col_map["document"]]
-        sections_raw = cells[col_map["sections"]]
+        document = cells[col_map["document"]].strip("`").strip()
+        sections_raw = cells[col_map["sections"]].strip("`").strip()
 
         if not document:
             continue
 
-        sections_lower = sections_raw.strip().lower()
+        sections_lower = sections_raw.lower()
         if sections_lower == "(skip)":
             directive = "skip"
             sections: list[str] = []
-        elif sections_lower == "(full)" or not sections_raw.strip():
+        elif sections_lower == "(full)" or not sections_raw:
             directive = "full"
             sections = []
         else:
             directive = "sections"
-            sections = [s.strip() for s in sections_raw.split(";") if s.strip()]
+            sections = [s.strip().strip("`") for s in sections_raw.split(";") if s.strip()]
 
         reqs.append(
             ContextRequirement(document=document, sections=sections, directive=directive)
@@ -171,7 +171,7 @@ def _extract_section_from_content(content: str, section_name: str) -> str | None
     Uses the same normalization logic as ``discovery.extract_section()``.
     """
     lines = content.split("\n")
-    normalized_id = re.sub(r"[-._]", " ", section_name.lower())
+    normalized_id = re.sub(r"[-._]", " ", section_name.lower()).strip()
 
     start_idx: int | None = None
     start_level = 0
@@ -187,8 +187,10 @@ def _extract_section_from_content(content: str, section_name: str) -> str | None
         header_text = line.lstrip("#").strip().lower()
         normalized_header = re.sub(r"[-._]", " ", header_text)
 
+        # Try word-boundary match first, fall back to substring containment
+        # for headers with special chars like parentheses
         pattern = r"\b" + re.escape(normalized_id) + r"\b"
-        if re.search(pattern, normalized_header):
+        if re.search(pattern, normalized_header) or normalized_id in normalized_header:
             start_idx = i
             start_level = level
             break

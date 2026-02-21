@@ -109,6 +109,46 @@ Some intro text.
         assert result is not None
         assert result[0].directive == "full"
 
+    def test_backtick_wrapped_filenames_stripped(self):
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| `architecture.md` | Tech Stack | Core |
+| `prd.md` | (skip) | Not needed |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        assert result[0].document == "architecture.md"
+        assert result[1].document == "prd.md"
+
+    def test_backtick_wrapped_directives_stripped(self):
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| ux.md | `(skip)` | Not needed |
+| ctx.md | `(full)` | Always |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        assert result[0].directive == "skip"
+        assert result[1].directive == "full"
+
+    def test_backtick_wrapped_section_names_stripped(self):
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | `Tech Stack`; `Deployment` | Core |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        assert result[0].sections == ["Tech Stack", "Deployment"]
+
     def test_missing_required_columns_returns_none(self):
         epic = """\
 ### Context Requirements
@@ -219,6 +259,25 @@ More content.
     def test_case_insensitive_match(self):
         result = _extract_section_from_content(self.SAMPLE_MD, "tech stack")
         assert result is not None
+
+    def test_section_with_parentheses(self):
+        content = """\
+# Doc
+
+## Third-Party Integration (Cal.com)
+
+Cal.com integration details.
+
+## Other Section
+
+Other content.
+"""
+        result = _extract_section_from_content(
+            content, "Third-Party Integration (Cal.com)"
+        )
+        assert result is not None
+        assert "Cal.com integration details." in result
+        assert "Other content." not in result
 
     def test_empty_content(self):
         assert _extract_section_from_content("", "Anything") is None
@@ -443,3 +502,142 @@ Content C.
         assert "Content A." in result
         assert "Content B." in result
         assert "Content C." not in result
+
+    def test_real_epic_table_format(self, tmp_path: Path):
+        """Test with exact table format from a real epic file."""
+        epic = """\
+# Epic 2: Booking & Conversion
+
+### Context Requirements
+
+<!-- Sections from planning docs needed for story creation in this epic.
+     Uses exact H2/H3 header text from each document, semicolon-separated. -->
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture.md` | Starter Template Evaluation; Third-Party Integration (Cal.com); Analytics Integration |
+| `prd.md` | Executive Summary; Functional Requirements |
+| `ux-design-specification.md` | `(skip)` |
+| `project-context.md` | `(full)` |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        assert len(result) == 4
+
+        # architecture.md — sections directive, backticks stripped
+        assert result[0].document == "architecture.md"
+        assert result[0].directive == "sections"
+        assert result[0].sections == [
+            "Starter Template Evaluation",
+            "Third-Party Integration (Cal.com)",
+            "Analytics Integration",
+        ]
+
+        # prd.md — sections directive
+        assert result[1].document == "prd.md"
+        assert result[1].directive == "sections"
+        assert result[1].sections == ["Executive Summary", "Functional Requirements"]
+
+        # ux-design-specification.md — skip directive, backticks stripped
+        assert result[2].document == "ux-design-specification.md"
+        assert result[2].directive == "skip"
+
+        # project-context.md — full directive, backticks stripped
+        assert result[3].document == "project-context.md"
+        assert result[3].directive == "full"
+
+    def test_real_epic_end_to_end(self, tmp_path: Path):
+        """End-to-end test with real epic table and architecture content."""
+        epic = """\
+# Epic 2
+
+### Context Requirements
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture.md` | Third-Party Integration (Cal.com); Analytics Integration |
+| `prd.md` | Executive Summary |
+| `ux-design-specification.md` | `(skip)` |
+| `project-context.md` | `(full)` |
+"""
+        architecture = """\
+# Architecture
+
+## Starter Template Evaluation
+
+Starter stuff.
+
+## Third-Party Integration (Cal.com)
+
+Cal.com embed approach using vanilla JS.
+
+## Analytics Integration
+
+Google Analytics setup with consent.
+
+## Performance Optimization
+
+Core Web Vitals budget.
+
+## Other Section
+
+Unrelated content.
+"""
+        prd = """\
+# PRD
+
+## Executive Summary
+
+MVP landing page for AI agency.
+
+## Functional Requirements
+
+FR10: Multiple CTA placements.
+FR11: Embedded calendar widget.
+
+## Non-Functional Requirements
+
+NFR stuff not needed.
+"""
+        ux = "# UX Design\n\nFull UX document with lots of content.\n"
+        project_ctx = "# Project Context\n\nAlways needed.\n"
+
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {
+            "epic_file": [tmp_path / "epic-2.md"],
+            "architecture_file": [tmp_path / "architecture.md"],
+            "prd_file": [tmp_path / "prd.md"],
+            "ux_file": [tmp_path / "ux-design-specification.md"],
+            "project_context_file": [tmp_path / "project-context.md"],
+        }
+        ctx.file_contents = {
+            "epic_file": epic,
+            "architecture_file": architecture,
+            "prd_file": prd,
+            "ux_file": ux,
+            "project_context_file": project_ctx,
+        }
+
+        apply_context_filter(ctx)
+
+        # architecture — only requested sections
+        arch = ctx.file_contents["architecture_file"]
+        assert "Cal.com embed approach" in arch
+        assert "Google Analytics setup" in arch
+        assert "Starter stuff." not in arch
+        assert "Core Web Vitals budget." not in arch
+        assert "Unrelated content." not in arch
+
+        # prd — only Executive Summary
+        prd_result = ctx.file_contents["prd_file"]
+        assert "MVP landing page" in prd_result
+        assert "NFR stuff not needed." not in prd_result
+
+        # ux — skipped
+        assert ctx.file_contents["ux_file"] == ""
+
+        # project-context — full
+        assert ctx.file_contents["project_context_file"] == project_ctx
+
+        # epic itself — unchanged
+        assert ctx.file_contents["epic_file"] == epic
