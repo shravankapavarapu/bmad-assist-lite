@@ -4,7 +4,7 @@ template: template.md
 
 input_file_patterns:
   epic_file:
-    pattern: "{planning_artifacts}/*epic*.md"
+    pattern: "{planning_artifacts}/*epic*{epic_num}*.md"
     strategy: SELECTIVE_LOAD
   prd_file:
     pattern: "{planning_artifacts}/*prd*.md"
