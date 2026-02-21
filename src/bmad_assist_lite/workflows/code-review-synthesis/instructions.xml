@@ -46,7 +46,15 @@
       Record all verification results for the synthesis report.
     </step>
 
-    <step id="7" name="Generate Synthesis Report">
+    <step id="7" name="Update Story File">
+      Update the story file (provided in context as story_file) based on the synthesis verdict:
+      - APPROVED/EXEMPLARY with no unfixed CRITICAL issues: Set status to "done"
+      - MAJOR REWORK or REJECT or CRITICAL issues remain: Set status to "in-progress"
+
+      Append review summary under "## Senior Developer Review (AI)" in the story file.
+    </step>
+
+    <step id="8" name="Generate Synthesis Report">
       Create report and save it to {report_dir}/{story_key}-code-review-synthesis.md
 
       Report must include:

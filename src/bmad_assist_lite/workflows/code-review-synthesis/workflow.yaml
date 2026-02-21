@@ -1,6 +1,11 @@
 name: code-review-synthesis
 instructions: instructions.xml
 
+input_file_patterns:
+  story_file:
+    pattern: "**/{epic_num}-{story_num}*.md"
+    strategy: FULL_LOAD
+
 variables:
   mission: "Synthesize code review findings for Epic {epic_num} Story {story_num}"
   report_dir: "{output_folder}/implementation-artifacts/code-reviews"

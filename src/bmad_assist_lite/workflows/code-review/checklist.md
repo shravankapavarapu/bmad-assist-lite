@@ -133,6 +133,4 @@ Issues that MUST prevent approval:
 ## Review Finalization
 - [ ] Minimum 3 issues found (adversarial requirement)
 - [ ] Suggested fixes provided for critical issues
-- [ ] Review notes appended to story
-- [ ] Status updated according to verdict
-- [ ] Story saved successfully
+- [ ] Evidence Score calculated and verdict determined

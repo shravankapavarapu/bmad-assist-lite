@@ -116,10 +116,19 @@ class CodeReviewHandler(BaseHandler):
                 loop = asyncio.get_event_loop()
                 timeout = get_phase_timeout(self.config, self.phase_name)
 
+                # Read-only tools: multi-LLM safety constraint
+                read_only_tools = ["Read", "Glob", "Grep", "Bash"]
+
                 def _make_invoker(
                     p: Any, m: str, t: int
                 ) -> Any:
-                    return lambda: p.invoke(prompt, model=m, timeout=t, cwd=self.project_path)
+                    return lambda: p.invoke(
+                        prompt,
+                        model=m,
+                        timeout=t,
+                        cwd=self.project_path,
+                        allowed_tools=read_only_tools,
+                    )
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(multi_configs)
