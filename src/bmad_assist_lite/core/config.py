@@ -152,6 +152,7 @@ class QualityGateConfig(BaseModel):
     typecheck: str | None = None
     build: str | None = None
     test: str | None = None
+    test_unit: str | None = None
     command_timeout: int = Field(default=120, description="Timeout per command in seconds")
 
 

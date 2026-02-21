@@ -154,3 +154,48 @@ class TestQualityGateHandler:
         assert result.outputs["quality_gate_action"] == "pass"
         content = story_file.read_text(encoding="utf-8")
         assert "**PASS**" in content
+
+    def test_config_test_unit_preferred_over_test(self, tmp_path):
+        """Config test_unit is used instead of test for quality gate."""
+        config = _make_config(test="echo full-suite", test_unit="echo unit-only")
+        init_paths(tmp_path)
+        handler = QualityGateHandler(config, tmp_path)
+        state = _make_state()
+
+        commands = handler._get_commands(state)
+        test_entries = [e for e in commands if e.name == "Tests"]
+        assert len(test_entries) == 1
+        assert test_entries[0].command == "echo unit-only"
+
+    def test_config_test_fallback_when_no_test_unit(self, tmp_path):
+        """Config test is used when test_unit is not set."""
+        config = _make_config(test="echo full-suite")
+        init_paths(tmp_path)
+        handler = QualityGateHandler(config, tmp_path)
+        state = _make_state()
+
+        commands = handler._get_commands(state)
+        test_entries = [e for e in commands if e.name == "Tests"]
+        assert len(test_entries) == 1
+        assert test_entries[0].command == "echo full-suite"
+
+    def test_autodetect_test_unit_preferred(self, tmp_path):
+        """Auto-detected test_unit is used instead of test."""
+        config = _make_config()
+        init_paths(tmp_path)
+        handler = QualityGateHandler(config, tmp_path)
+        state = _make_state()
+
+        with patch(
+            "bmad_assist_lite.loop.handlers.quality_gate.detect_toolchain",
+        ) as mock_detect:
+            from bmad_assist_lite.core.toolchain import ToolchainCommands
+
+            mock_detect.return_value = ToolchainCommands(
+                test="pnpm run test", test_unit="pnpm run test:unit"
+            )
+            commands = handler._get_commands(state)
+
+        test_entries = [e for e in commands if e.name == "Tests"]
+        assert len(test_entries) == 1
+        assert test_entries[0].command == "pnpm run test:unit"

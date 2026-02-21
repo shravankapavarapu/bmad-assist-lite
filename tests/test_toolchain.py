@@ -89,6 +89,25 @@ class TestDetectToolchain:
         result = detect_toolchain(tmp_path)
         assert result.test == "npm run test"
 
+    def test_detect_test_unit_script(self, tmp_path):
+        """test:unit script in package.json sets test_unit field."""
+        (tmp_path / "pnpm-lock.yaml").write_text("")
+        (tmp_path / "package.json").write_text(
+            json.dumps({"scripts": {"test": "vitest", "test:unit": "vitest --project unit"}})
+        )
+        result = detect_toolchain(tmp_path)
+        assert result.test == "pnpm run test"
+        assert result.test_unit == "pnpm run test:unit"
+
+    def test_no_test_unit_script(self, tmp_path):
+        """Without test:unit script, test_unit stays None."""
+        (tmp_path / "package.json").write_text(
+            json.dumps({"scripts": {"test": "vitest"}})
+        )
+        result = detect_toolchain(tmp_path)
+        assert result.test == "npm run test"
+        assert result.test_unit is None
+
     def test_no_scripts_key(self, tmp_path):
         """package.json without scripts key falls through."""
         (tmp_path / "package.json").write_text(json.dumps({"name": "foo"}))

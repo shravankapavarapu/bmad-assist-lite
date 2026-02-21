@@ -69,8 +69,9 @@ class QualityGateHandler:
                 )
             if qg.build:
                 entries.append(QualityGateEntry(name="Build", command=qg.build, status="PENDING"))
-            if qg.test:
-                entries.append(QualityGateEntry(name="Tests", command=qg.test, status="PENDING"))
+            test_cmd = qg.test_unit or qg.test
+            if test_cmd:
+                entries.append(QualityGateEntry(name="Tests", command=test_cmd, status="PENDING"))
             if entries:
                 return entries
 
@@ -85,8 +86,9 @@ class QualityGateHandler:
             )
         if tc.build:
             entries.append(QualityGateEntry(name="Build", command=tc.build, status="PENDING"))
-        if tc.test:
-            entries.append(QualityGateEntry(name="Tests", command=tc.test, status="PENDING"))
+        test_cmd = tc.test_unit or tc.test
+        if test_cmd:
+            entries.append(QualityGateEntry(name="Tests", command=test_cmd, status="PENDING"))
         return entries
 
     def _get_command_timeout(self) -> int:

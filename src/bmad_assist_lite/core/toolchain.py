@@ -16,6 +16,7 @@ class ToolchainCommands:
     typecheck: str | None = None
     build: str | None = None
     test: str | None = None
+    test_unit: str | None = None
 
 
 def _detect_package_manager(project_root: Path) -> str:
@@ -50,9 +51,12 @@ def _detect_node(project_root: Path) -> ToolchainCommands | None:
     typecheck = f"{run_prefix} typecheck" if "typecheck" in scripts else None
     build = f"{run_prefix} build" if "build" in scripts else None
     test = f"{run_prefix} test" if "test" in scripts else None
+    test_unit = f"{run_prefix} test:unit" if "test:unit" in scripts else None
 
     if any([lint, typecheck, build, test]):
-        return ToolchainCommands(lint=lint, typecheck=typecheck, build=build, test=test)
+        return ToolchainCommands(
+            lint=lint, typecheck=typecheck, build=build, test=test, test_unit=test_unit
+        )
     return None
 
 
