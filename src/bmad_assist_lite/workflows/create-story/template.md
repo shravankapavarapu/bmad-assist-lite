@@ -34,7 +34,12 @@ so that [benefit].
 
 ## Quality Gates
 
-<!-- Populated during dev-story phase -->
+| Gate | Command | Status |
+|------|---------|--------|
+| Lint | `{lint_command}` | **PENDING** |
+| Typecheck | `{typecheck_command}` | **PENDING** |
+| Build | `{build_command}` | **PENDING** |
+| Tests | `{test_command}` | **PENDING** |
 
 ## Dev Agent Record
 

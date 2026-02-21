@@ -74,8 +74,13 @@ def update_task_checkboxes(story_path: Path) -> None:
     changed = False
 
     # Patterns for quality gate task checkboxes
-    task_re = re.compile(r"^(\s*-\s)\[ \](\s+Task \d+.*(?:quality gate|Quality Gate).*)")
-    subtask_re = re.compile(r"^(\s*-\s)\[ \](\s+\d+\.\d+\s+Run\s+.*)")
+    task_re = re.compile(
+        r"^(\s*-\s)\[ \](\s+Task \d+.*(?:quality.?gate|Quality.?Gate|lint|typecheck|build|test).*)"
+    )
+    subtask_re = re.compile(
+        r"^(\s*-\s)\[ \](\s+\d+\.\d+[:\s].*(?:lint|typecheck|type.check|build|test).*)",
+        re.IGNORECASE,
+    )
 
     new_lines: list[str] = []
     for line in lines:

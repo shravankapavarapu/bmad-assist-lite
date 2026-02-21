@@ -126,6 +126,28 @@ class TestUpdateTaskCheckboxes:
         # Non-quality-gate task unchanged
         assert "- [ ] Task 1: Implement feature" in content
 
+    def test_marks_varied_subtask_formats(self, tmp_path):
+        """Marks subtasks with command-style formats (colon, backticks)."""
+        story_file = tmp_path / "story.md"
+        story_file.write_text(
+            "## Tasks\n"
+            "- [ ] Task 3: Run quality gates (AC: #9)\n"
+            "  - [ ] 3.1: `pnpm lint` — 0 errors\n"
+            "  - [ ] 3.2: `pnpm typecheck` — 0 errors\n"
+            "  - [ ] 3.3: `pnpm test:unit` — all pass\n"
+            "- [ ] Task 1: Implement feature\n",
+            encoding="utf-8",
+        )
+
+        update_task_checkboxes(story_file)
+
+        content = story_file.read_text(encoding="utf-8")
+        assert "- [x] Task 3: Run quality gates" in content
+        assert "- [x] 3.1: `pnpm lint`" in content
+        assert "- [x] 3.2: `pnpm typecheck`" in content
+        assert "- [x] 3.3: `pnpm test:unit`" in content
+        assert "- [ ] Task 1: Implement feature" in content
+
     def test_no_checkboxes_to_update(self, tmp_path):
         """No changes when no quality gate checkboxes exist."""
         story_file = tmp_path / "story.md"

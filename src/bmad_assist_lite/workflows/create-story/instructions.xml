@@ -29,6 +29,10 @@
       - Tasks and subtasks mapped to acceptance criteria
       - Dev notes: architecture patterns, constraints, file structure, dependencies
       - Testing approach (what to test, not the detailed checklist — that comes later)
+      - Quality Gates table: determine lint/typecheck/build/test commands from the
+        architecture doc or project context (e.g., package.json → pnpm, pyproject.toml → ruff/pytest).
+        Use the exact table format from the template with **PENDING** status.
+        Do NOT add a separate "Run quality gates" task — the quality gate phase runs automatically.
     </step>
 
     <step id="4" name="Update Sprint Status">
