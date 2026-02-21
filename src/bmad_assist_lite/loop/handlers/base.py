@@ -55,12 +55,14 @@ class BaseHandler(ABC):
         """Render prompt using compiler."""
         workflow_name = self.phase_name.replace("_", "-")
 
+        paths = get_paths()
+
         resolved_variables: dict[str, str | int | None] = {
             "epic_num": state.current_epic,
             "story_num": self._extract_story_num(state.current_story),
+            "planning_artifacts": str(paths.planning_artifacts),
+            "implementation_artifacts": str(paths.implementation_artifacts),
         }
-
-        paths = get_paths()
 
         context = CompilerContext(
             project_root=self.project_path,

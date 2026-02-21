@@ -42,13 +42,15 @@ class CreateStoryHandler(BaseHandler):
 
         workflow_name = self.phase_name.replace("_", "-")
 
+        # Add story_key from cache
+        paths = get_paths()
+
         resolved_variables: dict[str, Any] = {
             "epic_num": state.current_epic,
             "story_num": self._extract_story_num(state.current_story),
+            "planning_artifacts": str(paths.planning_artifacts),
+            "implementation_artifacts": str(paths.implementation_artifacts),
         }
-
-        # Add story_key from cache
-        paths = get_paths()
         cache = load_story_queue_cache(paths.cache_dir)
         if cache and state.current_story:
             key_map = cache.get("story_key_map", {})

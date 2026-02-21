@@ -415,6 +415,8 @@ def compile(
         resolved_variables={
             "epic_num": epic_num,
             "story_num": story_num,
+            "planning_artifacts": str(paths.planning_artifacts),
+            "implementation_artifacts": str(paths.implementation_artifacts),
         },
     )
 
