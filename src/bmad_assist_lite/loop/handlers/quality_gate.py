@@ -110,7 +110,7 @@ class QualityGateHandler:
             lines.append(f"\n## Failed: {entry.name}\n")
             lines.append(f"**Command:** `{result.command}`\n")
             lines.append(f"**Exit Code:** {result.exit_code}\n")
-            output = (result.stdout + "\n" + result.stderr).strip()
+            output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
             lines.append(f"**Output:**\n```\n{output}\n```\n")
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
