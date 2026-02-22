@@ -4,23 +4,42 @@
   <context>
     Quality gate checks have failed. A failure report is attached below with
     the exact commands that failed, their exit codes, and full output.
+    The story file is included in context — use it to understand what was
+    implemented, which files were changed, and what the acceptance criteria are.
     Your job is to apply minimal, targeted fixes so the quality gates pass.
   </context>
 
   <steps>
-    <step number="1" name="Analyze Failure Report">
-      Read the qa-failure-report section below carefully. For each failure:
-      - Identify the specific errors and their file locations
-      - Determine the root cause (lint issue, type error, test failure, build error)
-      - Note whether failures are related or independent
+    <step number="1" name="Understand Context">
+      Read the story file to understand:
+      - What tasks were implemented and which files were changed
+      - The acceptance criteria and testing requirements
+      - The Quality Gates table showing which checks are expected
+
+      Then read the qa-failure-report section below to understand exactly
+      what failed and why.
     </step>
 
-    <step number="2" name="Apply Minimal Fixes">
-      Fix ONLY what is broken. For each failure:
-      - Lint errors: fix the specific lint violations reported
-      - Type errors: add or correct type annotations as needed
-      - Test failures: fix the failing tests or the code they test
-      - Build errors: resolve compilation/build issues
+    <step number="2" name="Analyze Failures">
+      For each failure in the report:
+      - Read the failing files to understand the actual code
+      - Identify the root cause (not just the symptom)
+      - Check whether failures are related (cascading errors)
+
+      PRIORITY ORDER — fix in this order since earlier fixes often resolve later ones:
+      1. Build errors (missing imports, syntax errors)
+      2. Type errors (wrong types, missing annotations)
+      3. Lint errors (style violations, unused imports)
+      4. Test failures (broken assertions, missing mocks)
+    </step>
+
+    <step number="3" name="Apply Targeted Fixes">
+      Fix ONLY what is broken. For each failure type:
+      - **Type errors**: Add or correct type annotations, fix import paths
+      - **Lint errors**: Fix the specific violations reported (unused imports, formatting)
+      - **Test failures**: Fix the failing tests or the code they test — check if the test
+        expectations match the actual implementation
+      - **Build errors**: Resolve missing dependencies, syntax issues
 
       CRITICAL CONSTRAINTS:
       - Do NOT refactor unrelated code
@@ -29,10 +48,19 @@
       - Keep changes as small and focused as possible
     </step>
 
-    <step number="3" name="Summary">
+    <step number="4" name="Verify Fixes">
+      Run the failing commands to confirm they now pass:
+      - Re-run each command that was listed in the failure report
+      - If a command still fails, read the new error output and fix it
+      - If fixing one issue reveals new issues, fix those too
+      - Continue until all quality gate commands pass
+    </step>
+
+    <step number="5" name="Summary">
       Provide a brief summary of changes made:
-      - Which quality gates were failing and why
-      - What fixes were applied
+      - Which quality gates were failing and the root cause of each
+      - What fixes were applied (file:line references)
+      - Confirmation that verify step passed
       - Note: quality gates will re-run automatically after this step
     </step>
   </steps>

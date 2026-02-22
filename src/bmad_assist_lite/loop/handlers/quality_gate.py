@@ -156,13 +156,14 @@ class QualityGateHandler:
         # Write failure report
         self._write_failure_report(state, failures)
 
-        if state.qa_retry_count == 0:
-            # First failure — try LLM fix
+        max_retries = self.config.quality_gate.max_retries if self.config.quality_gate else 2
+        if state.qa_retry_count < max_retries:
+            # Still have retries left — try LLM fix
             return PhaseResult(
                 success=True,
                 next_phase=Phase.FIX_QUALITY_GATE,
                 outputs={"quality_gate_action": "fix"},
             )
 
-        # Retry already attempted — skip story
+        # All retries exhausted — skip story
         return PhaseResult.ok({"quality_gate_action": "skip_story"})

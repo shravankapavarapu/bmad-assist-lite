@@ -154,6 +154,7 @@ class QualityGateConfig(BaseModel):
     test: str | None = None
     test_unit: str | None = None
     command_timeout: int = Field(default=120, description="Timeout per command in seconds")
+    max_retries: int = Field(default=2, description="Max LLM fix attempts before skipping story")
 
 
 class AutoCommitConfig(BaseModel):

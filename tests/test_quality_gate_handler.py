@@ -78,9 +78,43 @@ class TestQualityGateHandler:
         assert result.next_phase == Phase.FIX_QUALITY_GATE
         assert result.outputs["quality_gate_action"] == "fix"
 
-    def test_gate_fails_on_retry(self, tmp_path):
-        """Gate failure on retry returns action='skip_story'."""
+    def test_gate_fails_on_second_try_still_retries(self, tmp_path):
+        """Gate failure on second try (retry=1) still routes to fix with default max_retries=2."""
         config = _make_config(test="echo fail")
+        init_paths(tmp_path)
+        handler = QualityGateHandler(config, tmp_path)
+        state = _make_state(retry=1)
+
+        with patch(
+            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            return_value=_fail_result(),
+        ):
+            result = handler.execute(state)
+
+        assert result.success is True
+        assert result.next_phase == Phase.FIX_QUALITY_GATE
+        assert result.outputs["quality_gate_action"] == "fix"
+
+    def test_gate_fails_after_max_retries(self, tmp_path):
+        """Gate failure after max retries exhausted returns action='skip_story'."""
+        config = _make_config(test="echo fail")
+        init_paths(tmp_path)
+        handler = QualityGateHandler(config, tmp_path)
+        state = _make_state(retry=2)
+
+        with patch(
+            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            return_value=_fail_result(),
+        ):
+            result = handler.execute(state)
+
+        assert result.success is True
+        assert result.outputs["quality_gate_action"] == "skip_story"
+        assert result.next_phase is None
+
+    def test_custom_max_retries(self, tmp_path):
+        """Custom max_retries=1 skips after first retry."""
+        config = _make_config(test="echo fail", max_retries=1)
         init_paths(tmp_path)
         handler = QualityGateHandler(config, tmp_path)
         state = _make_state(retry=1)

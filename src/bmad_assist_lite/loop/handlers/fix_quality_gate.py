@@ -45,8 +45,20 @@ class FixQualityGateHandler(BaseHandler):
 
             # Render prompt and append failure report
             prompt = self.render_prompt(state)
+            retry_note = ""
+            if state.qa_retry_count > 1:
+                retry_note = (
+                    "\n\n<retry-context>\n"
+                    f"This is fix attempt #{state.qa_retry_count}. "
+                    "A previous fix attempt did not fully resolve the quality gate failures. "
+                    "The failure report below shows the CURRENT errors after the previous fix. "
+                    "Do not repeat the same approach — analyze what the previous attempt likely "
+                    "tried and choose a different strategy. Read the failing files carefully "
+                    "before making changes.\n"
+                    "</retry-context>"
+                )
             full_prompt = (
-                f"{prompt}\n\n"
+                f"{prompt}{retry_note}\n\n"
                 f"<qa-failure-report>\n{failure_report}\n</qa-failure-report>"
             )
 

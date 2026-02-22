@@ -1,6 +1,11 @@
 name: fix-quality-gate
 description: Fix quality gate failures
 
+input_file_patterns:
+  story_file:
+    pattern: "**/{epic_num}-{story_num}*.md"
+    strategy: FULL_LOAD
+
 variables:
   - epic_num
   - story_num
