@@ -6,11 +6,15 @@ Evidence Score context injected into the prompt.
 
 import json
 import logging
+import subprocess
+import time
+from pathlib import Path
 from typing import Any
 
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
+from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +81,34 @@ class CodeReviewSynthesisHandler(BaseHandler):
                 f"<!-- END PRE-CALCULATED EVIDENCE SCORE -->\n"
             )
 
+    def _capture_git_diff_stat(self) -> str | None:
+        """Capture git diff --stat to show what files changed."""
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--stat"],
+                cwd=self.project_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+        except Exception:
+            return None
+
+    def _capture_git_diff(self) -> str | None:
+        """Capture full git diff for saving to cache."""
+        try:
+            result = subprocess.run(
+                ["git", "diff"],
+                cwd=self.project_path,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            return result.stdout if result.returncode == 0 else None
+        except Exception:
+            return None
+
     def execute(self, state: State) -> PhaseResult:
         """Execute synthesis with cached reviews and Evidence Score context."""
         try:
@@ -94,6 +126,9 @@ class CodeReviewSynthesisHandler(BaseHandler):
             elif isinstance(reviews, dict):
                 reviews = reviews.get("reviews", [])
 
+            # Capture git state before synthesis for diff
+            diff_stat_before = self._capture_git_diff_stat()
+
             prompt = self.render_prompt(state)
 
             # Format Evidence Score context for injection
@@ -110,6 +145,35 @@ class CodeReviewSynthesisHandler(BaseHandler):
                 f"<code-review-reports>\n{review_text}\n</code-review-reports>"
             )
 
+            # Log prompt composition breakdown
+            prompt_tokens = len(full_prompt) // 4
+            base_tokens = len(prompt) // 4
+            evidence_tokens = len(evidence_context) // 4
+            review_tokens = len(review_text) // 4
+            logger.info(
+                "code_review_synthesis prompt: total=~%d tokens "
+                "(base=%d + evidence=%d + reviews=%d)",
+                prompt_tokens,
+                base_tokens,
+                evidence_tokens,
+                review_tokens,
+            )
+            write_progress(
+                f"  Prompt breakdown: base=~{base_tokens} + evidence=~{evidence_tokens}"
+                f" + reviews=~{review_tokens} = ~{prompt_tokens} tokens"
+            )
+
+            # Log per-reviewer response sizes
+            for r in reviews:
+                rid = r.get("reviewer", "Unknown")
+                resp = r.get("response", "")
+                logger.info(
+                    "  %s response: %d chars (~%d tokens)",
+                    rid,
+                    len(resp),
+                    len(resp) // 4,
+                )
+
             result = self.invoke_provider(full_prompt)
 
             if result.exit_code != 0:
@@ -117,11 +181,49 @@ class CodeReviewSynthesisHandler(BaseHandler):
                     result.stderr or f"Provider exited with code {result.exit_code}"
                 )
 
+            # Log LLM response size
+            logger.info(
+                "code_review_synthesis LLM output: %d chars (~%d tokens)",
+                len(result.stdout),
+                len(result.stdout) // 4,
+            )
+
+            # Capture git diff after synthesis to show code changes made
+            cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            story_id = state.current_story or "unknown"
+
+            diff_stat_after = self._capture_git_diff_stat()
+            full_diff = self._capture_git_diff()
+
+            if diff_stat_after:
+                write_progress(f"  Code changes by synthesis:\n{diff_stat_after}")
+                logger.info(
+                    "code_review_synthesis git diff stat for %s:\n%s",
+                    story_id,
+                    diff_stat_after,
+                )
+            else:
+                write_progress("  Code changes: NO CODE CHANGES made by synthesis")
+                logger.info("code_review_synthesis: no code changes for %s", story_id)
+
+            # Save full diff to cache for review
+            if full_diff:
+                diff_file = cache_dir / f"synthesis-diff-review-{story_id}.patch"
+                diff_file.write_text(full_diff, encoding="utf-8")
+                logger.debug("Wrote code review synthesis diff to %s", diff_file)
+
+            # Save LLM response to cache for review
+            response_file = cache_dir / f"synthesis-response-review-{story_id}.md"
+            response_file.write_text(result.stdout, encoding="utf-8")
+
             outputs: dict[str, Any] = {
                 "response": result.stdout,
                 "model": result.model,
                 "duration_ms": result.duration_ms,
                 "reviews_synthesized": len(reviews),
+                "prompt_tokens_estimate": prompt_tokens,
+                "code_changes": diff_stat_after or "(none)",
             }
             if evidence_data:
                 outputs["evidence_score"] = evidence_data.get("total_score")
