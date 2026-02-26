@@ -428,7 +428,7 @@ Docker stuff.
         ctx.file_contents = {"epic_file": epic}
         ctx.discovered_files = {}
 
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("DEBUG"):
             apply_context_filter(ctx)
 
         assert "nonexistent.md" in caplog.text

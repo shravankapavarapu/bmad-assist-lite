@@ -43,3 +43,46 @@ def cleanup_for_phase(phase: Phase, project_path: Path) -> list[str]:
         logger.warning("Resuming from DEV_STORY phase — check for uncommitted git changes")
 
     return cleaned
+
+
+# Files/directories that persist across stories (do NOT delete)
+_KEEP_FILENAMES = {"story-queue.yaml", "epic-libs.yaml"}
+_KEEP_DIRS = {"lib-docs"}
+
+
+def clear_story_cache(project_path: Path) -> int:
+    """Wipe story-scoped cache files when transitioning to a new story.
+
+    Removes all files in ``.bmad-assist-lite/cache/`` except long-lived
+    artifacts: ``story-queue.yaml``, ``epic-libs.yaml``, and the
+    ``lib-docs/`` directory.
+
+    Returns the number of files deleted.
+    """
+    cache_dir = project_path / BMAD_DIR_NAME / CACHE_DIR_NAME
+    if not cache_dir.exists():
+        return 0
+
+    deleted = 0
+    for item in cache_dir.iterdir():
+        if item.name in _KEEP_FILENAMES:
+            continue
+        if item.is_dir():
+            if item.name in _KEEP_DIRS:
+                continue
+            # Remove unexpected subdirectories entirely
+            import shutil
+
+            shutil.rmtree(item, ignore_errors=True)
+            deleted += 1
+            logger.info("Cleared cache directory: %s", item.name)
+        else:
+            try:
+                item.unlink()
+                deleted += 1
+            except OSError as e:
+                logger.warning("Failed to delete cache file %s: %s", item.name, e)
+
+    if deleted:
+        logger.info("Cleared %d story-scoped cache files", deleted)
+    return deleted

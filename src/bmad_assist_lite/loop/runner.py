@@ -12,7 +12,7 @@ from bmad_assist_lite.core.state import (
     save_state,
 )
 from bmad_assist_lite.core.sprint_sync import trigger_sync
-from bmad_assist_lite.loop.cleanup import cleanup_for_phase
+from bmad_assist_lite.loop.cleanup import cleanup_for_phase, clear_story_cache
 from bmad_assist_lite.loop.dispatch import execute_phase, init_handlers
 from bmad_assist_lite.loop.locking import running_lock
 from bmad_assist_lite.loop.signals import (
@@ -200,16 +200,19 @@ def run_loop(
                         )
                         next_state = skip_to_next_story(state, story_phases, stories)
                         if next_state is not None:
+                            clear_story_cache(project_path)
                             state = next_state
                             continue
                         # No more stories — start epic teardown
                         if epic_teardown:
+                            clear_story_cache(project_path)
                             state = state.with_phase(Phase(epic_teardown[0]))
                         else:
                             ep = advance_epic(state, epics, stories_for_epic, story_phases)
                             if ep is None:
                                 logger.info("All epics completed!")
                                 return LoopExitReason.COMPLETED
+                            clear_story_cache(project_path)
                             state = ep
                         continue
 
@@ -235,6 +238,7 @@ def run_loop(
                     if next_state is None:
                         logger.info("All epics completed!")
                         return LoopExitReason.COMPLETED
+                    clear_story_cache(project_path)
                     state = next_state
                     continue
 
@@ -248,6 +252,7 @@ def run_loop(
                     and new_state.current_story == state.current_story
                 ):
                     # Story loop completed - start epic teardown
+                    clear_story_cache(project_path)
                     if epic_teardown:
                         state = state.with_phase(Phase(epic_teardown[0]))
                     else:
@@ -258,6 +263,9 @@ def run_loop(
                             return LoopExitReason.COMPLETED
                         state = next_state
                 else:
+                    # Advancing to next story within same epic
+                    if new_state.current_story != state.current_story:
+                        clear_story_cache(project_path)
                     state = new_state
 
             logger.info("Loop completed")
