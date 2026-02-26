@@ -40,6 +40,43 @@ def _setup_logging(verbosity: int) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Tag the console handler so _add_file_log_handler can preserve its level
+    for h in logging.getLogger().handlers:
+        if isinstance(h, logging.StreamHandler):
+            h.setLevel(level)
+
+
+def _add_file_log_handler(logs_dir: Path) -> logging.FileHandler | None:
+    """Attach a FileHandler to the root logger that captures all messages.
+
+    Writes to ``logs_dir/run-{local_timestamp}.log``.  Always logs at
+    DEBUG level regardless of console verbosity so the file captures
+    everything.
+
+    Returns the handler (for teardown) or None on failure.
+    """
+    from datetime import datetime
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = logs_dir / f"run-{ts}.log"
+
+    try:
+        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        logging.getLogger().addHandler(fh)
+        # Also ensure root logger level allows DEBUG through
+        root = logging.getLogger()
+        if root.level > logging.DEBUG:
+            root.setLevel(logging.DEBUG)
+        logging.getLogger("bmad_assist_lite").info("Run log: %s", log_path)
+        return fh
+    except OSError:
+        return None
 
 
 def version_callback(value: bool) -> None:
@@ -138,6 +175,7 @@ def run(
     from bmad_assist_lite.core.paths import init_paths
 
     paths = init_paths(project)
+    file_handler = _add_file_log_handler(paths.logs_dir)
 
     # --- Sprint-status-driven story discovery ---
     from bmad_assist_lite.core.sprint_status import load_sprint_status
@@ -285,6 +323,12 @@ def run(
         stories_for_epic=stories_for_epic,
         resume_state=resume_state,
     )
+
+    # Close file log handler
+    if file_handler is not None:
+        file_handler.flush()
+        file_handler.close()
+        logging.getLogger().removeHandler(file_handler)
 
     if exit_reason == LoopExitReason.COMPLETED:
         typer.echo("\nAll epics completed successfully!")
