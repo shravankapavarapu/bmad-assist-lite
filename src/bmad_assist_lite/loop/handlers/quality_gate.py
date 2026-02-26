@@ -7,7 +7,7 @@ Quality Gates table with PASS/FAIL status.
 import logging
 from pathlib import Path
 
-from bmad_assist_lite.core.command_runner import CommandResult, run_command
+from bmad_assist_lite.core.command_runner import CommandResult, clean_test_output, run_command
 from bmad_assist_lite.core.config import Config
 from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.quality_gates import (
@@ -113,7 +113,8 @@ class QualityGateHandler:
             lines.append(f"\n## Failed: {entry.name}\n")
             lines.append(f"**Command:** `{result.command}`\n")
             lines.append(f"**Exit Code:** {result.exit_code}\n")
-            output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+            raw_output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+            output = clean_test_output(raw_output)
             lines.append(f"**Output:**\n```\n{output}\n```\n")
 
         report_path.write_text("\n".join(lines), encoding="utf-8")

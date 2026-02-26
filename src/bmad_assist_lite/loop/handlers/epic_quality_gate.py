@@ -7,7 +7,7 @@ failed QA during the sprint, reports them and exits.
 import logging
 from pathlib import Path
 
-from bmad_assist_lite.core.command_runner import CommandResult, run_command
+from bmad_assist_lite.core.command_runner import CommandResult, clean_test_output, run_command
 from bmad_assist_lite.core.config import Config
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.core.toolchain import ToolchainCommands, detect_toolchain
@@ -62,7 +62,8 @@ class EpicQualityGateHandler:
             lines.append(f"**Command:** `{result.command}`\n")
             lines.append(f"**Exit Code:** {result.exit_code}\n")
             if not result.success:
-                output = (result.stdout + "\n" + result.stderr).strip()
+                raw_output = (result.stdout + "\n" + result.stderr).strip()
+                output = clean_test_output(raw_output)
                 lines.append(f"**Output:**\n```\n{output}\n```\n")
 
         if state.failed_qa_stories:

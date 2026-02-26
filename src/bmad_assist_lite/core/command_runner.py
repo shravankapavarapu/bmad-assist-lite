@@ -1,6 +1,7 @@
 """Run shell commands and capture output for quality gate checks."""
 
 import logging
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -24,6 +25,32 @@ class CommandResult:
     @property
     def success(self) -> bool:
         return self.exit_code == 0
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return _ANSI_RE.sub("", text)
+
+
+def clean_test_output(text: str) -> str:
+    """Strip ANSI codes and passing test lines from test runner output.
+
+    Keeps: failing test/file lines, FAIL assertion blocks, test summary,
+    stderr output.
+    Removes: all passing test lines (✓ markers at any indent level).
+    """
+    text = strip_ansi(text)
+    kept: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        # Skip all lines starting with ✓ (passing tests and passing files)
+        if stripped.startswith("✓"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def run_command(command: str, cwd: Path, timeout: int = 120) -> CommandResult:
