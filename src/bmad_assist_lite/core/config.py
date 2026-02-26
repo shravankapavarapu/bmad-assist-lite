@@ -101,7 +101,7 @@ class TimeoutsConfig(BaseModel):
         "validate_story": 600,
         "validate_story_synthesis": 600,
         "dev_story": 1200,
-        "code_review": 600,
+        "code_review": 900,
         "code_review_synthesis": 600,
         "quality_gate": 300,
         "fix_quality_gate": 600,
