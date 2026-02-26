@@ -288,6 +288,53 @@ def filter_epic_to_story(context: CompilerContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Story file: strip appended synthesis reports
+# ---------------------------------------------------------------------------
+
+_SYNTHESIS_HEADING_RE = re.compile(
+    r"^#\s+(Code Review Synthesis|Validation Synthesis)\b", re.IGNORECASE
+)
+
+
+def strip_synthesis_reports(context: CompilerContext) -> None:
+    """Remove appended synthesis reports from the story file.
+
+    Story files accumulate ``# Code Review Synthesis`` and
+    ``# Validation Synthesis`` sections from prior phases.  These are
+    audit trails whose findings have already been applied to the story.
+    Stripping them before dev_story / code_review reduces prompt size.
+
+    No-op if no ``story_file`` key exists in ``file_contents``.
+    """
+    story_key = "story_file"
+    content = context.file_contents.get(story_key)
+    if not content:
+        return
+
+    lines = content.split("\n")
+    cut_idx: int | None = None
+    for i, line in enumerate(lines):
+        if _SYNTHESIS_HEADING_RE.match(line):
+            cut_idx = i
+            break
+
+    if cut_idx is None:
+        return
+
+    trimmed = "\n".join(lines[:cut_idx]).rstrip() + "\n"
+    original_len = len(content)
+    trimmed_len = len(trimmed)
+    reduction = (1 - trimmed_len / original_len) * 100 if original_len else 0
+    logger.info(
+        "Stripped synthesis reports from story_file: %d -> %d chars (%.0f%% reduction)",
+        original_len,
+        trimmed_len,
+        reduction,
+    )
+    context.file_contents[story_key] = trimmed
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
