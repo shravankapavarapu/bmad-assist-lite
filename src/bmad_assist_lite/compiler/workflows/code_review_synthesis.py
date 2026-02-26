@@ -52,11 +52,6 @@ class CodeReviewSynthesisCompiler:
         load_file_contents(context)
         strip_synthesis_reports(context)
 
-        # Inject cached library documentation if available
-        from bmad_assist_lite.context_docs.resolver import inject_library_docs
-
-        inject_library_docs(context)
-
         # Build context from loaded files
         context_text = "\n\n".join(
             f"--- {name} ---\n{content}"

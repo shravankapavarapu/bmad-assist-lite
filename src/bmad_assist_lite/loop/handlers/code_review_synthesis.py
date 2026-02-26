@@ -6,6 +6,7 @@ Evidence Score context injected into the prompt.
 
 import json
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +18,55 @@ from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
+
+# Regex for headings whose body is pure file-exploration narration
+_EXPLORATION_HEADING_RE = re.compile(
+    r"^#{1,4}\s+(?:Step\s+\d+\s*[:\-–—]\s*)?"
+    r"(?:Load|Discover|Examine|Read|Setup|Initial)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_review_narration(text: str) -> str:
+    """Remove file-exploration narration sections from a reviewer response.
+
+    Strips sections whose heading matches common exploration patterns
+    (e.g. "## Step 1: Load Story and Discover Changes") since their body
+    is tool-use narration, not actionable review content.
+
+    Returns the trimmed text.  No-op if no exploration sections found.
+    """
+    lines = text.split("\n")
+    # Find and remove exploration sections
+    i = 0
+    kept: list[str] = []
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("#") and _EXPLORATION_HEADING_RE.match(line):
+            # Determine heading level
+            match = re.match(r"^(#+)", line)
+            level = len(match.group(1)) if match else 2
+            # Skip until next heading at same or higher level
+            i += 1
+            while i < len(lines):
+                if lines[i].startswith("#"):
+                    m = re.match(r"^(#+)", lines[i])
+                    if m and len(m.group(1)) <= level:
+                        break
+                i += 1
+            continue
+        kept.append(line)
+        i += 1
+
+    result = "\n".join(kept).strip()
+    if len(result) < len(text.strip()):
+        stripped = len(text.strip()) - len(result)
+        logger.info(
+            "Stripped %d chars of reviewer narration (~%d tokens)",
+            stripped,
+            stripped // 4,
+        )
+    return result
 
 
 class CodeReviewSynthesisHandler(BaseHandler):
@@ -136,7 +186,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
             review_text = "\n\n".join(
                 f"=== {r.get('reviewer', 'Unknown')} ===\n"
-                f"{r.get('response', r.get('error', 'No output'))}"
+                f"{_strip_review_narration(r.get('response', r.get('error', 'No output')))}"
                 for r in reviews
             )
             full_prompt = (
