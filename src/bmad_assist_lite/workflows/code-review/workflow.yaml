@@ -13,6 +13,9 @@ input_file_patterns:
   architecture_file:
     pattern: "**/architecture*.md"
     strategy: FULL_LOAD
+  epic_file:
+    pattern: "**/epic-{epic_num}.md"
+    strategy: SELECTIVE_LOAD
 
 variables:
   mission: "Adversarial code review for Epic {epic_num} Story {story_num}"
