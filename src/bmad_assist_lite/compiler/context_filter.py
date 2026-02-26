@@ -211,6 +211,83 @@ def _extract_section_from_content(content: str, section_name: str) -> str | None
 
 
 # ---------------------------------------------------------------------------
+# Epic story-level filtering
+# ---------------------------------------------------------------------------
+
+_STORY_HEADING_RE = re.compile(r"^###\s+Story\s+", re.IGNORECASE)
+
+
+def filter_epic_to_story(context: CompilerContext) -> None:
+    """Filter epic content to only the overview + target story section.
+
+    Keeps everything before the first ``### Story`` header (epic overview,
+    business goal, dependencies, context tables) plus the single story
+    section matching ``epic_num.story_num``.  Other stories and epic-level
+    closing sections (Test Impact, Risk, Rollback) are removed.
+
+    No-op if epic content or story_num is missing.
+    """
+    # Find epic content key
+    epic_key: str | None = None
+    epic_content: str | None = None
+    for key, content in context.file_contents.items():
+        if "epic" in key.lower() and content:
+            epic_key = key
+            epic_content = content
+            break
+
+    if not epic_content or not epic_key:
+        return
+
+    epic_num = context.resolved_variables.get("epic_num")
+    story_num = context.resolved_variables.get("story_num")
+    if not epic_num or not story_num:
+        return
+
+    lines = epic_content.split("\n")
+
+    # 1. Find the first "### Story" header — everything before is the overview
+    first_story_idx: int | None = None
+    for i, line in enumerate(lines):
+        if _STORY_HEADING_RE.match(line):
+            first_story_idx = i
+            break
+
+    if first_story_idx is None:
+        logger.debug("No ### Story headers found in epic, keeping full content")
+        return
+
+    overview = "\n".join(lines[:first_story_idx]).rstrip()
+
+    # 2. Extract the target story section using existing helper
+    section_name = f"Story {epic_num}.{story_num}"
+    target_story = _extract_section_from_content(epic_content, section_name)
+
+    if target_story is None:
+        logger.warning(
+            "Could not extract '%s' from epic, keeping full content",
+            section_name,
+        )
+        return
+
+    # 3. Combine overview + target story
+    filtered = overview + "\n\n" + target_story.rstrip() + "\n"
+
+    original_len = len(epic_content)
+    filtered_len = len(filtered)
+    reduction = (1 - filtered_len / original_len) * 100 if original_len else 0
+    logger.info(
+        "Filtered epic to %s: %d -> %d chars (%.0f%% reduction)",
+        section_name,
+        original_len,
+        filtered_len,
+        reduction,
+    )
+
+    context.file_contents[epic_key] = filtered
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
