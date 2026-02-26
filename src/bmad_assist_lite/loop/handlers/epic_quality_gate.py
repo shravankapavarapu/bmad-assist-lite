@@ -12,6 +12,7 @@ from bmad_assist_lite.core.config import Config
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.core.toolchain import ToolchainCommands, detect_toolchain
 from bmad_assist_lite.loop.types import PhaseResult
+from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +92,13 @@ class EpicQualityGateHandler:
         failures: list[str] = []
 
         for name, cmd in command_list:
-            print(f"    Running: {cmd}", flush=True)
+            write_progress(f"    Running: {cmd}")
             cmd_result = run_command(cmd, self.project_path, timeout=timeout)
             results.append((name, cmd_result))
 
             icon = "\u2714" if cmd_result.success else "\u2718"
             status = "PASS" if cmd_result.success else "FAIL"
-            print(f"    {icon} {name}: {status}", flush=True)
+            write_progress(f"    {icon} {name}: {status}")
 
             if not cmd_result.success:
                 failures.append(name)
@@ -113,7 +114,7 @@ class EpicQualityGateHandler:
                 f"Report: {report_path}. "
                 f"Fix manually and --resume."
             )
-            print(f"\n  {msg}", flush=True)
+            write_progress(f"\n  {msg}")
             return PhaseResult.fail(msg)
 
         if failures:
@@ -123,7 +124,7 @@ class EpicQualityGateHandler:
                 f"Report: {report_path}. "
                 f"Fix manually and --resume."
             )
-            print(f"\n  {msg}", flush=True)
+            write_progress(f"\n  {msg}")
             return PhaseResult.fail(msg)
 
         return PhaseResult.ok()

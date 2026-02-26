@@ -35,9 +35,10 @@ def format_tag(tag: str, color_index: int | None) -> str:
 
 
 def write_progress(line: str) -> None:
-    """Write a progress line to stdout with locking."""
+    """Write a progress line to stdout (and run log) with locking."""
     with _OUTPUT_LOCK:
         print(line, flush=True)
+        logger.info(line)
 
 
 def extract_tool_details(tool_name: str, tool_input: dict[str, Any]) -> str:

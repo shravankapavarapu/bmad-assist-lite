@@ -19,6 +19,7 @@ from bmad_assist_lite.core.quality_gates import (
 from bmad_assist_lite.core.state import Phase, State
 from bmad_assist_lite.core.toolchain import detect_toolchain
 from bmad_assist_lite.loop.types import PhaseResult
+from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +133,13 @@ class QualityGateHandler:
         failures: list[tuple[QualityGateEntry, CommandResult]] = []
 
         for entry in commands:
-            print(f"    Running: {entry.command}", flush=True)
+            write_progress(f"    Running: {entry.command}")
             cmd_result = run_command(entry.command, self.project_path, timeout=timeout)
             results.append((entry, cmd_result))
 
             status = "PASS" if cmd_result.success else "FAIL"
             icon = "\u2714" if cmd_result.success else "\u2718"
-            print(f"    {icon} {entry.name}: {status}", flush=True)
+            write_progress(f"    {icon} {entry.name}: {status}")
 
             if story_path:
                 update_quality_gate_status(story_path, entry.name, status)

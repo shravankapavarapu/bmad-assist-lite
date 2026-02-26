@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from bmad_assist_lite.core.exceptions import StateError
 from bmad_assist_lite.core.state import Phase, State
 from bmad_assist_lite.loop.types import PhaseHandler, PhaseResult
+from bmad_assist_lite.providers.base import write_progress
 
 if TYPE_CHECKING:
     from bmad_assist_lite.core.config import Config
@@ -111,7 +112,7 @@ def execute_phase(state: State) -> PhaseResult:
     duration_ms = int((time.perf_counter() - start_time) * 1000)
     duration_str = _format_duration(duration_ms)
     status_icon = "\u2714" if handler_result.success else "\u2718"
-    print(f"  {status_icon} Phase completed in {duration_str}", flush=True)
+    write_progress(f"  {status_icon} Phase completed in {duration_str}")
 
     logger.info(
         "Phase %s completed: success=%s duration=%dms",

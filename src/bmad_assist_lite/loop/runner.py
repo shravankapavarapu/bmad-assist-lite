@@ -14,6 +14,7 @@ from bmad_assist_lite.core.state import (
 from bmad_assist_lite.core.sprint_sync import trigger_sync
 from bmad_assist_lite.loop.cleanup import cleanup_for_phase, clear_story_cache
 from bmad_assist_lite.loop.dispatch import execute_phase, init_handlers
+from bmad_assist_lite.providers.base import write_progress
 from bmad_assist_lite.loop.locking import running_lock
 from bmad_assist_lite.loop.signals import (
     register_signal_handlers,
@@ -30,7 +31,7 @@ __all__ = ["run_loop"]
 
 
 def _print_phase_banner(phase_name: str, epic: int | str | None, story: str | None) -> None:
-    """Print phase banner to console."""
+    """Print phase banner to console and run log."""
     banner = f" [{phase_name.upper().replace('_', ' ')}]"
     if epic is not None:
         banner += f" Epic {epic}"
@@ -38,9 +39,9 @@ def _print_phase_banner(phase_name: str, epic: int | str | None, story: str | No
         banner += f" Story {story}"
 
     separator = "\u2501" * 45
-    print(f"\n{separator}")
-    print(banner)
-    print(separator)
+    write_progress(f"\n{separator}")
+    write_progress(banner)
+    write_progress(separator)
 
 
 def _auto_commit_after_synthesis(
@@ -59,7 +60,7 @@ def _auto_commit_after_synthesis(
 
     success = auto_commit_story(project_path, state.current_story or "", story_key)
     if success:
-        print(f"  Git: committed story {state.current_story} changes")
+        write_progress(f"  Git: committed story {state.current_story} changes")
 
 
 def run_loop(
@@ -180,9 +181,8 @@ def run_loop(
                         state.qa_retry_count = 0
                         save_state(state, state_path)
                         trigger_sync(state, project_path)
-                        print(
-                            f"  Story {state.current_story}: quality gates PASSED",
-                            flush=True,
+                        write_progress(
+                            f"  Story {state.current_story}: quality gates PASSED"
                         )
                         # Fall through to normal advance_story below
 
@@ -193,10 +193,9 @@ def run_loop(
                         state.qa_retry_count = 0
                         save_state(state, state_path)
                         trigger_sync(state, project_path)
-                        print(
+                        write_progress(
                             f"  Story {state.current_story}: quality gates FAILED"
-                            " — marked blocked, continuing",
-                            flush=True,
+                            " — marked blocked, continuing"
                         )
                         next_state = skip_to_next_story(state, story_phases, stories)
                         if next_state is not None:
