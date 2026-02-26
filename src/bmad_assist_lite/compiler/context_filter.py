@@ -295,14 +295,48 @@ _SYNTHESIS_HEADING_RE = re.compile(
     r"^#\s+(Code Review Synthesis|Validation Synthesis)\b", re.IGNORECASE
 )
 
+_QUALITY_GATES_HEADING_RE = re.compile(r"^##\s+Quality\s+Gates\b", re.IGNORECASE)
+
+
+def _remove_section(lines: list[str], heading_re: re.Pattern[str]) -> list[str]:
+    """Remove a markdown section (heading + body) from lines.
+
+    Finds the first line matching *heading_re*, determines its heading
+    level, and removes everything up to (but not including) the next
+    heading at the same or higher level.
+    """
+    start_idx: int | None = None
+    start_level = 0
+
+    for i, line in enumerate(lines):
+        if heading_re.match(line):
+            match = re.match(r"^(#+)", line)
+            start_idx = i
+            start_level = len(match.group(1)) if match else 2
+            break
+
+    if start_idx is None:
+        return lines
+
+    end_idx = len(lines)
+    for i in range(start_idx + 1, len(lines)):
+        if lines[i].startswith("#"):
+            match = re.match(r"^(#+)", lines[i])
+            if match and len(match.group(1)) <= start_level:
+                end_idx = i
+                break
+
+    return lines[:start_idx] + lines[end_idx:]
+
 
 def strip_synthesis_reports(context: CompilerContext) -> None:
-    """Remove appended synthesis reports from the story file.
+    """Remove noise sections from the story file for LLM prompts.
 
-    Story files accumulate ``# Code Review Synthesis`` and
-    ``# Validation Synthesis`` sections from prior phases.  These are
-    audit trails whose findings have already been applied to the story.
-    Stripping them before dev_story / code_review reduces prompt size.
+    Strips:
+    - ``# Code Review Synthesis`` / ``# Validation Synthesis`` — audit
+      trails whose findings have already been applied to the story.
+    - ``## Quality Gates`` — handled by the dedicated quality_gate phase;
+      showing them to LLMs causes them to treat gates as blockers.
 
     No-op if no ``story_file`` key exists in ``file_contents``.
     """
@@ -311,6 +345,9 @@ def strip_synthesis_reports(context: CompilerContext) -> None:
     if not content:
         return
 
+    original_len = len(content)
+
+    # 1. Cut appended synthesis reports (everything from first match onward)
     lines = content.split("\n")
     cut_idx: int | None = None
     for i, line in enumerate(lines):
@@ -318,20 +355,23 @@ def strip_synthesis_reports(context: CompilerContext) -> None:
             cut_idx = i
             break
 
-    if cut_idx is None:
-        return
+    if cut_idx is not None:
+        lines = lines[:cut_idx]
 
-    trimmed = "\n".join(lines[:cut_idx]).rstrip() + "\n"
-    original_len = len(content)
+    # 2. Remove ## Quality Gates section (mid-file)
+    lines = _remove_section(lines, _QUALITY_GATES_HEADING_RE)
+
+    trimmed = "\n".join(lines).rstrip() + "\n"
     trimmed_len = len(trimmed)
     reduction = (1 - trimmed_len / original_len) * 100 if original_len else 0
-    logger.info(
-        "Stripped synthesis reports from story_file: %d -> %d chars (%.0f%% reduction)",
-        original_len,
-        trimmed_len,
-        reduction,
-    )
-    context.file_contents[story_key] = trimmed
+    if trimmed_len < original_len:
+        logger.info(
+            "Stripped story_file noise sections: %d -> %d chars (%.0f%% reduction)",
+            original_len,
+            trimmed_len,
+            reduction,
+        )
+        context.file_contents[story_key] = trimmed
 
 
 # ---------------------------------------------------------------------------
