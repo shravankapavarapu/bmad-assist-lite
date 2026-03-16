@@ -42,3 +42,30 @@ Currently, stories are processed in **sprint-status.yaml insertion order** (dict
 
 - Several completed epics in the webdozo project already have `recommended_order` (epic-swvc, epic-hp-rebrand, epic-blog-tc, etc.)
 - This also pairs well with dependency-based gating (skip stories whose dependencies aren't done yet)
+
+### Things to be worked next
+- When there is no context7 libraries needed, template need to specifically mention that and code needs to skip context7 load completely.
+- Also check if there is db involved during start up and see if it's reachable. If not reachable exit script saying it can't move forward without db.
+- Multi thread implementation : Now for each story need to create separate worktree and this should run sperately on it's on. 
+- There should be a orchestrator to handle to over see this project. 
+- Need config to limit how many threads can be run at time.
+- Orchestrator need to figure out if there are any dependencies before launching each thread, if there is then it should wait untill that dependencies are met and then only 
+- Need to research for this see if there is already implemented in actual process, check orchestrator tweets and also auto claude for archetural direction - use BMAD archiect
+
+### For TDD
+| #   | Command                          |
+| --- | -------------------------------- |
+| 1   | `/bmad-bmm-create-story`         |
+| 2   | `/bmad-tea-testarch-atdd`        |
+| 3   | `/bmad-bmm-dev-story`            |
+| 4   | `/bmad-tea-testarch-automate`    |
+| 5   | `/bmad-tea-testarch-test-review` |
+| 6   | `/bmad-bmm-code-review`          |
+| 7   | `/bmad-tea-testarch-trace`       |
+
+### Plan for epic
+| #   | Command                          |
+| --- | -------------------------------- |
+| 1   | `/bmad-tea-testarch-test-review` |
+| 2   | `/bmad-tea-testarch-nfr-assess`  |
+| 3   | `/bmad-tea-testarch-trace`       |
