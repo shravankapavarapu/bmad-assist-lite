@@ -16,6 +16,11 @@ venv/
 *.swp
 *.swo
 
+#bmad
+/_bmad
+/.claude/commands/bmad*
+/.claude/skills/bmad*
+
 # bmad-assist-lite runtime artifacts
 .bmad-assist-lite/cache/
 .bmad-assist-lite/state.yaml
