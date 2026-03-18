@@ -44,8 +44,8 @@ story_location: _bmad-output/implementation-artifacts
 development_status:
   # Epic 1: Foundation & Configuration
   epic-1: in-progress
-  1-1-parallel-module-structure-and-configuration-model: in-progress
-  1-2-git-operations-wrapper: backlog
+  1-1-parallel-module-structure-and-configuration-model: done
+  1-2-git-operations-wrapper: review
   1-3-existing-code-integration: backlog
   epic-1-retrospective: optional
 
