@@ -17,7 +17,6 @@ from bmad_assist_lite.validation.evidence_score import (
     parse_evidence_findings,
 )
 
-
 # =============================================================================
 # Severity and Verdict Enum Tests
 # =============================================================================

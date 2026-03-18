@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import threading
 import time
 from pathlib import Path
 
@@ -36,13 +35,16 @@ class ClaudeSDKProvider(BaseProvider):
 
     @property
     def provider_name(self) -> str:
+        """Return the provider identifier string."""
         return "claude"
 
     @property
     def default_model(self) -> str | None:
+        """Return the default model identifier."""
         return "sonnet"
 
     def supports_model(self, model: str) -> bool:
+        """Return True if the model is a known Claude model."""
         return model in SUPPORTED_MODELS or model.startswith("claude-")
 
     async def _invoke_async(
@@ -88,6 +90,7 @@ class ClaudeSDKProvider(BaseProvider):
         allowed_tools: list[str] | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
+        """Execute Claude SDK with the given prompt and return the result."""
         _ = color_index
 
         if timeout is not None and timeout <= 0:
@@ -130,7 +133,6 @@ class ClaudeSDKProvider(BaseProvider):
                 )
             )
         except TimeoutError as e:
-            duration_ms = int((time.perf_counter() - start_time) * 1000)
             raise ProviderTimeoutError(f"SDK timeout after {effective_timeout}s") from e
         except CLINotFoundError as e:
             raise ProviderError("Claude Code not found. Is 'claude' installed and in PATH?") from e
@@ -163,4 +165,5 @@ class ClaudeSDKProvider(BaseProvider):
         )
 
     def parse_output(self, result: ProviderResult) -> str:
+        """Extract response text from provider result."""
         return result.stdout.strip()

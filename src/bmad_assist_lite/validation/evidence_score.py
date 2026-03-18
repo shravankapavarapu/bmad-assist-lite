@@ -26,7 +26,7 @@ import logging
 import re
 import string
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from bmad_assist_lite.core.exceptions import BmadAssistError
@@ -72,7 +72,7 @@ class AllValidatorsFailedError(EvidenceScoreError):
 # =============================================================================
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     """Finding severity levels for Evidence Score system."""
 
     CRITICAL = "CRITICAL"
@@ -80,7 +80,7 @@ class Severity(str, Enum):
     MINOR = "MINOR"
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     """Deterministic verdict based on Evidence Score thresholds.
 
     Canonical values used for serialization.

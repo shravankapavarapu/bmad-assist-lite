@@ -1,6 +1,5 @@
 """Tests for state -> sprint-status synchronization."""
 
-import pytest
 
 from bmad_assist_lite.core.sprint_status import (
     SprintStatus,

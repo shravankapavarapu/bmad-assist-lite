@@ -21,6 +21,7 @@ class EpicQualityGateHandler:
     """Non-LLM handler: runs project-wide quality gate checks."""
 
     def __init__(self, config: Config, project_path: Path) -> None:
+        """Initialize the handler with config and project path."""
         self.config = config
         self.project_path = project_path
 

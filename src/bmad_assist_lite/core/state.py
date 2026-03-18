@@ -3,7 +3,7 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -22,7 +22,7 @@ TEMP_FILE_SUFFIX = ".tmp"
 
 def _utc_now() -> datetime:
     """Get current UTC datetime without timezone info."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Phase(Enum):

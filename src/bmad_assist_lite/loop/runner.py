@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from bmad_assist_lite.core.config import Config
+from bmad_assist_lite.core.sprint_sync import trigger_sync
 from bmad_assist_lite.core.state import (
     Phase,
     State,
@@ -11,10 +12,8 @@ from bmad_assist_lite.core.state import (
     mark_story_completed,
     save_state,
 )
-from bmad_assist_lite.core.sprint_sync import trigger_sync
 from bmad_assist_lite.loop.cleanup import cleanup_for_phase, clear_story_cache
 from bmad_assist_lite.loop.dispatch import execute_phase, init_handlers
-from bmad_assist_lite.providers.base import write_progress
 from bmad_assist_lite.loop.locking import running_lock
 from bmad_assist_lite.loop.signals import (
     register_signal_handlers,
@@ -24,6 +23,7 @@ from bmad_assist_lite.loop.signals import (
 )
 from bmad_assist_lite.loop.transitions import advance_epic, advance_story, skip_to_next_story
 from bmad_assist_lite.loop.types import LoopExitReason
+from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,7 @@ def run_loop(
 
     Returns:
         LoopExitReason indicating how the loop ended.
+
     """
     # Get phase configuration
     story_phases = config.loop.story

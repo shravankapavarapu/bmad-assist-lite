@@ -48,6 +48,7 @@ def sync_state_to_sprint(state: State, sprint_status: SprintStatus) -> SprintSta
 
     Returns:
         Updated sprint status (same object, mutated).
+
     """
     # Mark completed stories as done
     for story_id in state.completed_stories:
@@ -81,6 +82,7 @@ def trigger_sync(state: State, project_path: Path) -> None:
     Args:
         state: Current loop state.
         project_path: Path to the project root.
+
     """
     try:
         ss_path = get_sprint_status_path(project_path)

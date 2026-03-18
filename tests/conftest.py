@@ -10,7 +10,6 @@ from bmad_assist_lite.core.config import _reset_config, load_config
 from bmad_assist_lite.core.paths import _reset_paths
 from bmad_assist_lite.loop.dispatch import reset_handlers
 
-
 # ============================================================================
 # Markers
 # ============================================================================

@@ -15,6 +15,7 @@ from bmad_assist_lite.core.exceptions import (
     ProviderExitCodeError,
     ProviderTimeoutError,
 )
+from bmad_assist_lite.providers._windows import get_subprocess_kwargs, kill_process
 from bmad_assist_lite.providers.base import (
     BaseProvider,
     ExitStatus,
@@ -24,7 +25,6 @@ from bmad_assist_lite.providers.base import (
     validate_settings_file,
     write_progress,
 )
-from bmad_assist_lite.providers._windows import get_subprocess_kwargs, kill_process
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +56,16 @@ class GeminiProvider(BaseProvider):
 
     @property
     def provider_name(self) -> str:
+        """Return the provider identifier string."""
         return "gemini"
 
     @property
     def default_model(self) -> str | None:
+        """Return the default model identifier."""
         return "gemini-2.5-flash"
 
     def supports_model(self, model: str) -> bool:
+        """Return True; Gemini CLI validates models at runtime."""
         return True  # Let Gemini CLI validate
 
     def invoke(
@@ -76,6 +79,7 @@ class GeminiProvider(BaseProvider):
         allowed_tools: list[str] | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
+        """Execute Gemini CLI with the given prompt and return the result."""
         if timeout is not None and timeout <= 0:
             raise ValueError(f"timeout must be positive, got {timeout}")
 
@@ -117,7 +121,6 @@ class GeminiProvider(BaseProvider):
             "--yolo",
         ]
 
-        last_error: ProviderExitCodeError | None = None
         returncode = 1
 
         for attempt in range(MAX_RETRIES):
@@ -204,8 +207,7 @@ class GeminiProvider(BaseProvider):
                                         f"{tag} tokens={stats.get('total_tokens', 0)} "
                                         f"duration={stats.get('duration_ms', 0)}ms"
                                     )
-                            elif msg_type == "error":
-                                if logger.isEnabledFor(logging.INFO):
+                            elif msg_type == "error" and logger.isEnabledFor(logging.INFO):
                                     tag = format_tag("ERROR", color_idx)
                                     write_progress(f"{tag} {msg.get('message', str(msg))}")
                         except json.JSONDecodeError:
@@ -275,7 +277,6 @@ class GeminiProvider(BaseProvider):
 
                 is_transient = not stderr_content.strip() and exit_status == ExitStatus.ERROR
                 if is_transient and attempt < MAX_RETRIES - 1:
-                    last_error = error
                     continue
 
                 raise error
@@ -302,4 +303,5 @@ class GeminiProvider(BaseProvider):
         )
 
     def parse_output(self, result: ProviderResult) -> str:
+        """Extract response text from provider result."""
         return result.stdout.strip()

@@ -11,7 +11,7 @@ import os
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from bmad_assist_lite.core.exceptions import StateError
@@ -19,6 +19,9 @@ from bmad_assist_lite.core.exceptions import StateError
 logger = logging.getLogger(__name__)
 
 IS_WINDOWS = sys.platform == "win32"
+
+# Win32 API constant for OpenProcess access rights
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 __all__ = ["running_lock"]
 
@@ -37,8 +40,7 @@ def _is_pid_alive_windows(pid: int) -> bool:
     """Windows PID check using ctypes."""
     import ctypes
 
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    handle = ctypes.windll.kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if handle:
         ctypes.windll.kernel32.CloseHandle(handle)
         return True
@@ -95,7 +97,7 @@ def running_lock(project_path: Path) -> Generator[Path, None, None]:
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / "running.lock"
 
-    lock_content = f"{os.getpid()}\n{datetime.now(timezone.utc).isoformat()}\n"
+    lock_content = f"{os.getpid()}\n{datetime.now(UTC).isoformat()}\n"
 
     # Try atomic exclusive create first (eliminates TOCTOU race)
     if not _try_exclusive_create(lock_path, lock_content):

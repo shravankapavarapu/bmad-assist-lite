@@ -2,17 +2,13 @@
 
 from pathlib import Path
 
-import pytest
-
 from bmad_assist_lite.compiler.context_filter import (
-    ContextRequirement,
     _build_filename_to_key_map,
     _extract_section_from_content,
     apply_context_filter,
     parse_context_requirements,
 )
 from bmad_assist_lite.compiler.types import CompilerContext
-
 
 # ---------------------------------------------------------------------------
 # parse_context_requirements

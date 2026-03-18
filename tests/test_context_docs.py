@@ -5,11 +5,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from bmad_assist_lite.context_docs.cache import LibDocsCache, _sanitize_name
-from bmad_assist_lite.context_docs.epic_table import (
-    EpicLibrarySpec,
-    get_story_lib_mapping,
-    parse_context7_table,
-)
 from bmad_assist_lite.context_docs.detector import (
     _detect_from_cargo,
     _detect_from_package_json,
@@ -18,8 +13,12 @@ from bmad_assist_lite.context_docs.detector import (
     _scan_doc_for_frameworks,
     detect_libraries,
 )
+from bmad_assist_lite.context_docs.epic_table import (
+    EpicLibrarySpec,
+    get_story_lib_mapping,
+    parse_context7_table,
+)
 from bmad_assist_lite.core.config import _reset_config, load_config
-
 
 # ============================================================================
 # Cache Tests

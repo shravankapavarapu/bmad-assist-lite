@@ -12,16 +12,18 @@ Registry Functions:
 
 from typing import TYPE_CHECKING, Any
 
+from bmad_assist_lite.core.exceptions import ConfigError
+
 from .base import (
+    PROVIDER_COLORS,
+    RESET_COLOR,
     BaseProvider,
     ExitStatus,
     ProviderResult,
+    format_tag,
     resolve_settings_file,
     validate_settings_file,
     write_progress,
-    format_tag,
-    PROVIDER_COLORS,
-    RESET_COLOR,
 )
 
 if TYPE_CHECKING:
@@ -53,6 +55,7 @@ _lazy_imports = {
 
 
 def __getattr__(name: str) -> type[Any]:
+    """Lazy-load provider classes on first attribute access."""
     if name in _lazy_imports:
         import importlib
 
@@ -63,8 +66,6 @@ def __getattr__(name: str) -> type[Any]:
 
 
 # Registry
-from bmad_assist_lite.core.exceptions import ConfigError
-
 _REGISTRY: dict[str, type[BaseProvider]] = {}
 
 
@@ -81,6 +82,7 @@ def _init_default_providers() -> None:
 
 
 def get_provider(name: str) -> BaseProvider:
+    """Get a provider instance by name, initializing defaults if needed."""
     if not _REGISTRY:
         _init_default_providers()
     if not name or not name.strip():
@@ -93,6 +95,7 @@ def get_provider(name: str) -> BaseProvider:
 
 
 def list_providers() -> frozenset[str]:
+    """Return all registered provider names."""
     if not _REGISTRY:
         _init_default_providers()
     return frozenset(_REGISTRY.keys())
@@ -112,8 +115,10 @@ def register_provider(name: str, provider_class: type[BaseProvider]) -> None:
 
 
 def normalize_model_name(name: str) -> str:
+    """Convert underscores to hyphens in model name."""
     return name.replace("_", "-")
 
 
 def denormalize_model_name(name: str) -> str:
+    """Convert hyphens to underscores in model name."""
     return name.replace("-", "_")

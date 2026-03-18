@@ -23,6 +23,7 @@ def advance_story(
 
     Returns:
         Updated state with next phase or next story.
+
     """
     current_phase = state.current_phase
     if current_phase is None:
@@ -94,6 +95,7 @@ def advance_epic(
 
     Returns:
         Updated state or None if all epics completed.
+
     """
     current_epic = state.current_epic
     if current_epic is None:

@@ -4,9 +4,8 @@ Tests the filtering and epic file validation logic used in cli.py
 to build the story queue from sprint-status.yaml.
 """
 
-import pytest
 
-from bmad_assist_lite.cli import _find_epic_file, _cache_story_queue, load_story_queue_cache
+from bmad_assist_lite.cli import _cache_story_queue, _find_epic_file, load_story_queue_cache
 from bmad_assist_lite.core.sprint_status import SprintStatus
 
 

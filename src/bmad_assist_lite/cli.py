@@ -12,7 +12,7 @@ import logging
 import os
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
 import yaml
@@ -112,19 +112,19 @@ def run(
         dir_okay=True,
         file_okay=False,
     ),
-    config: Optional[Path] = typer.Option(
+    config: Path | None = typer.Option(
         None,
         "--config",
         "-c",
         help="Path to config file (default: bmad-assist-lite.yaml).",
     ),
-    epic: Optional[int] = typer.Option(
+    epic: int | None = typer.Option(
         None,
         "--epic",
         "-e",
         help="Specific epic number to run.",
     ),
-    story: Optional[int] = typer.Option(
+    story: int | None = typer.Option(
         None,
         "--story",
         "-s",
@@ -169,7 +169,7 @@ def run(
         app_config = load_config_with_project(project)
     except Exception as e:
         typer.echo(f"Config error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Initialize paths
     from bmad_assist_lite.core.paths import init_paths
@@ -470,7 +470,7 @@ def compile(
         typer.echo(f"\n--- Token estimate: ~{compiled.token_estimate} ---")
     except Exception as e:
         typer.echo(f"Compilation failed: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command(name="reset-lock")

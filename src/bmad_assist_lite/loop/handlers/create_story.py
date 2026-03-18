@@ -17,9 +17,11 @@ class CreateStoryHandler(BaseHandler):
 
     @property
     def phase_name(self) -> str:
+        """Return the phase name."""
         return "create_story"
 
     def build_context(self, state: State) -> dict[str, Any]:
+        """Build template context with story_key from cached queue."""
         ctx = self._build_common_context(state)
 
         # Inject story_key from cached story queue

@@ -17,6 +17,7 @@ class ProjectPaths:
     DEFAULT_PROJECT_KNOWLEDGE = "{project-root}/docs"
 
     def __init__(self, project_root: Path, config: dict[str, Any] | None = None):
+        """Initialize path resolver from project root and optional config."""
         self.project_root = project_root.resolve()
         self._config = config or {}
 
@@ -43,20 +44,24 @@ class ProjectPaths:
 
     @cached_property
     def output_folder(self) -> Path:
+        """Return the base output folder path."""
         return self._get_config_path("output_folder", self.DEFAULT_OUTPUT_FOLDER)
 
     @cached_property
     def planning_artifacts(self) -> Path:
+        """Return the planning artifacts directory path."""
         return self._get_config_path("planning_artifacts", self.DEFAULT_PLANNING_ARTIFACTS)
 
     @cached_property
     def implementation_artifacts(self) -> Path:
+        """Return the implementation artifacts directory path."""
         return self._get_config_path(
             "implementation_artifacts", self.DEFAULT_IMPLEMENTATION_ARTIFACTS
         )
 
     @cached_property
     def project_knowledge(self) -> Path:
+        """Return the project knowledge directory path."""
         return self._get_config_path("project_knowledge", self.DEFAULT_PROJECT_KNOWLEDGE)
 
     # Planning Artifacts
@@ -70,48 +75,58 @@ class ProjectPaths:
 
     @cached_property
     def stories_dir(self) -> Path:
+        """Return the stories directory path (implementation-artifacts)."""
         return self.implementation_artifacts
 
     # Implementation Artifacts
 
     @cached_property
     def validations_dir(self) -> Path:
+        """Return the story validations directory path."""
         return self.implementation_artifacts / "story-validations"
 
     @cached_property
     def code_reviews_dir(self) -> Path:
+        """Return the code reviews directory path."""
         return self.implementation_artifacts / "code-reviews"
 
     @cached_property
     def retrospectives_dir(self) -> Path:
+        """Return the retrospectives directory path."""
         return self.implementation_artifacts / "retrospectives"
 
     # Project Knowledge
 
     @cached_property
     def prd_file(self) -> Path:
+        """Return the PRD file path."""
         return self.project_knowledge / "prd.md"
 
     @cached_property
     def architecture_file(self) -> Path:
+        """Return the architecture document file path."""
         return self.project_knowledge / "architecture.md"
 
     @cached_property
     def project_context_file(self) -> Path:
+        """Return the project context file path."""
         return self.project_knowledge / "project_context.md"
 
     # Internal State
 
     @cached_property
     def bmad_assist_dir(self) -> Path:
+        """Return the .bmad-assist-lite internal state directory path."""
         return self.project_root / ".bmad-assist-lite"
 
     @cached_property
     def state_file(self) -> Path:
+        """Return the state.yaml file path."""
         return self.bmad_assist_dir / "state.yaml"
 
     @cached_property
     def sprint_status_file(self) -> Path:
+        """Return the sprint-status.yaml file path."""
         return self.implementation_artifacts / "sprint-status.yaml"
 
     @cached_property
@@ -121,7 +136,13 @@ class ProjectPaths:
 
     @cached_property
     def cache_dir(self) -> Path:
+        """Return the cache directory path."""
         return self.bmad_assist_dir / "cache"
+
+    @cached_property
+    def logs_dir(self) -> Path:
+        """Return the logs directory path."""
+        return self.bmad_assist_dir / "logs"
 
     @cached_property
     def lib_docs_dir(self) -> Path:
@@ -150,6 +171,7 @@ class ProjectPaths:
                 raise PermissionError(f"Cannot create directory '{directory}': {e}") from e
 
     def __repr__(self) -> str:
+        """Return string representation."""
         return f"ProjectPaths(project_root={self.project_root})"
 
 

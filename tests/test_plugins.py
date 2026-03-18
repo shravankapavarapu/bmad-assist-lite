@@ -3,11 +3,9 @@
 Covers: PluginRegistry operations, protocol conformance checks.
 """
 
-import pytest
 
 from bmad_assist_lite.plugins.protocols import PhasePlugin, ProviderPlugin, WorkflowPlugin
 from bmad_assist_lite.plugins.registry import PluginRegistry
-
 
 # ---------------------------------------------------------------------------
 # Mock plugin classes that satisfy the protocols

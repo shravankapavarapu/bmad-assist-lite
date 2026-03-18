@@ -4,13 +4,13 @@ Covers: PhaseResult, LoopExitReason, advance_story, advance_epic,
         shutdown signals.
 """
 
-import pytest
+
+from datetime import UTC
 
 from bmad_assist_lite.core.state import Phase, State
 from bmad_assist_lite.loop.signals import request_shutdown, reset_shutdown, shutdown_requested
 from bmad_assist_lite.loop.transitions import advance_epic, advance_story
 from bmad_assist_lite.loop.types import LoopExitReason, PhaseResult
-
 
 # ---------------------------------------------------------------------------
 # PhaseResult
@@ -190,9 +190,9 @@ class TestAdvanceEpic:
 
     def test_advance_epic_preserves_timing(self):
         """advance_epic preserves timing fields from original state."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        started = datetime(2025, 1, 1, tzinfo=timezone.utc).replace(tzinfo=None)
+        started = datetime(2025, 1, 1, tzinfo=UTC).replace(tzinfo=None)
         state = State(
             current_epic=1,
             current_story="1.2",

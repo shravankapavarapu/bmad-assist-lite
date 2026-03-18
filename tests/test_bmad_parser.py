@@ -6,17 +6,13 @@ Covers: frontmatter parsing, BmadDocument creation, epic/story extraction,
 
 from pathlib import Path
 
-import pytest
-
 from bmad_assist_lite.bmad.parser import (
     BmadDocument,
     EpicDocument,
-    EpicStory,
     _parse_frontmatter,
     parse_bmad_file,
     parse_epic_file,
 )
-
 
 # ---------------------------------------------------------------------------
 # _parse_frontmatter

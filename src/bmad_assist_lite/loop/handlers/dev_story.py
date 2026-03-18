@@ -11,7 +11,9 @@ class DevStoryHandler(BaseHandler):
 
     @property
     def phase_name(self) -> str:
+        """Return the phase name."""
         return "dev_story"
 
     def build_context(self, state: State) -> dict[str, Any]:
+        """Build template context for this phase."""
         return self._build_common_context(state)

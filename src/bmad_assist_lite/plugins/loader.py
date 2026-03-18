@@ -172,6 +172,7 @@ def load_all_plugins(
 
     Returns:
         The populated registry.
+
     """
     # 1. Built-in defaults
     _load_builtin_providers(registry)

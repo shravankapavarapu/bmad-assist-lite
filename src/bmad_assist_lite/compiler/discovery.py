@@ -5,7 +5,7 @@ from __future__ import annotations
 import glob
 import logging
 import re
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,7 @@ from bmad_assist_lite.core.exceptions import AmbiguousFileError, CompilerError
 logger = logging.getLogger(__name__)
 
 
-class LoadStrategy(str, Enum):
+class LoadStrategy(StrEnum):
     """File loading strategy."""
 
     FULL_LOAD = "FULL_LOAD"
