@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 __all__ = ["run_loop"]
 
 
+def _finalize_last_epic(state: State, state_path: Path, project_path: Path) -> None:
+    """Mark the final epic complete in state and sync to sprint status."""
+    if state.current_epic is not None:
+        completed = list(state.completed_epics)
+        if state.current_epic not in completed:
+            completed.append(state.current_epic)
+        state = state.model_copy(update={"completed_epics": completed})
+        save_state(state, state_path)
+        trigger_sync(state, project_path)
+
+
 def _print_phase_banner(phase_name: str, epic: int | str | None, story: str | None) -> None:
     """Print phase banner to console and run log."""
     banner = f" [{phase_name.upper().replace('_', ' ')}]"
@@ -69,6 +80,7 @@ def run_loop(
     epics: list[int],
     stories_for_epic: dict[int, list[str]],
     resume_state: State | None = None,
+    single_story: bool = False,
 ) -> LoopExitReason:
     """Run the main BMAD development loop.
 
@@ -78,6 +90,7 @@ def run_loop(
         epics: List of epic numbers to process.
         stories_for_epic: Mapping of epic number to story IDs.
         resume_state: Optional state to resume from.
+        single_story: If True, exit after completing one story.
 
     Returns:
         LoopExitReason indicating how the loop ended.
@@ -185,6 +198,12 @@ def run_loop(
                         write_progress(
                             f"  Story {state.current_story}: quality gates PASSED"
                         )
+                        if single_story:
+                            logger.info(
+                                "Single-story mode: exiting after story %s",
+                                state.current_story,
+                            )
+                            return LoopExitReason.COMPLETED
                         # Fall through to normal advance_story below
 
                     elif action == "skip_story":
@@ -198,6 +217,12 @@ def run_loop(
                             f"  Story {state.current_story}: quality gates FAILED"
                             " — marked blocked, continuing"
                         )
+                        if single_story:
+                            logger.info(
+                                "Single-story mode: exiting after story %s",
+                                state.current_story,
+                            )
+                            return LoopExitReason.COMPLETED
                         next_state = skip_to_next_story(state, story_phases, stories)
                         if next_state is not None:
                             clear_story_cache(project_path)
@@ -210,6 +235,7 @@ def run_loop(
                         else:
                             ep = advance_epic(state, epics, stories_for_epic, story_phases)
                             if ep is None:
+                                _finalize_last_epic(state, state_path, project_path)
                                 logger.info("All epics completed!")
                                 return LoopExitReason.COMPLETED
                             clear_story_cache(project_path)
@@ -236,6 +262,7 @@ def run_loop(
                     # All teardown phases done - advance epic
                     next_state = advance_epic(state, epics, stories_for_epic, story_phases)
                     if next_state is None:
+                        _finalize_last_epic(state, state_path, project_path)
                         logger.info("All epics completed!")
                         return LoopExitReason.COMPLETED
                     clear_story_cache(project_path)
@@ -252,6 +279,12 @@ def run_loop(
                     and new_state.current_story == state.current_story
                 ):
                     # Story loop completed - start epic teardown
+                    if single_story:
+                        logger.info(
+                            "Single-story mode: exiting after story %s",
+                            state.current_story,
+                        )
+                        return LoopExitReason.COMPLETED
                     clear_story_cache(project_path)
                     if epic_teardown:
                         state = state.with_phase(Phase(epic_teardown[0]))
@@ -259,10 +292,18 @@ def run_loop(
                         # No teardown - advance epic directly
                         next_state = advance_epic(state, epics, stories_for_epic, story_phases)
                         if next_state is None:
+                            _finalize_last_epic(state, state_path, project_path)
                             logger.info("All epics completed!")
                             return LoopExitReason.COMPLETED
                         state = next_state
                 else:
+                    if single_story and new_state.current_story != state.current_story:
+                        # About to advance to next story — exit instead
+                        logger.info(
+                            "Single-story mode: exiting after story %s",
+                            state.current_story,
+                        )
+                        return LoopExitReason.COMPLETED
                     # Advancing to next story within same epic
                     if new_state.current_story != state.current_story:
                         clear_story_cache(project_path)
