@@ -1,0 +1,92 @@
+# generated: 2026-03-17
+# last_updated: 2026-03-17
+# project: bmad-assist-lite-parallel-stories
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-03-17
+last_updated: 2026-03-17
+project: bmad-assist-lite-parallel-stories
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: Foundation & Configuration
+  epic-1: backlog
+  1-1-parallel-module-structure-and-configuration-model: backlog
+  1-2-git-operations-wrapper: backlog
+  1-3-existing-code-integration: backlog
+  epic-1-retrospective: optional
+
+  # Epic 2: Dependency Resolution
+  epic-2: backlog
+  2-1-epic-dependency-parsing-and-dag-construction: backlog
+  2-2-circular-dependency-detection-and-scheduling-scores: backlog
+  2-3-ready-story-discovery-and-re-evaluation: backlog
+  epic-2-retrospective: optional
+
+  # Epic 3: Parallel Execution Core
+  epic-3: backlog
+  3-1-worktree-manager: backlog
+  3-2-orchestrator-core-loop-and-subprocess-spawning: backlog
+  3-3-parallel-state-persistence: backlog
+  3-4-parallel-run-cli-command-and-branch-guard: backlog
+  3-5-live-output-multiplexing: backlog
+  3-6-graceful-shutdown-and-drain-mode: backlog
+  epic-3-retrospective: optional
+
+  # Epic 4: Merge & Integration Safety
+  epic-4: backlog
+  4-1-sequential-merge-queue-and-git-merge: backlog
+  4-2-claude-cli-merge-conflict-resolution: backlog
+  4-3-post-merge-quality-gate: backlog
+  4-4-post-merge-fix-quality-gate-and-sprint-status-update: backlog
+  epic-4-retrospective: optional
+
+  # Epic 5: Resilience & Recovery
+  epic-5: backlog
+  5-1-crash-recovery-and-resume-in-flight-stories: backlog
+  5-2-orphan-detection-and-worktree-pruning: backlog
+  5-3-blocked-story-handling-and-dependency-cascade: backlog
+  5-4-status-cli-command: backlog
+  5-5-unblock-cli-command: backlog
+  epic-5-retrospective: optional
+
+  # Epic 6: Observability & Epic Teardown
+  epic-6: backlog
+  6-1-orchestrator-log-file: backlog
+  6-2-enhanced-status-display-with-phase-info: backlog
+  6-3-summary-report-generation: backlog
+  6-4-epic-teardown-phases: backlog
+  epic-6-retrospective: optional

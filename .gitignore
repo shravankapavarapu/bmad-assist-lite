@@ -20,12 +20,21 @@ venv/
 /_bmad
 /.claude/commands/bmad*
 /.claude/skills/bmad*
+settings.local.json
 
 # bmad-assist-lite runtime artifacts
+.bmad-assist-lite/
 .bmad-assist-lite/cache/
 .bmad-assist-lite/state.yaml
 .bmad-assist-lite/sprint-status.yaml
 .bmad-assist-lite/running.lock
+
+bmad-assist-lite.yaml
+
+/_bmad-output/implementation-artifacts/code-reviews/
+/_bmad-output/implementation-artifacts/story-validations/
+
+/_bmad-output/planning-artifacts/implementation-readiness-report-*.md
 
 # OS
 .DS_Store
