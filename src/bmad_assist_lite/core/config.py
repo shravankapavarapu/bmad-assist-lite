@@ -14,6 +14,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from bmad_assist_lite.core.exceptions import ConfigError
+from bmad_assist_lite.parallel.config import ParallelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +212,9 @@ class Config(BaseModel):
         default=None, description="Fallback quality gate commands"
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
+    parallel: ParallelConfig | None = Field(
+        default=None, description="Parallel story execution configuration"
+    )
 
 
 # ============================================================================
