@@ -287,6 +287,12 @@ def _reset_config() -> None:
     _config = None
 
 
+# Tool's package source root — where bmad-assist-lite's own code lives.
+# .env with API keys lives here, separate from any target project.
+# core/config.py -> core/ -> bmad_assist_lite/ -> src/ -> repo root
+_TOOL_SOURCE_ROOT: Path = Path(__file__).resolve().parent.parent.parent.parent
+
+
 def load_config_with_project(
     project_path: str | Path | None = None,
     *,
@@ -303,8 +309,8 @@ def load_config_with_project(
         GLOBAL_CONFIG_PATH if global_config_path is None else Path(global_config_path).expanduser()
     )
 
-    # Load .env if exists
-    env_file = resolved_project / ".env"
+    # Load .env from the tool's own source root (API keys belong to the tool, not the target)
+    env_file = _TOOL_SOURCE_ROOT / ".env"
     if env_file.exists():
         try:
             from dotenv import load_dotenv
