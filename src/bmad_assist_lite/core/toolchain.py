@@ -2,6 +2,7 @@
 
 import json
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,11 +66,27 @@ def _detect_python(project_root: Path) -> ToolchainCommands | None:
     if not (project_root / "pyproject.toml").exists():
         return None
 
+    prefix = _detect_venv_prefix(project_root)
     return ToolchainCommands(
-        lint="ruff check src/",
-        typecheck="mypy src/",
-        test="pytest -q --tb=short --no-header",
+        lint=f"{prefix}ruff check src/",
+        typecheck=f"{prefix}mypy src/",
+        test=f"{prefix}pytest -q --tb=short --no-header",
     )
+
+
+def _detect_venv_prefix(project_root: Path) -> str:
+    """Return a command prefix for the project's .venv, or empty string."""
+    venv_dir = project_root / ".venv"
+    if not venv_dir.is_dir():
+        return ""
+    if sys.platform == "win32":
+        python = venv_dir / "Scripts" / "python.exe"
+    else:
+        python = venv_dir / "bin" / "python"
+    if not python.exists():
+        return ""
+    logger.debug("Detected .venv at %s", venv_dir)
+    return f"{python} -m "
 
 
 def _detect_rust(project_root: Path) -> ToolchainCommands | None:
