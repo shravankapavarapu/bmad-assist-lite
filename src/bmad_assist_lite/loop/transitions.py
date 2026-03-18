@@ -102,6 +102,10 @@ def advance_epic(
         return None
 
     if current_epic is not None and current_epic in epics:
+        completed = list(state.completed_epics)
+        if current_epic not in completed:
+            completed.append(current_epic)
+
         epic_idx = epics.index(int(current_epic))
         if epic_idx + 1 < len(epics):
             next_epic = epics[epic_idx + 1]
@@ -109,9 +113,6 @@ def advance_epic(
             if next_stories:
                 first_phase = Phase(phase_list[0])
                 logger.info("Epic %s completed. Advancing to epic %s", current_epic, next_epic)
-                completed = list(state.completed_epics)
-                if current_epic not in completed:
-                    completed.append(current_epic)
                 return state.model_copy(
                     update={
                         "current_epic": next_epic,
