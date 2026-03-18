@@ -1,6 +1,7 @@
 """Tests for bmad_assist_lite.core.toolchain."""
 
 import json
+import sys
 
 from bmad_assist_lite.core.toolchain import ToolchainCommands, detect_toolchain
 
@@ -113,3 +114,36 @@ class TestDetectToolchain:
         (tmp_path / "package.json").write_text(json.dumps({"name": "foo"}))
         result = detect_toolchain(tmp_path)
         assert result == ToolchainCommands()
+
+    def test_python_with_venv(self, tmp_path):
+        """Python project with .venv prefixes commands with venv python."""
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'foo'\n")
+        venv_dir = tmp_path / ".venv"
+        if sys.platform == "win32":
+            scripts_dir = venv_dir / "Scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "python.exe").write_text("")
+            expected_prefix = f"{scripts_dir / 'python.exe'} -m "
+        else:
+            bin_dir = venv_dir / "bin"
+            bin_dir.mkdir(parents=True)
+            (bin_dir / "python").write_text("")
+            expected_prefix = f"{bin_dir / 'python'} -m "
+        result = detect_toolchain(tmp_path)
+        assert result.lint == f"{expected_prefix}ruff check src/"
+        assert result.typecheck == f"{expected_prefix}mypy src/"
+        assert result.test == f"{expected_prefix}pytest -q --tb=short --no-header"
+
+    def test_python_without_venv(self, tmp_path):
+        """Python project without .venv uses bare commands."""
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'foo'\n")
+        result = detect_toolchain(tmp_path)
+        assert result.lint == "ruff check src/"
+        assert result.typecheck == "mypy src/"
+
+    def test_python_with_empty_venv_dir(self, tmp_path):
+        """Python project with .venv dir but no python binary uses bare commands."""
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'foo'\n")
+        (tmp_path / ".venv").mkdir()
+        result = detect_toolchain(tmp_path)
+        assert result.lint == "ruff check src/"
