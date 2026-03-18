@@ -23,6 +23,7 @@ class PluginRegistry:
     """
 
     def __init__(self) -> None:
+        """Initialize empty registries for providers, handlers, and workflows."""
         self._providers: dict[str, type] = {}
         self._phase_handlers: dict[str, type] = {}
         self._workflow_compilers: dict[str, Any] = {}
@@ -37,6 +38,7 @@ class PluginRegistry:
         Args:
             name: Provider name (e.g., "codex", "opencode").
             provider_class: BaseProvider subclass.
+
         """
         if name in self._providers:
             logger.info("Provider '%s' overridden by plugin", name)
@@ -49,6 +51,7 @@ class PluginRegistry:
         Args:
             phase_name: Phase name (e.g., "atdd", "test_review").
             handler_class: BaseHandler subclass.
+
         """
         if phase_name in self._phase_handlers:
             logger.info("Phase handler '%s' overridden by plugin", phase_name)
@@ -67,6 +70,7 @@ class PluginRegistry:
             name: Workflow name (e.g., "my-custom-workflow").
             compiler_module: Module with compile() function.
             templates_dir: Optional path to workflow template files.
+
         """
         if name in self._workflow_compilers:
             logger.info("Workflow compiler '%s' overridden by plugin", name)
@@ -93,14 +97,17 @@ class PluginRegistry:
 
     @property
     def providers(self) -> dict[str, type]:
+        """Return a copy of registered providers."""
         return dict(self._providers)
 
     @property
     def phase_handlers(self) -> dict[str, type]:
+        """Return a copy of registered phase handlers."""
         return dict(self._phase_handlers)
 
     @property
     def workflow_compilers(self) -> dict[str, Any]:
+        """Return a copy of registered workflow compilers."""
         return dict(self._workflow_compilers)
 
     def mark_loaded(self, plugin_name: str) -> None:
@@ -109,4 +116,5 @@ class PluginRegistry:
 
     @property
     def loaded_plugins(self) -> list[str]:
+        """Return a copy of loaded plugin names."""
         return list(self._loaded_plugins)

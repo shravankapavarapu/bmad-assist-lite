@@ -16,6 +16,7 @@ class RetrospectiveCompiler:
 
     @property
     def workflow_name(self) -> str:
+        """Return the workflow name."""
         return "retrospective"
 
     def get_workflow_dir(self, context: CompilerContext) -> Path:
@@ -24,12 +25,15 @@ class RetrospectiveCompiler:
         return Path(str(ref))
 
     def get_required_files(self) -> list[str]:
+        """Return glob patterns for required files."""
         return ["**/epics*.md", "**/prd*.md"]
 
     def get_variables(self) -> dict[str, Any]:
+        """Return default variables for this workflow."""
         return {}
 
     def validate_context(self, context: CompilerContext) -> None:
+        """Validate that project root exists."""
         if not context.project_root.exists():
             raise CompilerError(f"Project root not found: {context.project_root}")
 

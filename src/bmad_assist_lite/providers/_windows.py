@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 IS_WINDOWS = sys.platform == "win32"
 
+# Win32 API constants
+CREATE_NO_WINDOW = 0x08000000
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
 
 def get_subprocess_kwargs() -> dict[str, Any]:
     """Get platform-specific kwargs for subprocess.Popen.
@@ -26,7 +30,6 @@ def get_subprocess_kwargs() -> dict[str, Any]:
     - Unix: start_new_session=True (own process group for clean termination)
     """
     if IS_WINDOWS:
-        CREATE_NO_WINDOW = 0x08000000
         return {"creationflags": CREATE_NO_WINDOW}
     else:
         return {"start_new_session": True}
@@ -78,7 +81,6 @@ def is_pid_alive(pid: int) -> bool:
             import ctypes
 
             kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined,unused-ignore]
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if handle:
                 kernel32.CloseHandle(handle)

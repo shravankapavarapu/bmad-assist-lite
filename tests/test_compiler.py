@@ -8,10 +8,9 @@ from pathlib import Path
 import pytest
 
 from bmad_assist_lite.compiler.core import get_workflow_compiler
-from bmad_assist_lite.compiler.types import CompiledWorkflow, CompilerContext, WorkflowIR
+from bmad_assist_lite.compiler.types import CompilerContext, WorkflowIR
 from bmad_assist_lite.compiler.variables import resolve_variables
 from bmad_assist_lite.core.exceptions import CompilerError
-
 
 # ---------------------------------------------------------------------------
 # get_workflow_compiler

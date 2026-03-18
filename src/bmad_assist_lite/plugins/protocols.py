@@ -22,6 +22,7 @@ class ProviderPlugin(Protocol):
             def register(self, registry):
                 from my_codex import CodexProvider
                 registry.register_provider("codex", CodexProvider)
+
     """
 
     name: str
@@ -44,6 +45,7 @@ class PhasePlugin(Protocol):
             def register(self, registry):
                 from my_testarch import ATDDHandler
                 registry.register_phase_handler("atdd", ATDDHandler)
+
     """
 
     name: str
@@ -65,6 +67,7 @@ class WorkflowPlugin(Protocol):
 
             def register(self, registry):
                 registry.register_workflow("my-workflow", my_compiler_module, templates_dir)
+
     """
 
     name: str

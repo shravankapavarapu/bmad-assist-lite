@@ -87,6 +87,7 @@ def parse_bmad_file(file_path: Path) -> BmadDocument:
 
     Returns:
         BmadDocument with parsed frontmatter and content.
+
     """
     text = file_path.read_text(encoding="utf-8")
     frontmatter, content = _parse_frontmatter(text)
@@ -182,6 +183,7 @@ def parse_epic_file(file_path: Path, epic_number: int | None = None) -> EpicDocu
 
     Returns:
         EpicDocument with parsed stories.
+
     """
     text = file_path.read_text(encoding="utf-8")
     frontmatter, content = _parse_frontmatter(text)

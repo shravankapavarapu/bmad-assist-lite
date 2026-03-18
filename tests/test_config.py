@@ -14,7 +14,6 @@ from bmad_assist_lite.core.config import (
 )
 from bmad_assist_lite.core.exceptions import ConfigError
 
-
 # ============================================================================
 # load_config
 # ============================================================================

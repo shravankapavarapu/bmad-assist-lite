@@ -1,6 +1,5 @@
 """Tests for sprint status model, YAML I/O, key resolution, and backlog discovery."""
 
-import pytest
 import yaml
 
 from bmad_assist_lite.core.sprint_status import (
@@ -407,7 +406,6 @@ class TestRichDictFormat:
         save_sprint_status(loaded, path)
 
         # Re-read raw YAML to verify extra fields preserved
-        import yaml
 
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert raw["project"] == "webdozo-v1"

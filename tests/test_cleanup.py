@@ -2,8 +2,6 @@
 
 import logging
 
-import pytest
-
 from bmad_assist_lite.core.state import Phase
 from bmad_assist_lite.loop.cleanup import cleanup_for_phase
 

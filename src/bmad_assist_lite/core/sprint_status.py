@@ -8,7 +8,7 @@ Surgical text updates preserve YAML comments, quoting, and formatting.
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +41,7 @@ INACTIVE_STATUSES = DONE_STATUSES | frozenset({"blocked", "deferred", "optional"
 
 def _utc_now() -> datetime:
     """Get current UTC datetime without timezone info."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class SprintStatus(BaseModel):
@@ -135,6 +135,7 @@ class SprintStatus(BaseModel):
 
         Returns:
             (epic_num, story_num, full_key) or None if no backlog stories.
+
         """
         result = self.find_backlog_stories()
         return result[0] if result else None
@@ -228,13 +229,14 @@ def get_sprint_status_path(project_root: Path) -> Path:
 
 
 def _patch_yaml_value(text: str, key: str, new_value: str) -> tuple[str, bool]:
-    """Surgically update a key's value in raw YAML text, preserving formatting.
+    r"""Surgically update a key's value in raw YAML text, preserving formatting.
 
-    Handles both simple (``key: value``) and rich dict (``key:\\n  status: value``) formats.
+    Handles both simple (``key: value``) and rich dict (``key:\n  status: value``) formats.
     Preserves the original quoting style (double, single, or unquoted).
 
     Returns:
         (modified_text, was_found) tuple.
+
     """
     lines = text.split("\n")
     escaped_key = re.escape(key)

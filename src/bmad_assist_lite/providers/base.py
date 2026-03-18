@@ -133,6 +133,7 @@ class ExitStatus(Enum):
 
     @classmethod
     def from_code(cls, exit_code: int) -> "ExitStatus":
+        """Classify a process exit code into a semantic status."""
         if exit_code == 0:
             return cls.SUCCESS
         if exit_code == 2:
@@ -149,6 +150,7 @@ class ExitStatus(Enum):
 
     @staticmethod
     def get_signal_number(exit_code: int) -> int | None:
+        """Return the signal number from exit code, or None if not signal."""
         if exit_code > 128:
             return exit_code - 128
         return None
@@ -210,10 +212,13 @@ class BaseProvider(ABC):
 
     @property
     @abstractmethod
-    def provider_name(self) -> str: ...
+    def provider_name(self) -> str:
+        """Return the provider identifier string."""
+        ...
 
     @property
     def default_model(self) -> str | None:
+        """Return the default model identifier, or None."""
         return None
 
     @abstractmethod
@@ -237,8 +242,10 @@ class BaseProvider(ABC):
         ...
 
     @abstractmethod
-    def supports_model(self, model: str) -> bool: ...
+    def supports_model(self, model: str) -> bool:
+        """Return True if this provider supports the given model."""
+        ...
 
     def cancel(self) -> None:
         """Cancel any running operation. Default no-op."""
-        pass
+        return

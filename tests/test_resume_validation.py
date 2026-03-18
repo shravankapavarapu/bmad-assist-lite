@@ -1,6 +1,5 @@
 """Tests for resume validation against sprint-status.yaml."""
 
-import pytest
 
 from bmad_assist_lite.core.resume_validation import (
     ResumeValidationResult,

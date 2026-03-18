@@ -24,6 +24,7 @@ class CommandResult:
 
     @property
     def success(self) -> bool:
+        """Return True if the command exited with code 0."""
         return self.exit_code == 0
 
 

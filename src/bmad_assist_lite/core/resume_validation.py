@@ -76,6 +76,7 @@ def validate_resume_state(
 
     Returns:
         ResumeValidationResult with potentially advanced state.
+
     """
     result = ResumeValidationResult(state=state)
 

@@ -24,6 +24,7 @@ def cleanup_for_phase(phase: Phase, project_path: Path) -> list[str]:
 
     Returns:
         List of cleaned file paths (as strings).
+
     """
     cleaned: list[str] = []
 

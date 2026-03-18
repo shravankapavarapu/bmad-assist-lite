@@ -4,7 +4,6 @@ import pytest
 
 from bmad_assist_lite.core.paths import ProjectPaths, _reset_paths, get_paths, init_paths
 
-
 # ============================================================================
 # ProjectPaths defaults
 # ============================================================================

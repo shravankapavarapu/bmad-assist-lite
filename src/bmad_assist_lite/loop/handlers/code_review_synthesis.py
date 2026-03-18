@@ -8,8 +8,6 @@ import json
 import logging
 import re
 import subprocess
-import time
-from pathlib import Path
 from typing import Any
 
 from bmad_assist_lite.core.state import State
@@ -74,9 +72,11 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
     @property
     def phase_name(self) -> str:
+        """Return the phase name."""
         return "code_review_synthesis"
 
     def build_context(self, state: State) -> dict[str, Any]:
+        """Build template context for this phase."""
         return self._build_common_context(state)
 
     def _format_evidence_context(self, evidence_data: dict[str, Any] | None) -> str:
@@ -175,9 +175,6 @@ class CodeReviewSynthesisHandler(BaseHandler):
                 pass
             elif isinstance(reviews, dict):
                 reviews = reviews.get("reviews", [])
-
-            # Capture git state before synthesis for diff
-            diff_stat_before = self._capture_git_diff_stat()
 
             prompt = self.render_prompt(state)
 

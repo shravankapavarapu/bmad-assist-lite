@@ -7,7 +7,7 @@ story variables, and input_file_patterns.
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -151,7 +151,7 @@ def _compute_story_variables(
     date_override: str | None = None,
 ) -> dict[str, Any]:
     """Compute story-specific variables."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     date_str = date_override or now.strftime("%Y-%m-%d")
 
     return {
@@ -239,9 +239,7 @@ def resolve_variables(
             date_override,
         )
         for k, v in story_vars.items():
-            if k in ("date", "timestamp"):
-                resolved[k] = v
-            elif k not in resolved:
+            if k in ("date", "timestamp") or k not in resolved:
                 resolved[k] = v
 
     # Step 5: Recursive resolution

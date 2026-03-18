@@ -39,10 +39,12 @@ class MasterProviderConfig(BaseModel):
 
     @property
     def display_model(self) -> str:
+        """Return the display name, falling back to model identifier."""
         return self.model_name or self.model
 
     @property
     def settings_path(self) -> Path | None:
+        """Return the resolved settings file path, or None."""
         if self.settings is None:
             return None
         return Path(self.settings).expanduser()
@@ -60,10 +62,12 @@ class MultiProviderConfig(BaseModel):
 
     @property
     def display_model(self) -> str:
+        """Return the display name, falling back to model identifier."""
         return self.model_name or self.model
 
     @property
     def settings_path(self) -> Path | None:
+        """Return the resolved settings file path, or None."""
         if self.settings is None:
             return None
         return Path(self.settings).expanduser()

@@ -19,9 +19,11 @@ class FixQualityGateHandler(BaseHandler):
 
     @property
     def phase_name(self) -> str:
+        """Return the phase name."""
         return "fix_quality_gate"
 
     def build_context(self, state: State) -> dict[str, Any]:
+        """Build template context for this phase."""
         return self._build_common_context(state)
 
     def execute(self, state: State) -> PhaseResult:

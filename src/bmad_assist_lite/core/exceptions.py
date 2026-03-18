@@ -46,6 +46,7 @@ class ConfigValidationError(ConfigError):
     """Validation error with structured Pydantic details."""
 
     def __init__(self, message: str, errors: list[dict[str, Any]]) -> None:
+        """Initialize with message and structured Pydantic validation errors."""
         super().__init__(message)
         self.errors = errors
 
@@ -76,6 +77,7 @@ class ProviderTimeoutError(ProviderError):
         message: str,
         partial_result: "ProviderResult | None" = None,
     ) -> None:
+        """Initialize with message and optional partial result from timeout."""
         super().__init__(message)
         self.partial_result = partial_result
 
@@ -92,6 +94,7 @@ class ProviderExitCodeError(ProviderError):
         stdout: str = "",
         command: tuple[str, ...] = (),
     ) -> None:
+        """Initialize with exit code, status classification, and process output."""
         super().__init__(message)
         self.exit_code = exit_code
         self.exit_status = exit_status
@@ -128,6 +131,7 @@ class VariableError(BmadAssistError):
         sources_checked: list[str] | None = None,
         suggestion: str = "",
     ) -> None:
+        """Initialize with variable name, checked sources, and suggestion."""
         super().__init__(message)
         self.variable_name = variable_name
         self.sources_checked = sources_checked or []
@@ -144,6 +148,7 @@ class AmbiguousFileError(BmadAssistError):
         candidates: list[Path] | None = None,
         suggestion: str = "",
     ) -> None:
+        """Initialize with pattern name, candidate paths, and suggestion."""
         super().__init__(message)
         self.pattern_name = pattern_name
         self.candidates = candidates or []

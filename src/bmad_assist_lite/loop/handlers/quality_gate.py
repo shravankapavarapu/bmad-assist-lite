@@ -28,6 +28,7 @@ class QualityGateHandler:
     """Non-LLM handler: runs quality gate commands and reports results."""
 
     def __init__(self, config: Config, project_path: Path) -> None:
+        """Initialize the handler with config and project path."""
         self.config = config
         self.project_path = project_path
 
