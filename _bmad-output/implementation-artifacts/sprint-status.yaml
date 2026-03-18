@@ -45,8 +45,8 @@ development_status:
   # Epic 1: Foundation & Configuration
   epic-1: in-progress
   1-1-parallel-module-structure-and-configuration-model: done
-  1-2-git-operations-wrapper: review
-  1-3-existing-code-integration: backlog
+  1-2-git-operations-wrapper: done
+  1-3-existing-code-integration: done
   epic-1-retrospective: optional
 
   # Epic 2: Dependency Resolution

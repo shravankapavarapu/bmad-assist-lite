@@ -25,6 +25,13 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+parallel_app = typer.Typer(
+    name="parallel",
+    help="Parallel story execution commands.",
+    no_args_is_help=True,
+)
+app.add_typer(parallel_app, name="parallel")
+
 
 def _setup_logging(verbosity: int) -> None:
     """Configure logging based on verbosity level."""
@@ -137,6 +144,11 @@ def run(
         count=True,
         help="Increase verbosity (-v for INFO, -vv for DEBUG).",
     ),
+    single_story: bool = typer.Option(
+        False,
+        "--single-story",
+        help="Exit after completing a single story.",
+    ),
     resume: bool = typer.Option(
         False,
         "--resume",
@@ -213,10 +225,15 @@ def run(
         typer.echo("No backlog stories match the specified filters.", err=True)
         raise typer.Exit(1)
 
-    # Filter by --story option (start from specific story number)
+    # Filter by --story option
     if story:
         for e_num, story_list in list(epic_stories.items()):
-            filtered = [(en, sn, fk) for en, sn, fk in story_list if sn >= story]
+            if single_story:
+                # Exact match: only the specific story
+                filtered = [(en, sn, fk) for en, sn, fk in story_list if sn == story]
+            else:
+                # Start from specific story number (existing behavior)
+                filtered = [(en, sn, fk) for en, sn, fk in story_list if sn >= story]
             if filtered:
                 epic_stories[e_num] = filtered
             else:
@@ -322,6 +339,7 @@ def run(
         epics=epics_list,
         stories_for_epic=stories_for_epic,
         resume_state=resume_state,
+        single_story=single_story,
     )
 
     # Close file log handler

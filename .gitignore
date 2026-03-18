@@ -50,3 +50,5 @@ htmlcov/
 
 #ENV file: 
 .env
+
+nul
