@@ -1,5 +1,5 @@
 # generated: 2026-03-17
-# last_updated: 2026-03-17
+# last_updated: 2026-03-18
 # project: bmad-assist-lite-parallel-stories
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-03-18
-last_updated: 2026-03-17
+last_updated: 2026-03-18
 project: bmad-assist-lite-parallel-stories
 project_key: NOKEY
 tracking_system: file-system
@@ -43,15 +43,15 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # Epic 1: Foundation & Configuration
-  epic-1: in-progress
+  epic-1: done
   1-1-parallel-module-structure-and-configuration-model: done
   1-2-git-operations-wrapper: done
   1-3-existing-code-integration: done
   epic-1-retrospective: optional
 
   # Epic 2: Dependency Resolution
-  epic-2: backlog
-  2-1-epic-dependency-parsing-and-dag-construction: backlog
+  epic-2: in-progress
+  2-1-epic-dependency-parsing-and-dag-construction: review
   2-2-circular-dependency-detection-and-scheduling-scores: backlog
   2-3-ready-story-discovery-and-re-evaluation: backlog
   epic-2-retrospective: optional
