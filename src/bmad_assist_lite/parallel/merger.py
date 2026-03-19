@@ -10,9 +10,15 @@ content is applied, validated, and committed automatically.
 
 Post-merge quality gates (``run_post_merge_qg()``) run lint, typecheck,
 build, and test on the base branch after each successful merge so that
-integration issues between parallel stories are caught immediately.  This
-module does **not** write to ``parallel-state.yaml``; state transitions are
-the orchestrator's responsibility.
+integration issues between parallel stories are caught immediately.
+
+Post-merge fix (``run_post_merge_fix()``) invokes Claude CLI with the
+``fix-quality-gate`` workflow to auto-fix integration failures on the base
+branch.  ``update_sprint_status_done()`` marks a story as done in
+``sprint-status.yaml``.
+
+This module does **not** write to ``parallel-state.yaml``; state transitions
+are the orchestrator's responsibility.
 
 All git operations use ``_run_git()`` from ``git_ops`` — never raw
 ``subprocess``.  Shell quality-gate commands use ``run_command()`` from
@@ -22,6 +28,7 @@ All git operations use ``_run_git()`` from ``git_ops`` — never raw
 from __future__ import annotations
 
 import asyncio
+import importlib.resources
 import logging
 import re
 import subprocess
@@ -46,6 +53,7 @@ from bmad_assist_lite.providers._windows import (
 
 if TYPE_CHECKING:
     from bmad_assist_lite.core.config import Config
+    from bmad_assist_lite.parallel.config import ParallelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -835,6 +843,208 @@ def run_post_merge_qg(
 
 
 # ============================================================================
+# Post-Merge Fix via Claude CLI
+# ============================================================================
+
+
+def run_post_merge_fix(
+    story_id: str,
+    project_root: Path,
+    config: Config | None = None,
+    attempt: int = 1,
+    timeout: int = 300,
+) -> PostMergeQGResult:
+    """Attempt to fix post-merge quality gate failures using Claude CLI.
+
+    Reads the failure report from the cache, loads the ``fix-quality-gate``
+    workflow instructions, and invokes ``claude --print`` with the combined
+    prompt.  After Claude CLI completes, any changes are committed and the
+    quality gate is re-run to verify the fix.
+
+    Args:
+        story_id: Story identifier (e.g. ``"4.4"``).
+        project_root: Path to the main git repository (base branch).
+        config: Optional configuration for QG command sourcing.
+        attempt: Current fix attempt number (1-based).  When ``> 1``,
+            retry context is prepended to the prompt.
+        timeout: Timeout in seconds for Claude CLI invocation.
+
+    Returns:
+        A :class:`PostMergeQGResult` from the re-run quality gate.
+        ``all_passed=False`` when the fix attempt itself fails (Claude CLI
+        error, no changes produced, etc.).
+
+    Raises:
+        ParallelError: If Claude CLI (``claude``) is not found on PATH.
+
+    """
+    tag = f"[FIX-QG|post-merge|{story_id}]"
+    logger.info("%s Starting fix attempt #%d", tag, attempt)
+
+    # ------------------------------------------------------------------
+    # Step 1: Read the failure report from cache
+    # ------------------------------------------------------------------
+    report_path = (
+        project_root / ".bmad-assist-lite" / "cache" / f"post-merge-qg-failures-{story_id}.md"
+    )
+    failure_report = ""
+    if report_path.exists():
+        try:
+            failure_report = report_path.read_text(encoding="utf-8")
+            logger.info("%s Loaded failure report from %s", tag, report_path)
+        except OSError as exc:
+            logger.warning("%s Failed to read failure report: %s", tag, exc)
+            failure_report = "Failed to read failure report."
+    else:
+        logger.warning("%s No failure report found at %s", tag, report_path)
+        failure_report = "No failure report available."
+
+    # ------------------------------------------------------------------
+    # Step 2: Load fix-quality-gate workflow instructions
+    # ------------------------------------------------------------------
+    try:
+        instructions_ref = (
+            importlib.resources.files("bmad_assist_lite.workflows")
+            / "fix-quality-gate"
+            / "instructions.xml"
+        )
+        workflow_instructions = instructions_ref.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        logger.warning("%s Failed to load workflow instructions: %s", tag, exc)
+        workflow_instructions = ""
+
+    # ------------------------------------------------------------------
+    # Step 3: Build the fix prompt
+    # ------------------------------------------------------------------
+    retry_context = ""
+    if attempt > 1:
+        retry_context = (
+            "\n\n<retry-context>\n"
+            f"This is fix attempt #{attempt}. A previous fix attempt did not fully resolve the\n"
+            "quality gate failures. The failure report below shows the CURRENT errors after\n"
+            "the previous fix. Do not repeat the same approach — analyze what the previous\n"
+            "attempt likely tried and choose a different strategy. Read the failing files\n"
+            "carefully before making changes.\n"
+            "</retry-context>"
+        )
+
+    prompt = (
+        f"{workflow_instructions}{retry_context}\n\n"
+        f"<qa-failure-report>\n{failure_report}\n</qa-failure-report>"
+    )
+
+    # ------------------------------------------------------------------
+    # Step 4: Invoke Claude CLI via Popen (Architecture Rule 5)
+    # ------------------------------------------------------------------
+    logger.info("%s Invoking Claude CLI for fix", tag)
+    proc: subprocess.Popen[str] | None = None
+    try:
+        proc = subprocess.Popen(
+            ["claude", "--print"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(project_root),
+            text=True,
+            encoding="utf-8",
+            **get_subprocess_kwargs(),
+        )
+    except FileNotFoundError as exc:
+        raise ParallelError(
+            f"{tag} Claude CLI ('claude') not found on PATH. "
+            "Ensure Claude CLI is installed and available."
+        ) from exc
+
+    try:
+        stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logger.warning("%s Claude CLI timed out after %ds — killing process tree", tag, timeout)
+        kill_process(proc)
+        proc.wait()
+        return PostMergeQGResult(all_passed=False, story_id=story_id)
+    finally:
+        if proc is not None and proc.poll() is None:
+            kill_process(proc)
+
+    if proc.returncode != 0:
+        error_msg = (stderr or "").strip() or (stdout or "").strip()
+        logger.error("%s Claude CLI failed (rc=%d): %s", tag, proc.returncode, error_msg)
+        return PostMergeQGResult(all_passed=False, story_id=story_id)
+
+    logger.info("%s Claude CLI completed successfully", tag)
+
+    # ------------------------------------------------------------------
+    # Step 5: Check for changes, commit if any
+    # ------------------------------------------------------------------
+    status_result = _run_git(["status", "--porcelain"], cwd=project_root, check=False)
+    if not status_result.stdout.strip():
+        logger.warning("%s Claude CLI produced no changes — treating as failed attempt", tag)
+        return PostMergeQGResult(all_passed=False, story_id=story_id)
+
+    commit_msg = f"fix: post-merge integration fix for story {story_id}"
+    try:
+        _run_git(["add", "-A"], cwd=project_root)
+        _run_git(["commit", "-m", commit_msg], cwd=project_root)
+        logger.info("%s Committed fix: %s", tag, commit_msg)
+    except ParallelError as exc:
+        logger.error("%s Git commit failed: %s", tag, exc)
+        return PostMergeQGResult(all_passed=False, story_id=story_id)
+
+    # ------------------------------------------------------------------
+    # Step 6: Re-run quality gate to verify fix
+    # ------------------------------------------------------------------
+    logger.info("%s Re-running post-merge quality gate", tag)
+    qg_result = run_post_merge_qg(story_id, project_root, config)
+    if qg_result.all_passed:
+        logger.info("%s Quality gate passed after fix attempt #%d", tag, attempt)
+    else:
+        logger.warning("%s Quality gate still failing after fix attempt #%d", tag, attempt)
+
+    return qg_result
+
+
+# ============================================================================
+# Sprint Status Update Helper
+# ============================================================================
+
+
+def update_sprint_status_done(story_id: str, project_root: Path) -> None:
+    """Mark a story as ``done`` in ``sprint-status.yaml``.
+
+    Uses the existing :func:`~bmad_assist_lite.core.sprint_status.load_sprint_status`
+    and :func:`~bmad_assist_lite.core.sprint_status.save_sprint_status` functions
+    for atomic persistence.
+
+    Sprint-status update failures are **non-fatal**: any exception is caught,
+    logged as a warning, and not re-raised.
+
+    Args:
+        story_id: Story identifier (e.g. ``"4.4"``).
+        project_root: Path to the project root directory.
+
+    """
+    tag = f"[SPRINT|{story_id}]"
+    try:
+        from bmad_assist_lite.core.sprint_status import (
+            get_sprint_status_path,
+            load_sprint_status,
+            save_sprint_status,
+        )
+
+        path = get_sprint_status_path(project_root)
+        sprint_status = load_sprint_status(path)
+        sprint_status.set_story_status(story_id, "done")
+        save_sprint_status(sprint_status, path)
+        logger.info("%s Updated sprint-status: story %s → done", tag, story_id)
+    except Exception:
+        logger.warning(
+            "%s Failed to update sprint-status (non-fatal)",
+            tag,
+            exc_info=True,
+        )
+
+
+# ============================================================================
 # MergeQueue — Async Sequential Queue
 # ============================================================================
 
@@ -849,6 +1059,8 @@ class MergeQueue:
         project_root: Path to the main git repository.
         config: Optional configuration for post-merge quality gate
             command sourcing.
+        parallel_config: Optional parallel execution configuration
+            for accessing ``post_merge_fix_retries``.
 
     """
 
@@ -856,10 +1068,12 @@ class MergeQueue:
         self,
         project_root: Path,
         config: Config | None = None,
+        parallel_config: ParallelConfig | None = None,
     ) -> None:
         """Initialise the merge queue for the given repository."""
         self._project_root = project_root
         self._config = config
+        self._parallel_config = parallel_config
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._lock = asyncio.Lock()
 
@@ -922,3 +1136,89 @@ class MergeQueue:
                 return result
             finally:
                 self._queue.task_done()
+
+    async def process_merge_with_fix(self) -> MergeResult | None:
+        """Dequeue and merge the next story, with automatic fix retries.
+
+        Wraps :meth:`process_next` to add a post-merge quality gate fix
+        loop.  When the quality gate fails after merge, ``run_post_merge_fix()``
+        is invoked up to ``post_merge_fix_retries`` times (from
+        ``ParallelConfig``).
+
+        On success (QG passes, with or without fix), the story is marked
+        as ``done`` in ``sprint-status.yaml`` via
+        :func:`update_sprint_status_done`.
+
+        Returns:
+            A ``MergeResult`` on success/failure, or ``None`` when the
+            queue is empty.
+
+        """
+        result = await self.process_next()
+        if result is None:
+            return None
+
+        # If merge itself failed, skip fix entirely
+        if not result.success:
+            return result
+
+        # If QG passed (or was not run), no fix needed
+        if result.qg_result is None or result.qg_result.all_passed:
+            if result.qg_result is not None and result.qg_result.all_passed:
+                update_sprint_status_done(result.story_id, self._project_root)
+            return result
+
+        # Determine max retries
+        max_retries = 1
+        if self._parallel_config is not None:
+            max_retries = self._parallel_config.post_merge_fix_retries
+
+        # If retries is 0, skip fix loop entirely
+        if max_retries == 0:
+            return result
+
+        # Enter fix loop
+        story_id = result.story_id
+        latest_qg: PostMergeQGResult = result.qg_result
+        for attempt in range(1, max_retries + 1):
+            logger.info(
+                "[FIX-QG|post-merge|%s] Fix attempt %d of %d",
+                story_id,
+                attempt,
+                max_retries,
+            )
+            try:
+                fix_qg_result = await asyncio.to_thread(
+                    run_post_merge_fix,
+                    story_id,
+                    self._project_root,
+                    self._config,
+                    attempt,
+                )
+            except ParallelError:
+                # Claude CLI not found — propagate
+                raise
+            except Exception:
+                logger.error(
+                    "[FIX-QG|post-merge|%s] Fix attempt %d failed with unexpected error",
+                    story_id,
+                    attempt,
+                    exc_info=True,
+                )
+                break
+
+            latest_qg = fix_qg_result
+            if fix_qg_result.all_passed:
+                logger.info(
+                    "[FIX-QG|post-merge|%s] Fix succeeded on attempt %d",
+                    story_id,
+                    attempt,
+                )
+                break
+
+        result = result.model_copy(update={"qg_result": latest_qg})
+
+        if latest_qg.all_passed:
+            update_sprint_status_done(story_id, self._project_root)
+
+        return result

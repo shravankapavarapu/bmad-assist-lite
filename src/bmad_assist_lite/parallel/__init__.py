@@ -12,7 +12,9 @@ from bmad_assist_lite.parallel.merger import (
     PostMergeQGResult,
     merge_story,
     resolve_conflicts,
+    run_post_merge_fix,
     run_post_merge_qg,
+    update_sprint_status_done,
 )
 from bmad_assist_lite.parallel.orchestrator import Orchestrator
 from bmad_assist_lite.parallel.output import OutputMultiplexer
@@ -59,6 +61,8 @@ __all__ = [
     "merge_story",
     "prune_worktrees",
     "resolve_conflicts",
+    "run_post_merge_fix",
     "run_post_merge_qg",
     "save_state",
+    "update_sprint_status_done",
 ]
