@@ -32,6 +32,10 @@ parallel_app = typer.Typer(
 )
 app.add_typer(parallel_app, name="parallel")
 
+from bmad_assist_lite.parallel.cli import parallel_run  # noqa: E402
+
+parallel_app.command(name="run")(parallel_run)
+
 
 def _setup_logging(verbosity: int) -> None:
     """Configure logging based on verbosity level."""
