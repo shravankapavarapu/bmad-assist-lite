@@ -34,7 +34,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-18
+generated: 2026-03-19
 last_updated: 2026-03-18
 project: bmad-assist-lite-parallel-stories
 project_key: NOKEY
@@ -57,18 +57,18 @@ development_status:
   epic-2-retrospective: optional
 
   # Epic 3: Parallel Execution Core
-  epic-3: in-progress
+  epic-3: done
   3-1-worktree-manager: done
   3-2-orchestrator-core-loop-and-subprocess-spawning: done
   3-3-parallel-state-persistence: done
   3-4-parallel-run-cli-command-and-branch-guard: done
   3-5-live-output-multiplexing: done
-  3-6-graceful-shutdown-and-drain-mode: review
-  epic-3-retrospective: optional
+  3-6-graceful-shutdown-and-drain-mode: done
+  epic-3-retrospective: done
 
   # Epic 4: Merge & Integration Safety
-  epic-4: backlog
-  4-1-sequential-merge-queue-and-git-merge: backlog
+  epic-4: in-progress
+  4-1-sequential-merge-queue-and-git-merge: review
   4-2-claude-cli-merge-conflict-resolution: backlog
   4-3-post-merge-quality-gate: backlog
   4-4-post-merge-fix-quality-gate-and-sprint-status-update: backlog

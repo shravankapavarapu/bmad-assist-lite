@@ -95,10 +95,14 @@ If no epic file is found, the run stops immediately with a clear error.
 
 ```bash
 # Run all epics and stories
-bmad-assist-lite run
+bmad-assist-lite run 
+# or
+python -m bmad_assist_lite run 
 
 # Run a specific epic
-bmad-assist-lite run --epic 1
+bmad-assist-lite run --epic 1 
+#or 
+python -m bmad_assist_lite run --epic 1
 
 # Run starting from a specific story
 bmad-assist-lite run --epic 1 --story 2
