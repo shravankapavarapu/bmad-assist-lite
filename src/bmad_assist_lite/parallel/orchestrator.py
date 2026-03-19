@@ -19,6 +19,7 @@ from pathlib import Path
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
+from bmad_assist_lite.parallel.output import OutputMultiplexer
 from bmad_assist_lite.parallel.state import (
     ParallelState,
     StoryStatus,
@@ -167,6 +168,9 @@ class Orchestrator:
         self._task_to_story: dict[asyncio.Task[int], str] = {}
         self._story_worktrees: dict[str, Path] = {}
 
+        # Output multiplexer for live prefixed output
+        self._output_mux = OutputMultiplexer()
+
         # Status tracking sets
         self._done_ids: set[str] = set()
         self._in_flight_ids: set[str] = set()
@@ -260,10 +264,8 @@ class Orchestrator:
                 env = {**os.environ, "BMAD_PARALLEL_MODE": "1"}
 
                 # Spawn subprocess
-                logger.info(
-                    "[ORCHESTRATOR] Spawning story %s in worktree %s",
-                    story_id,
-                    worktree_path,
+                await self._output_mux.write_orchestrator(
+                    f"Spawning story {story_id} in worktree {worktree_path}"
                 )
                 exec_args = [
                     sys.executable,
@@ -280,8 +282,8 @@ class Orchestrator:
                     proc = await asyncio.create_subprocess_exec(
                         *exec_args,
                         cwd=str(worktree_path),
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
                         env=env,
                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                     )
@@ -289,21 +291,25 @@ class Orchestrator:
                     proc = await asyncio.create_subprocess_exec(
                         *exec_args,
                         cwd=str(worktree_path),
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
                         env=env,
                     )
 
-                # Wait for completion (prefer communicate over wait)
-                await proc.communicate()
+                # Start output reader for live prefixed output
+                assert proc.stdout is not None  # guaranteed by PIPE
+                self._output_mux.start_reader(
+                    story_id, proc.stdout
+                )
+
+                # Wait for process exit — reader task drains stdout
+                await proc.wait()
                 return_code = proc.returncode
                 if return_code is None:  # pragma: no cover
                     return_code = -1
 
-                logger.info(
-                    "[ORCHESTRATOR] Story %s exited with code %d",
-                    story_id,
-                    return_code,
+                await self._output_mux.write_orchestrator(
+                    f"Story {story_id} exited with code {return_code}"
                 )
                 return return_code
 
@@ -323,11 +329,29 @@ class Orchestrator:
                 raise
 
             finally:
+                # Drain reader to EOF before cleanup — ensures no output is
+                # lost from the asyncio buffer after process exit.
+                try:
+                    await self._output_mux.await_reader(story_id, timeout=5.0)
+                except Exception:
+                    logger.debug(
+                        "[ORCHESTRATOR] Reader drain interrupted for story %s",
+                        story_id,
+                    )
+                # Fallback: force-stop if reader didn't complete
+                try:
+                    await self._output_mux.stop_reader(story_id)
+                except Exception:
+                    logger.debug(
+                        "[ORCHESTRATOR] Reader stop failed for story %s",
+                        story_id,
+                    )
+
                 # Process cleanup in finally guarantees termination for ALL
                 # exception types including BaseException (KeyboardInterrupt,
                 # SystemExit). Use asyncio.shield to prevent CancelledError
                 # from aborting cleanup midway. Skip if process already exited
-                # (returncode is set by communicate/wait on success).
+                # (returncode is set by wait on success).
                 if proc is not None and proc.returncode is None:
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await asyncio.shield(_kill_process(proc))
@@ -362,9 +386,8 @@ class Orchestrator:
                 completed_at=_utc_now(),
             )
             save_state(self._state, self._state_path)
-            logger.info(
-                "[ORCHESTRATOR] Story %s completed successfully, status -> merging",
-                story_id,
+            await self._output_mux.write_orchestrator(
+                f"Story {story_id} completed successfully, status -> merging"
             )
         else:
             self._blocked_ids.add(story_id)
@@ -375,10 +398,8 @@ class Orchestrator:
                 completed_at=_utc_now(),
             )
             save_state(self._state, self._state_path)
-            logger.error(
-                "[ORCHESTRATOR] Story %s failed with exit code %d, status -> blocked",
-                story_id,
-                exit_code,
+            await self._output_mux.write_orchestrator(
+                f"Story {story_id} failed with exit code {exit_code}, status -> blocked"
             )
             # Clean up worktree for blocked stories (successful keep for merge)
             if story_id in self._story_worktrees:
@@ -412,10 +433,9 @@ class Orchestrator:
         remain in-flight.
 
         """
-        logger.info(
-            "[ORCHESTRATOR] Starting orchestration for epic %d (%d stories)",
-            self._epic_num,
-            self._dependency_graph.story_count,
+        await self._output_mux.write_orchestrator(
+            f"Starting orchestration for epic {self._epic_num} "
+            f"({self._dependency_graph.story_count} stories)"
         )
 
         while True:
@@ -489,10 +509,9 @@ class Orchestrator:
                 await self._on_story_complete(completed_story_id, exit_code)
 
         # Log final summary
-        logger.info(
-            "[ORCHESTRATOR] Orchestration complete. "
-            "Done: %d, Merging: %d, Blocked: %d",
-            len(self._done_ids),
-            len(self._merging_ids),
-            len(self._blocked_ids),
+        await self._output_mux.write_orchestrator(
+            f"Orchestration complete. "
+            f"Done: {len(self._done_ids)}, "
+            f"Merging: {len(self._merging_ids)}, "
+            f"Blocked: {len(self._blocked_ids)}"
         )

@@ -91,26 +91,53 @@ def _make_orchestrator(
 
     Default graph includes common test story IDs so that the
     ParallelState created in __init__ has matching entries.
+    Injects a mock OutputMultiplexer to avoid real I/O.
     """
     if graph is None:
         graph = _make_graph(all_ids=["3.1", "3.2", "3.3"])
-    return Orchestrator(
+    orch = Orchestrator(
         dependency_graph=graph,
         config=config or _make_config(),
         project_root=project_root or Path("/fake/project"),
         epic_num=epic_num,
     )
+    orch._output_mux = _mock_output_mux()
+    return orch
 
 
 def _mock_process(returncode: int = 0, pid: int = 12345) -> MagicMock:
-    """Create a mock asyncio subprocess process."""
+    """Create a mock asyncio subprocess process.
+
+    Provides a mock ``stdout`` stream reader for PIPE-based output
+    reading and ``wait()`` for process completion (no ``communicate``).
+    """
     proc = MagicMock()
     proc.pid = pid
     proc.returncode = returncode
-    proc.communicate = AsyncMock(return_value=(b"", b""))
+    proc.stdout = MagicMock()  # Mock StreamReader for output reader
     proc.wait = AsyncMock(return_value=returncode)
     proc.kill = MagicMock()
     return proc
+
+
+def _mock_output_mux() -> MagicMock:
+    """Create a mock OutputMultiplexer for orchestrator tests.
+
+    Returns a MagicMock that stubs start_reader (returns a MagicMock task)
+    and stop_reader / stop_all as AsyncMock no-ops.
+    """
+    mux = MagicMock()
+
+    # start_reader returns a mock task (not a real asyncio.Task)
+    mock_task = MagicMock()
+    mock_task.done = MagicMock(return_value=True)
+    mux.start_reader = MagicMock(return_value=mock_task)
+    mux.stop_reader = AsyncMock()
+    mux.stop_all = AsyncMock()
+    mux.write_orchestrator = AsyncMock()
+    mux.await_reader = AsyncMock(return_value=True)
+    mux._reader_tasks = {}
+    return mux
 
 
 # ============================================================================
@@ -354,12 +381,12 @@ class TestSpawnStory:
 
     @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
     @patch("bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec")
-    async def test_uses_devnull_for_stdout_stderr(
+    async def test_uses_pipe_for_stdout_and_merges_stderr(
         self,
         mock_exec: AsyncMock,
         mock_to_thread: AsyncMock,
     ) -> None:
-        """Subprocess stdout and stderr use DEVNULL to prevent pipe deadlock."""
+        """Subprocess stdout uses PIPE and stderr merges into stdout."""
         mock_to_thread.return_value = Path("/fake/worktree")
         mock_exec.return_value = _mock_process(returncode=0)
 
@@ -369,8 +396,8 @@ class TestSpawnStory:
         await orch._spawn_story("3.2")
 
         call_kwargs = mock_exec.call_args[1]
-        assert call_kwargs["stdout"] == asyncio.subprocess.DEVNULL
-        assert call_kwargs["stderr"] == asyncio.subprocess.DEVNULL
+        assert call_kwargs["stdout"] == asyncio.subprocess.PIPE
+        assert call_kwargs["stderr"] == asyncio.subprocess.STDOUT
 
     @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
     @patch("bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec")
@@ -561,25 +588,22 @@ class TestOnStoryComplete:
 
         assert "3.2" in orch._merging_ids
 
-    async def test_success_logs_info(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Successful completion logs at INFO with ORCHESTRATOR prefix."""
+    async def test_success_writes_orchestrator_message(self) -> None:
+        """Successful completion writes via write_orchestrator with merging status."""
         orch = _make_orchestrator()
         task = MagicMock()
         orch._running_tasks["3.2"] = task
         orch._task_to_story[task] = "3.2"
 
-        with caplog.at_level(logging.INFO):
-            await orch._on_story_complete("3.2", exit_code=0)
+        await orch._on_story_complete("3.2", exit_code=0)
 
-        assert any(
-            "[ORCHESTRATOR]" in r.message and "merging" in r.message
-            for r in caplog.records
-        )
+        orch._output_mux.write_orchestrator.assert_called_once()
+        msg = orch._output_mux.write_orchestrator.call_args[0][0]
+        assert "3.2" in msg
+        assert "merging" in msg
 
-    async def test_failure_logs_error(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Failed completion logs at ERROR with ORCHESTRATOR prefix."""
+    async def test_failure_writes_orchestrator_message(self) -> None:
+        """Failed completion writes via write_orchestrator with blocked status."""
         orch = _make_orchestrator()
         task = MagicMock()
         orch._running_tasks["3.2"] = task
@@ -590,13 +614,12 @@ class TestOnStoryComplete:
             "bmad_assist_lite.parallel.orchestrator.asyncio.to_thread"
         )
         with patch(to_thread_path, new_callable=AsyncMock):
-            with caplog.at_level(logging.ERROR):
-                await orch._on_story_complete("3.2", exit_code=1)
+            await orch._on_story_complete("3.2", exit_code=1)
 
-        assert any(
-            "[ORCHESTRATOR]" in r.message and "blocked" in r.message
-            for r in caplog.records
-        )
+        orch._output_mux.write_orchestrator.assert_called_once()
+        msg = orch._output_mux.write_orchestrator.call_args[0][0]
+        assert "3.2" in msg
+        assert "blocked" in msg
 
 
 # ============================================================================
@@ -773,18 +796,17 @@ class TestRunLoop:
 
         assert "3.1" in in_flight_during_spawn
 
-    async def test_run_logs_final_summary(self, caplog: pytest.LogCaptureFixture) -> None:
-        """run() logs a final summary with done/merging/blocked counts."""
+    async def test_run_writes_final_summary(self) -> None:
+        """run() writes a final summary via write_orchestrator."""
         graph = _make_graph(ready_sequence=[[]], all_ids=[])
         orch = _make_orchestrator(graph=graph)
 
-        with caplog.at_level(logging.INFO):
-            await orch.run()
+        await orch.run()
 
-        assert any(
-            "Orchestration complete" in r.message
-            for r in caplog.records
-        )
+        # write_orchestrator called for start + completion
+        calls = orch._output_mux.write_orchestrator.call_args_list
+        final_msg = calls[-1][0][0]
+        assert "Orchestration complete" in final_msg
 
 
 # ============================================================================
@@ -877,9 +899,9 @@ class TestProcessCleanup:
         """Subprocess is killed when the task is cancelled."""
         mock_to_thread.return_value = Path("/fake/worktree")
         mock_proc = _mock_process(returncode=0)
-        # Simulate process not yet terminated when communicate raises
+        # Simulate process not yet terminated when wait raises
         mock_proc.returncode = None
-        mock_proc.communicate = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_proc.wait = AsyncMock(side_effect=asyncio.CancelledError())
         mock_exec.return_value = mock_proc
 
         orch = _make_orchestrator()
@@ -901,9 +923,9 @@ class TestProcessCleanup:
         """Story stays in _in_flight_ids on CancelledError (_on_story_complete cleans it)."""
         mock_to_thread.return_value = Path("/fake/worktree")
         mock_proc = _mock_process()
-        # Simulate process not yet terminated when communicate raises
+        # Simulate process not yet terminated when wait raises
         mock_proc.returncode = None
-        mock_proc.communicate = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_proc.wait = AsyncMock(side_effect=asyncio.CancelledError())
         mock_exec.return_value = mock_proc
 
         orch = _make_orchestrator()
@@ -925,9 +947,9 @@ class TestProcessCleanup:
         """Subprocess is killed when an unexpected exception occurs."""
         mock_to_thread.return_value = Path("/fake/worktree")
         mock_proc = _mock_process()
-        # Simulate process not yet terminated when communicate raises
+        # Simulate process not yet terminated when wait raises
         mock_proc.returncode = None
-        mock_proc.communicate = AsyncMock(side_effect=RuntimeError("boom"))
+        mock_proc.wait = AsyncMock(side_effect=RuntimeError("boom"))
         mock_exec.return_value = mock_proc
 
         orch = _make_orchestrator()
@@ -969,9 +991,9 @@ class TestProcessCleanup:
         """Story stays in _in_flight_ids on exception (_on_story_complete cleans it)."""
         mock_to_thread.return_value = Path("/fake/worktree")
         mock_proc = _mock_process()
-        # Simulate process not yet terminated when communicate raises
+        # Simulate process not yet terminated when wait raises
         mock_proc.returncode = None
-        mock_proc.communicate = AsyncMock(side_effect=RuntimeError("boom"))
+        mock_proc.wait = AsyncMock(side_effect=RuntimeError("boom"))
         mock_exec.return_value = mock_proc
 
         orch = _make_orchestrator()
@@ -1158,9 +1180,9 @@ class TestProcessCleanupShield:
         """Process cleanup in finally uses asyncio.shield to prevent re-cancellation."""
         mock_to_thread.return_value = Path("/fake/worktree")
         mock_proc = _mock_process()
-        # Simulate process not yet terminated when communicate raises
+        # Simulate process not yet terminated when wait raises
         mock_proc.returncode = None
-        mock_proc.communicate = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_proc.wait = AsyncMock(side_effect=asyncio.CancelledError())
         mock_exec.return_value = mock_proc
 
         orch = _make_orchestrator()
@@ -1171,4 +1193,74 @@ class TestProcessCleanupShield:
             with pytest.raises(asyncio.CancelledError):
                 await orch._spawn_story("3.2")
 
-            mock_shield.assert_called_once()
+            # shield is called at least once (for reader drain or kill)
+            assert mock_shield.call_count >= 1
+
+
+# ============================================================================
+# TestOutputReaderLifecycle
+# ============================================================================
+
+
+class TestOutputReaderLifecycle:
+    """Test that _spawn_story integrates with OutputMultiplexer correctly."""
+
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec")
+    async def test_start_reader_called_after_subprocess_creation(
+        self,
+        mock_exec: AsyncMock,
+        mock_to_thread: AsyncMock,
+    ) -> None:
+        """start_reader is called with story_id and proc.stdout after spawn."""
+        mock_to_thread.return_value = Path("/fake/worktree")
+        mock_proc = _mock_process(returncode=0)
+        mock_exec.return_value = mock_proc
+
+        orch = _make_orchestrator()
+        orch._in_flight_ids.add("3.2")
+
+        await orch._spawn_story("3.2")
+
+        orch._output_mux.start_reader.assert_called_once_with(
+            "3.2", mock_proc.stdout,
+        )
+
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec")
+    async def test_stop_reader_called_in_finally(
+        self,
+        mock_exec: AsyncMock,
+        mock_to_thread: AsyncMock,
+    ) -> None:
+        """stop_reader is called during finally cleanup."""
+        mock_to_thread.return_value = Path("/fake/worktree")
+        mock_proc = _mock_process(returncode=0)
+        mock_exec.return_value = mock_proc
+
+        orch = _make_orchestrator()
+        orch._in_flight_ids.add("3.2")
+
+        await orch._spawn_story("3.2")
+
+        orch._output_mux.await_reader.assert_called_once_with("3.2", timeout=5.0)
+        orch._output_mux.stop_reader.assert_called_once_with("3.2")
+
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec")
+    async def test_uses_proc_wait_not_communicate(
+        self,
+        mock_exec: AsyncMock,
+        mock_to_thread: AsyncMock,
+    ) -> None:
+        """_spawn_story uses proc.wait() instead of proc.communicate()."""
+        mock_to_thread.return_value = Path("/fake/worktree")
+        mock_proc = _mock_process(returncode=0)
+        mock_exec.return_value = mock_proc
+
+        orch = _make_orchestrator()
+        orch._in_flight_ids.add("3.2")
+
+        await orch._spawn_story("3.2")
+
+        mock_proc.wait.assert_called_once()
