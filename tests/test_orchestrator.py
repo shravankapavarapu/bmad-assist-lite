@@ -18,6 +18,26 @@ from bmad_assist_lite.parallel.orchestrator import (
 
 
 # ============================================================================
+# Module-level fixtures — mock state persistence for all orchestrator tests
+# ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _mock_state_persistence():
+    """Prevent orchestrator tests from hitting the real filesystem.
+
+    Patches load_state (returns None → fresh state) and save_state (no-op)
+    so Orchestrator.__init__ works with fake project_root paths.
+    """
+    with patch(
+        "bmad_assist_lite.parallel.orchestrator.load_state", return_value=None,
+    ), patch(
+        "bmad_assist_lite.parallel.orchestrator.save_state",
+    ):
+        yield
+
+
+# ============================================================================
 # Helper factories
 # ============================================================================
 
@@ -67,9 +87,15 @@ def _make_orchestrator(
     project_root: Path | None = None,
     epic_num: int = 3,
 ) -> Orchestrator:
-    """Create an Orchestrator with test-friendly defaults."""
+    """Create an Orchestrator with test-friendly defaults.
+
+    Default graph includes common test story IDs so that the
+    ParallelState created in __init__ has matching entries.
+    """
+    if graph is None:
+        graph = _make_graph(all_ids=["3.1", "3.2", "3.3"])
     return Orchestrator(
-        dependency_graph=graph or _make_graph(),
+        dependency_graph=graph,
         config=config or _make_config(),
         project_root=project_root or Path("/fake/project"),
         epic_num=epic_num,

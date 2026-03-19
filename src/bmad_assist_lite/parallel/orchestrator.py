@@ -13,17 +13,31 @@ import os
 import re
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
+from bmad_assist_lite.parallel.state import (
+    ParallelState,
+    StoryStatus,
+    create_initial_state,
+    get_parallel_state_path,
+    load_state,
+    save_state,
+)
 from bmad_assist_lite.parallel.worktree_manager import cleanup_worktree, create_worktree
 
 logger = logging.getLogger(__name__)
 
 # Pattern to extract the story number from a story_id like "3.2", "3-2", "10.1"
 _STORY_NUM_RE = re.compile(r"[-.]")
+
+
+def _utc_now() -> datetime:
+    """Get current UTC datetime without timezone info (naive UTC)."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 # ============================================================================
@@ -127,6 +141,8 @@ class Orchestrator:
         config: ParallelConfig,
         project_root: Path,
         epic_num: int,
+        *,
+        base_branch: str = "main",
     ) -> None:
         """Initialize the orchestrator with injected dependencies.
 
@@ -135,6 +151,7 @@ class Orchestrator:
             config: Parallel execution configuration.
             project_root: Path to the main git repository.
             epic_num: The epic number being executed.
+            base_branch: The git branch stories are based on.
 
         """
         self._dependency_graph = dependency_graph
@@ -155,6 +172,43 @@ class Orchestrator:
         self._in_flight_ids: set[str] = set()
         self._blocked_ids: set[str] = set()
         self._merging_ids: set[str] = set()
+
+        # Persistent state — load existing or create fresh
+        self._state_path = get_parallel_state_path(project_root)
+        existing_state = load_state(self._state_path)
+        if existing_state is not None:
+            self._state: ParallelState = existing_state
+            # Populate in-memory sets from persisted state
+            for story_id, story_state in self._state.stories.items():
+                if story_state.status == StoryStatus.DONE:
+                    self._done_ids.add(story_id)
+                elif story_state.status == StoryStatus.IN_FLIGHT:
+                    self._in_flight_ids.add(story_id)
+                elif story_state.status == StoryStatus.BLOCKED:
+                    self._blocked_ids.add(story_id)
+                elif story_state.status == StoryStatus.MERGING:
+                    self._merging_ids.add(story_id)
+                if story_state.worktree_path is not None:
+                    self._story_worktrees[story_id] = story_state.worktree_path
+            logger.info(
+                "[ORCHESTRATOR] Resumed from persisted state: "
+                "done=%d, in_flight=%d, blocked=%d, merging=%d",
+                len(self._done_ids),
+                len(self._in_flight_ids),
+                len(self._blocked_ids),
+                len(self._merging_ids),
+            )
+        else:
+            self._state = create_initial_state(
+                base_branch=base_branch,
+                epic=epic_num,
+                story_ids=list(dependency_graph.all_story_ids),
+            )
+            save_state(self._state, self._state_path)
+            logger.info(
+                "[ORCHESTRATOR] Created fresh parallel state with %d stories",
+                len(self._state.stories),
+            )
 
     # ========================================================================
     # Subprocess spawning
@@ -190,6 +244,14 @@ class Orchestrator:
                     self._config.worktree_base_dir,
                 )
                 self._story_worktrees[story_id] = worktree_path
+
+                # Persist worktree_path to state for crash recovery (AC #2)
+                self._state = self._state.with_story_status(
+                    story_id,
+                    StoryStatus.IN_FLIGHT,
+                    worktree_path=worktree_path,
+                )
+                save_state(self._state, self._state_path)
 
                 # Extract story number for CLI flag
                 story_num = _extract_story_num(story_id)
@@ -294,12 +356,25 @@ class Orchestrator:
 
         if exit_code == 0:
             self._merging_ids.add(story_id)
+            self._state = self._state.with_story_status(
+                story_id,
+                StoryStatus.MERGING,
+                completed_at=_utc_now(),
+            )
+            save_state(self._state, self._state_path)
             logger.info(
                 "[ORCHESTRATOR] Story %s completed successfully, status -> merging",
                 story_id,
             )
         else:
             self._blocked_ids.add(story_id)
+            self._state = self._state.with_story_status(
+                story_id,
+                StoryStatus.BLOCKED,
+                error=f"Exit code {exit_code}",
+                completed_at=_utc_now(),
+            )
+            save_state(self._state, self._state_path)
             logger.error(
                 "[ORCHESTRATOR] Story %s failed with exit code %d, status -> blocked",
                 story_id,
@@ -355,6 +430,12 @@ class Orchestrator:
             # Spawn ready stories
             for story_id in ready:
                 self._in_flight_ids.add(story_id)
+                self._state = self._state.with_story_status(
+                    story_id,
+                    StoryStatus.IN_FLIGHT,
+                    started_at=_utc_now(),
+                )
+                save_state(self._state, self._state_path)
                 task = asyncio.create_task(
                     self._spawn_story(story_id),
                     name=f"story-{story_id}",
