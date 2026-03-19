@@ -3,7 +3,8 @@
 Spawns loop subprocesses in git worktrees for each ready story, monitors
 their completion, and manages the story lifecycle (in-flight, merging,
 blocked). Concurrency is controlled by an asyncio semaphore and an
-optional stagger delay between spawns.
+optional stagger delay between spawns. Supports graceful shutdown (drain
+mode) and force-exit via signal handling.
 """
 
 import asyncio
@@ -11,8 +12,10 @@ import contextlib
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
+import types
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -74,10 +77,12 @@ def _extract_story_num(story_id: str) -> str:
 
 
 async def _kill_process(proc: asyncio.subprocess.Process) -> None:
-    """Terminate a subprocess and wait for it to exit.
+    """Terminate a subprocess and its entire process tree.
 
     Uses platform-appropriate termination: ``taskkill /F /T`` on Windows
-    for process-tree kill, ``proc.kill()`` on Unix.
+    for process-tree kill, ``os.killpg()`` on Unix (since subprocesses
+    are spawned with ``start_new_session=True``, making them process
+    group leaders).
 
     Args:
         proc: The asyncio subprocess to terminate.
@@ -107,8 +112,16 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
                 with contextlib.suppress(ProcessLookupError):
                     proc.kill()
         else:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+            # Use os.killpg() for process-group kill since subprocesses
+            # are spawned with start_new_session=True (making them
+            # process group leaders). proc.kill() only kills the leader,
+            # leaving child processes (git, pytest) orphaned.
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                # Fallback to basic kill if process group kill fails
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
     except Exception as exc:
         logger.warning("[ORCHESTRATOR] Failed to kill process PID %d: %s", pid, exc)
 
@@ -133,7 +146,8 @@ class Orchestrator:
 
     Spawns loop subprocesses in git worktrees, monitors their completion
     via ``asyncio.wait(FIRST_COMPLETED)``, and manages concurrency via
-    ``asyncio.Semaphore``.
+    ``asyncio.Semaphore``. Supports graceful shutdown via drain mode
+    (first Ctrl+C) and force-exit (second Ctrl+C).
     """
 
     def __init__(
@@ -177,6 +191,14 @@ class Orchestrator:
         self._blocked_ids: set[str] = set()
         self._merging_ids: set[str] = set()
 
+        # Shutdown flags (Task 1.1)
+        self._draining: bool = False
+        self._force_exit: bool = False
+        # Event loop reference — set during _install_signal_handlers()
+        # when the loop is guaranteed running. Used by _on_sigint() to
+        # avoid deprecated asyncio.get_event_loop() in signal context.
+        self._loop: asyncio.AbstractEventLoop | None = None
+
         # Persistent state — load existing or create fresh
         self._state_path = get_parallel_state_path(project_root)
         existing_state = load_state(self._state_path)
@@ -215,6 +237,100 @@ class Orchestrator:
             )
 
     # ========================================================================
+    # Signal handling (Task 1, Task 2)
+    # ========================================================================
+
+    def _on_sigint(self) -> None:
+        """Handle SIGINT/SIGTERM with two-tier shutdown logic.
+
+        First call enters drain mode (stop spawning, wait for running).
+        Second call triggers force-exit (cancel all tasks immediately).
+        Third+ calls are idempotent (no-op after force_exit is set).
+        """
+        if self._force_exit:
+            # Already force-exiting, ignore further signals
+            return
+
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            # No loop available — just set flags, skip messages
+            if self._draining:
+                self._force_exit = True
+            else:
+                self._draining = True
+            return
+
+        if self._draining:
+            # Second signal: force-exit
+            self._force_exit = True
+            # Use lambda to defer coroutine creation to the event loop
+            # thread, avoiding eager coroutine creation in signal context
+            loop.call_soon_threadsafe(
+                lambda: loop.create_task(
+                    self._output_mux.write_orchestrator(
+                        "Force shutdown -- terminating all subprocesses..."
+                    )
+                ),
+            )
+        else:
+            # First signal: drain mode
+            self._draining = True
+            loop.call_soon_threadsafe(
+                lambda: loop.create_task(
+                    self._output_mux.write_orchestrator(
+                        "Shutting down -- waiting for running stories to finish..."
+                    )
+                ),
+            )
+
+    def _install_signal_handlers(self) -> None:
+        """Install SIGINT and SIGTERM handlers for graceful shutdown.
+
+        On Unix, uses ``loop.add_signal_handler()`` for both SIGINT and
+        SIGTERM (asyncio-native). On Windows, uses ``signal.signal()``
+        for SIGINT only (asyncio signal handlers not supported on Windows;
+        SIGTERM is not raised on Windows).
+
+        Captures the running event loop reference for use by
+        ``_on_sigint()`` to avoid deprecated ``asyncio.get_event_loop()``.
+        """
+        self._loop = asyncio.get_running_loop()
+        if sys.platform == "win32":
+            signal.signal(signal.SIGINT, self._signal_handler_sync)
+        else:
+            self._loop.add_signal_handler(signal.SIGINT, self._on_sigint)
+            self._loop.add_signal_handler(signal.SIGTERM, self._on_sigint)
+
+    def _remove_signal_handlers(self) -> None:
+        """Restore default signal disposition on exit.
+
+        On Unix, removes asyncio signal handlers for SIGINT and SIGTERM.
+        On Windows, restores SIGINT to default behavior.
+        """
+        if sys.platform == "win32":
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+        elif self._loop is not None and not self._loop.is_closed():
+            with contextlib.suppress(Exception):
+                self._loop.remove_signal_handler(signal.SIGINT)
+            with contextlib.suppress(Exception):
+                self._loop.remove_signal_handler(signal.SIGTERM)
+
+    def _signal_handler_sync(
+        self, signum: int, frame: types.FrameType | None,
+    ) -> None:
+        """Sync signal handler for Windows SIGINT.
+
+        Delegates to ``_on_sigint()``. The sync handler runs in the main
+        thread; Python's GIL ensures atomic flag writes are safe.
+
+        Args:
+            signum: The signal number received.
+            frame: The current stack frame (unused).
+
+        """
+        self._on_sigint()
+
+    # ========================================================================
     # Subprocess spawning
     # ========================================================================
 
@@ -223,6 +339,11 @@ class Orchestrator:
 
         Acquires a semaphore slot, creates the worktree, applies the
         stagger delay, then spawns the subprocess and waits for it.
+
+        Subprocesses are isolated from the parent's console process group
+        via ``start_new_session=True`` (Unix) or
+        ``CREATE_NEW_PROCESS_GROUP`` (Windows) to prevent Ctrl+C from
+        propagating to child processes and defeating drain mode.
 
         Args:
             story_id: The story ID to execute (e.g. ``"3.2"``).
@@ -239,6 +360,11 @@ class Orchestrator:
                 # the main loop dispatcher during delay
                 if self._config.stagger_delay > 0:
                     await asyncio.sleep(self._config.stagger_delay)
+
+                # Check drain flag after stagger sleep to avoid spawning
+                # a new subprocess if shutdown was requested during delay
+                if self._draining:
+                    return -1
 
                 # Create worktree (sync function, bridge via to_thread)
                 worktree_path: Path = await asyncio.to_thread(
@@ -278,6 +404,7 @@ class Orchestrator:
                     str(story_num),
                     "--single-story",
                 ]
+                # Task 3.0: Subprocess process group isolation
                 if sys.platform == "win32":
                     proc = await asyncio.create_subprocess_exec(
                         *exec_args,
@@ -294,6 +421,7 @@ class Orchestrator:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
                         env=env,
+                        start_new_session=True,
                     )
 
                 # Start output reader for live prefixed output
@@ -330,14 +458,16 @@ class Orchestrator:
 
             finally:
                 # Drain reader to EOF before cleanup — ensures no output is
-                # lost from the asyncio buffer after process exit.
-                try:
-                    await self._output_mux.await_reader(story_id, timeout=5.0)
-                except Exception:
-                    logger.debug(
-                        "[ORCHESTRATOR] Reader drain interrupted for story %s",
-                        story_id,
-                    )
+                # lost from the asyncio buffer after process exit. Skip the
+                # drain during force-exit to avoid a 5s delay per story.
+                if not self._force_exit:
+                    try:
+                        await self._output_mux.await_reader(story_id, timeout=5.0)
+                    except Exception:
+                        logger.debug(
+                            "[ORCHESTRATOR] Reader drain interrupted for story %s",
+                            story_id,
+                        )
                 # Fallback: force-stop if reader didn't complete
                 try:
                     await self._output_mux.stop_reader(story_id)
@@ -421,7 +551,63 @@ class Orchestrator:
                     del self._story_worktrees[story_id]
 
     # ========================================================================
-    # Main orchestration loop
+    # Exit summary (Task 5)
+    # ========================================================================
+
+    async def _print_exit_summary(self) -> None:
+        """Print a summary of story statuses on exit.
+
+        Lists counts of done, merging, in-flight, blocked, and remaining
+        stories. For blocked stories, lists each blocked story along with
+        its specific unmet dependencies. On force-exit, includes a warning
+        about potential stale git lock files.
+        """
+        all_ids = set(self._dependency_graph.all_story_ids)
+        completed = self._done_ids | self._merging_ids
+        remaining = all_ids - completed - self._blocked_ids - self._in_flight_ids
+
+        await self._output_mux.write_orchestrator(
+            f"Exit summary: "
+            f"Done: {len(self._done_ids)}, "
+            f"Merging: {len(self._merging_ids)}, "
+            f"In-flight: {len(self._in_flight_ids)}, "
+            f"Blocked: {len(self._blocked_ids)}, "
+            f"Remaining: {len(remaining)}"
+        )
+
+        # List blocked stories with their unmet dependencies
+        if self._blocked_ids:
+            for story_id in sorted(self._blocked_ids):
+                try:
+                    deps = self._dependency_graph.dependencies_of(story_id)
+                    unmet = [
+                        d for d in deps
+                        if d not in self._done_ids and d not in self._merging_ids
+                    ]
+                    if unmet:
+                        await self._output_mux.write_orchestrator(
+                            f"  Blocked: {story_id} "
+                            f"(unmet deps: {', '.join(sorted(unmet))})"
+                        )
+                    else:
+                        await self._output_mux.write_orchestrator(
+                            f"  Blocked: {story_id} (failed execution)"
+                        )
+                except KeyError:
+                    await self._output_mux.write_orchestrator(
+                        f"  Blocked: {story_id}"
+                    )
+
+        # Force-exit warning about potential stale git locks
+        if self._force_exit:
+            await self._output_mux.write_orchestrator(
+                "WARNING: Stories interrupted mid-git-operation may leave "
+                "orphaned .git/index.lock files in worktrees. Check and "
+                "remove stale locks before the next run."
+            )
+
+    # ========================================================================
+    # Main orchestration loop (Task 3, Task 4)
     # ========================================================================
 
     async def run(self) -> None:
@@ -432,86 +618,139 @@ class Orchestrator:
         when all stories are done, merging, or blocked, and no tasks
         remain in-flight.
 
+        Installs signal handlers for graceful shutdown (drain mode on
+        first Ctrl+C, force-exit on second Ctrl+C). Signal handlers are
+        removed on exit.
+
         """
-        await self._output_mux.write_orchestrator(
-            f"Starting orchestration for epic {self._epic_num} "
-            f"({self._dependency_graph.story_count} stories)"
-        )
-
-        while True:
-            # Re-evaluate ready stories: union _merging_ids with _done_ids
-            # so dependents of successfully-completed stories can proceed
-            ready = self._dependency_graph.get_ready_stories(
-                self._done_ids | self._merging_ids,
-                self._in_flight_ids,
-                self._blocked_ids,
+        self._install_signal_handlers()
+        try:
+            await self._output_mux.write_orchestrator(
+                f"Starting orchestration for epic {self._epic_num} "
+                f"({self._dependency_graph.story_count} stories)"
             )
 
-            # Spawn ready stories
-            for story_id in ready:
-                self._in_flight_ids.add(story_id)
-                self._state = self._state.with_story_status(
-                    story_id,
-                    StoryStatus.IN_FLIGHT,
-                    started_at=_utc_now(),
-                )
-                save_state(self._state, self._state_path)
-                task = asyncio.create_task(
-                    self._spawn_story(story_id),
-                    name=f"story-{story_id}",
-                )
-                self._running_tasks[story_id] = task
-                self._task_to_story[task] = story_id
+            while True:
+                # Check if draining and no tasks remain — break to exit
+                if self._draining and not self._running_tasks:
+                    break
 
-            # Check termination: no running tasks and no new ready stories
-            if not self._running_tasks:
-                # Stalemate detection: log warning with status summary
-                all_ids = set(self._dependency_graph.all_story_ids)
-                completed = self._done_ids | self._merging_ids
-                remaining = all_ids - completed - self._blocked_ids
-                if remaining:
-                    logger.warning(
-                        "[ORCHESTRATOR] Stalemate detected: no stories ready and "
-                        "none in-flight. Done: %d, Merging: %d, Blocked: %d, "
-                        "Remaining: %d (%s)",
-                        len(self._done_ids),
-                        len(self._merging_ids),
-                        len(self._blocked_ids),
-                        len(remaining),
-                        sorted(remaining),
+                # Re-evaluate ready stories: union _merging_ids with _done_ids
+                # so dependents of successfully-completed stories can proceed
+                ready = self._dependency_graph.get_ready_stories(
+                    self._done_ids | self._merging_ids,
+                    self._in_flight_ids,
+                    self._blocked_ids,
+                )
+
+                # Spawn ready stories only if NOT draining (Task 3.2)
+                if not self._draining:
+                    for story_id in ready:
+                        self._in_flight_ids.add(story_id)
+                        self._state = self._state.with_story_status(
+                            story_id,
+                            StoryStatus.IN_FLIGHT,
+                            started_at=_utc_now(),
+                        )
+                        save_state(self._state, self._state_path)
+                        task = asyncio.create_task(
+                            self._spawn_story(story_id),
+                            name=f"story-{story_id}",
+                        )
+                        self._running_tasks[story_id] = task
+                        self._task_to_story[task] = story_id
+
+                # Check termination: no running tasks and no new ready stories
+                if not self._running_tasks:
+                    # Stalemate detection: log warning with status summary
+                    all_ids = set(self._dependency_graph.all_story_ids)
+                    completed = self._done_ids | self._merging_ids
+                    remaining = (
+                        all_ids - completed - self._blocked_ids - self._in_flight_ids
                     )
-                break
+                    if remaining:
+                        logger.warning(
+                            "[ORCHESTRATOR] Stalemate detected: no stories ready and "
+                            "none in-flight. Done: %d, Merging: %d, Blocked: %d, "
+                            "Remaining: %d (%s)",
+                            len(self._done_ids),
+                            len(self._merging_ids),
+                            len(self._blocked_ids),
+                            len(remaining),
+                            sorted(remaining),
+                        )
+                    break
 
-            # Wait for at least one task to complete
-            # Snapshot via set() to prevent RuntimeError if dict mutated
-            done_tasks, _pending = await asyncio.wait(
-                set(self._running_tasks.values()),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+                # Wait for at least one task to complete, with timeout
+                # so the loop can check _force_exit periodically (Task 4.1)
+                # Snapshot via set() to prevent RuntimeError if dict mutated
+                done_tasks, _pending = await asyncio.wait(
+                    set(self._running_tasks.values()),
+                    timeout=1.0,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
 
-            # Process completed tasks
-            for completed_task in done_tasks:
-                completed_story_id = self._task_to_story.get(completed_task)
-                if completed_story_id is None:
+                # Timeout expired with no completions — continue loop
+                # (must check before processing done_tasks)
+                if not done_tasks and not self._force_exit:
                     continue
 
-                try:
-                    exit_code = completed_task.result()
-                except asyncio.CancelledError:
-                    exit_code = -1
-                except Exception:
-                    logger.exception(
-                        "[ORCHESTRATOR] Unexpected error in story %s task",
-                        completed_story_id,
-                    )
-                    exit_code = -1
+                # Process completed tasks before checking force-exit,
+                # so stories that finished are not discarded as IN_FLIGHT
+                for completed_task in done_tasks:
+                    completed_story_id = self._task_to_story.get(completed_task)
+                    if completed_story_id is None:
+                        continue
 
-                await self._on_story_complete(completed_story_id, exit_code)
+                    try:
+                        exit_code = completed_task.result()
+                    except asyncio.CancelledError:
+                        exit_code = -1
+                    except Exception:
+                        logger.exception(
+                            "[ORCHESTRATOR] Unexpected error in story %s task",
+                            completed_story_id,
+                        )
+                        exit_code = -1
 
-        # Log final summary
-        await self._output_mux.write_orchestrator(
-            f"Orchestration complete. "
-            f"Done: {len(self._done_ids)}, "
-            f"Merging: {len(self._merging_ids)}, "
-            f"Blocked: {len(self._blocked_ids)}"
-        )
+                    await self._on_story_complete(completed_story_id, exit_code)
+
+                # Check force-exit after processing completions (Task 4.2)
+                if self._force_exit:
+                    await self._handle_force_exit()
+                    break
+
+            # Save state before exiting (Task 3.4)
+            save_state(self._state, self._state_path)
+
+        finally:
+            self._remove_signal_handlers()
+            # Print exit summary in all cases (normal, drain, force-exit)
+            with contextlib.suppress(Exception):
+                await self._print_exit_summary()
+
+    # ========================================================================
+    # Force-exit handling (Task 4)
+    # ========================================================================
+
+    async def _handle_force_exit(self) -> None:
+        """Cancel all running tasks and perform cleanup on force-exit.
+
+        Cancels all running asyncio tasks, waits for their finally blocks
+        to run (which call ``_kill_process()``), stops all output readers,
+        and saves state immediately.
+        """
+        # Cancel all running asyncio tasks (Task 4.2)
+        tasks_to_cancel = list(self._running_tasks.values())
+        for task in tasks_to_cancel:
+            task.cancel()
+
+        # Wait for all finally blocks to run for cleanup (Task 4.3)
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        # Stop all output readers (Task 4.4)
+        await self._output_mux.stop_all()
+
+        # Save state immediately after force-termination (Task 4.5)
+        save_state(self._state, self._state_path)

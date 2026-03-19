@@ -165,6 +165,16 @@ def parallel_run(
                 typer.echo(f"Parallel run error: {exc}", err=True)
                 raise typer.Exit(1) from None
             except (KeyboardInterrupt, asyncio.CancelledError):
+                # NOTE: With the orchestrator's custom SIGINT handler
+                # installed via signal.signal(), Python's default
+                # SIGINT→KeyboardInterrupt translation is overridden.
+                # Additionally, asyncio.run() installs its own SIGINT
+                # handler which the orchestrator overrides. After the
+                # orchestrator handles shutdown internally (drain or
+                # force-exit), run() returns normally — KeyboardInterrupt
+                # is never raised. This block is kept as a safety net
+                # for edge cases (e.g., signal during startup before
+                # handlers are installed).
                 typer.echo("Parallel run interrupted.", err=True)
                 raise typer.Exit(130) from None
     except StateError:

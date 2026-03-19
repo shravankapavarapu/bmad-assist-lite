@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import signal
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -797,16 +799,16 @@ class TestRunLoop:
         assert "3.1" in in_flight_during_spawn
 
     async def test_run_writes_final_summary(self) -> None:
-        """run() writes a final summary via write_orchestrator."""
+        """run() writes exit summary via write_orchestrator."""
         graph = _make_graph(ready_sequence=[[]], all_ids=[])
         orch = _make_orchestrator(graph=graph)
 
         await orch.run()
 
-        # write_orchestrator called for start + completion
+        # write_orchestrator called for start + exit summary
         calls = orch._output_mux.write_orchestrator.call_args_list
-        final_msg = calls[-1][0][0]
-        assert "Orchestration complete" in final_msg
+        messages = [c[0][0] for c in calls]
+        assert any("Exit summary" in m for m in messages)
 
 
 # ============================================================================
@@ -968,17 +970,48 @@ class TestProcessCleanup:
         # Should not raise
         await _kill_process(proc)
 
-    async def test_kill_process_calls_kill_on_unix(self) -> None:
-        """On non-Windows, _kill_process calls proc.kill()."""
+    async def test_kill_process_calls_killpg_on_unix(self) -> None:
+        """On non-Windows, _kill_process calls os.killpg() for process tree kill."""
         proc = MagicMock()
         proc.pid = 12345
         proc.kill = MagicMock()
         proc.wait = AsyncMock()
 
-        with patch("bmad_assist_lite.parallel.orchestrator.sys") as mock_sys:
+        # signal.SIGKILL (9) doesn't exist on Windows, so we must mock it too
+        sigkill = getattr(signal, "SIGKILL", 9)
+        with patch("bmad_assist_lite.parallel.orchestrator.sys") as mock_sys, \
+             patch("bmad_assist_lite.parallel.orchestrator.os.getpgid", create=True, return_value=12345) as mock_getpgid, \
+             patch("bmad_assist_lite.parallel.orchestrator.os.killpg", create=True) as mock_killpg, \
+             patch("bmad_assist_lite.parallel.orchestrator.signal") as mock_signal:
             mock_sys.platform = "linux"
+            mock_signal.SIGKILL = sigkill
             await _kill_process(proc)
 
+        mock_getpgid.assert_called_once_with(12345)
+        mock_killpg.assert_called_once_with(12345, sigkill)
+        # proc.kill should NOT be called when os.killpg succeeds
+        proc.kill.assert_not_called()
+
+    async def test_kill_process_falls_back_to_proc_kill_on_unix(self) -> None:
+        """On Unix, falls back to proc.kill() if os.killpg() fails."""
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.kill = MagicMock()
+        proc.wait = AsyncMock()
+
+        # On Windows, os.killpg and os.getpgid don't exist, so we must mock
+        # them with create=True. signal.SIGKILL also needs mocking.
+        sigkill = getattr(signal, "SIGKILL", 9)
+        with patch("bmad_assist_lite.parallel.orchestrator.sys") as mock_sys, \
+             patch("bmad_assist_lite.parallel.orchestrator.os.getpgid", create=True, side_effect=ProcessLookupError), \
+             patch("bmad_assist_lite.parallel.orchestrator.os.killpg", create=True) as mock_killpg, \
+             patch("bmad_assist_lite.parallel.orchestrator.signal") as mock_signal:
+            mock_sys.platform = "linux"
+            mock_signal.SIGKILL = sigkill
+            await _kill_process(proc)
+
+        # os.killpg should NOT be called because os.getpgid raised first
+        mock_killpg.assert_not_called()
         proc.kill.assert_called_once()
 
     @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
@@ -1264,3 +1297,804 @@ class TestOutputReaderLifecycle:
         await orch._spawn_story("3.2")
 
         mock_proc.wait.assert_called_once()
+
+
+# ============================================================================
+# TestSignalHandlerSetup (Task 7.9, 7.10)
+# ============================================================================
+
+
+class TestSignalHandlerSetup:
+    """Test signal handler installation, removal, and two-tier behavior."""
+
+    def test_draining_initialized_false(self) -> None:
+        """_draining flag is initialized to False."""
+        orch = _make_orchestrator()
+        assert orch._draining is False
+
+    def test_force_exit_initialized_false(self) -> None:
+        """_force_exit flag is initialized to False."""
+        orch = _make_orchestrator()
+        assert orch._force_exit is False
+
+    def test_on_sigint_first_call_sets_draining(self) -> None:
+        """First call to _on_sigint sets _draining to True."""
+        orch = _make_orchestrator()
+
+        # Set the loop reference as _install_signal_handlers would
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = False
+        orch._loop = mock_loop
+        orch._on_sigint()
+
+        assert orch._draining is True
+        assert orch._force_exit is False
+
+    def test_on_sigint_second_call_sets_force_exit(self) -> None:
+        """Second call to _on_sigint sets _force_exit to True."""
+        orch = _make_orchestrator()
+        orch._draining = True  # Simulate first signal already received
+
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = False
+        orch._loop = mock_loop
+        orch._on_sigint()
+
+        assert orch._draining is True
+        assert orch._force_exit is True
+
+    def test_on_sigint_third_call_is_idempotent(self) -> None:
+        """Third+ calls to _on_sigint are no-ops after force_exit is set."""
+        orch = _make_orchestrator()
+        orch._draining = True
+        orch._force_exit = True
+
+        # Should not raise or change state
+        orch._on_sigint()
+
+        assert orch._draining is True
+        assert orch._force_exit is True
+
+    def test_on_sigint_writes_drain_message(self) -> None:
+        """First signal schedules drain message via event loop."""
+        orch = _make_orchestrator()
+
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = False
+        orch._loop = mock_loop
+        orch._on_sigint()
+
+        # call_soon_threadsafe should have been called to schedule the message
+        mock_loop.call_soon_threadsafe.assert_called_once()
+
+    def test_on_sigint_writes_force_exit_message(self) -> None:
+        """Second signal schedules force-exit message via event loop."""
+        orch = _make_orchestrator()
+        orch._draining = True
+
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = False
+        orch._loop = mock_loop
+        orch._on_sigint()
+
+        mock_loop.call_soon_threadsafe.assert_called_once()
+
+    def test_on_sigint_handles_closed_loop(self) -> None:
+        """_on_sigint sets flags even when loop is closed (no message)."""
+        orch = _make_orchestrator()
+
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = True
+        orch._loop = mock_loop
+        orch._on_sigint()
+
+        assert orch._draining is True
+        mock_loop.call_soon_threadsafe.assert_not_called()
+
+    def test_on_sigint_handles_no_loop(self) -> None:
+        """_on_sigint sets flags even when no loop reference exists."""
+        orch = _make_orchestrator()
+        orch._loop = None
+        orch._on_sigint()
+
+        assert orch._draining is True
+
+    def test_install_signal_handlers_unix(self) -> None:
+        """On Unix, signal handlers are installed via loop.add_signal_handler."""
+        orch = _make_orchestrator()
+        mock_loop = MagicMock()
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.sys"
+        ) as mock_sys, patch(
+            "asyncio.get_running_loop", return_value=mock_loop
+        ):
+            mock_sys.platform = "linux"
+            orch._install_signal_handlers()
+
+        # Both SIGINT and SIGTERM handlers should be installed
+        calls = mock_loop.add_signal_handler.call_args_list
+        signal_nums = [c[0][0] for c in calls]
+        assert signal.SIGINT in signal_nums
+        assert signal.SIGTERM in signal_nums
+        # Loop reference should be stored
+        assert orch._loop is mock_loop
+
+    def test_install_signal_handlers_windows(self) -> None:
+        """On Windows, signal handler is installed via signal.signal for SIGINT."""
+        orch = _make_orchestrator()
+        mock_loop = MagicMock()
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.sys"
+        ) as mock_sys, patch(
+            "bmad_assist_lite.parallel.orchestrator.signal.signal"
+        ) as mock_signal, patch(
+            "asyncio.get_running_loop", return_value=mock_loop
+        ):
+            mock_sys.platform = "win32"
+            orch._install_signal_handlers()
+
+        mock_signal.assert_called_once_with(
+            signal.SIGINT, orch._signal_handler_sync
+        )
+        assert orch._loop is mock_loop
+
+    def test_remove_signal_handlers_unix(self) -> None:
+        """On Unix, signal handlers are removed via loop.remove_signal_handler."""
+        orch = _make_orchestrator()
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = False
+        orch._loop = mock_loop
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.sys"
+        ) as mock_sys:
+            mock_sys.platform = "linux"
+            orch._remove_signal_handlers()
+
+        calls = mock_loop.remove_signal_handler.call_args_list
+        signal_nums = [c[0][0] for c in calls]
+        assert signal.SIGINT in signal_nums
+        assert signal.SIGTERM in signal_nums
+
+    def test_remove_signal_handlers_windows(self) -> None:
+        """On Windows, SIGINT is restored to SIG_DFL."""
+        orch = _make_orchestrator()
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.sys"
+        ) as mock_sys, patch(
+            "bmad_assist_lite.parallel.orchestrator.signal.signal"
+        ) as mock_signal:
+            mock_sys.platform = "win32"
+            orch._remove_signal_handlers()
+
+        mock_signal.assert_called_once_with(signal.SIGINT, signal.SIG_DFL)
+
+    def test_signal_handler_sync_delegates_to_on_sigint(self) -> None:
+        """_signal_handler_sync delegates to _on_sigint."""
+        orch = _make_orchestrator()
+
+        with patch.object(orch, "_on_sigint") as mock_on_sigint:
+            orch._signal_handler_sync(signal.SIGINT, None)
+
+        mock_on_sigint.assert_called_once()
+
+    def test_sigterm_triggers_same_behavior_as_sigint_unix(self) -> None:
+        """On Unix, SIGTERM uses the same _on_sigint handler as SIGINT."""
+        orch = _make_orchestrator()
+        mock_loop = MagicMock()
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.sys"
+        ) as mock_sys, patch(
+            "asyncio.get_running_loop", return_value=mock_loop
+        ):
+            mock_sys.platform = "linux"
+            orch._install_signal_handlers()
+
+        # Both SIGINT and SIGTERM should use the same handler
+        # (bound methods are not identity-equal, so compare underlying __func__)
+        calls = mock_loop.add_signal_handler.call_args_list
+        handlers = {c[0][0]: c[0][1] for c in calls}
+        assert handlers[signal.SIGINT].__func__ is handlers[signal.SIGTERM].__func__
+
+
+# ============================================================================
+# TestDrainMode (Task 7.1, 7.2, 7.5, 7.11)
+# ============================================================================
+
+
+class TestDrainMode:
+    """Test drain mode prevents spawning and waits for running tasks."""
+
+    async def test_draining_prevents_new_story_spawning(self) -> None:
+        """When _draining is True, no new stories are spawned even if ready."""
+        graph = _make_graph(
+            ready_sequence=[["3.1", "3.2"], ["3.3"], []],
+            all_ids=["3.1", "3.2", "3.3"],
+        )
+        orch = _make_orchestrator(graph=graph)
+
+        spawned_ids: list[str] = []
+
+        async def counting_spawn(sid: str) -> int:
+            spawned_ids.append(sid)
+            # Set draining after first spawn to test prevention
+            orch._draining = True
+            return 0
+
+        with patch.object(orch, "_spawn_story", side_effect=counting_spawn):
+            with patch.object(
+                orch, "_on_story_complete", new_callable=AsyncMock
+            ) as mock_complete:
+                async def complete_side_effect(
+                    sid: str, code: int
+                ) -> None:
+                    orch._merging_ids.add(sid)
+                    task = orch._running_tasks.pop(sid, None)
+                    if task:
+                        orch._task_to_story.pop(task, None)
+
+                mock_complete.side_effect = complete_side_effect
+                await orch.run()
+
+        # Stories were spawned before draining was set, but 3.3 was NOT
+        # spawned because draining was True by the time loop re-evaluated
+        assert len(spawned_ids) <= 2  # noqa: PLR2004
+        assert "3.3" not in spawned_ids
+
+    async def test_drain_waits_for_running_tasks_before_exit(self) -> None:
+        """Drain mode waits for all running tasks to complete before exiting."""
+        graph = _make_graph(
+            ready_sequence=[["3.1"], []],
+            all_ids=["3.1"],
+        )
+        orch = _make_orchestrator(graph=graph)
+
+        completed_stories: list[str] = []
+
+        async def slow_spawn(sid: str) -> int:
+            await asyncio.sleep(0.05)
+            return 0
+
+        with patch.object(orch, "_spawn_story", side_effect=slow_spawn):
+            with patch.object(
+                orch, "_on_story_complete", new_callable=AsyncMock
+            ) as mock_complete:
+                async def complete_side_effect(
+                    sid: str, code: int
+                ) -> None:
+                    completed_stories.append(sid)
+                    orch._merging_ids.add(sid)
+                    task = orch._running_tasks.pop(sid, None)
+                    if task:
+                        orch._task_to_story.pop(task, None)
+
+                mock_complete.side_effect = complete_side_effect
+
+                # Set draining after stories are spawned (simulate Ctrl+C)
+                async def set_drain_after_delay() -> None:
+                    await asyncio.sleep(0.01)
+                    orch._draining = True
+
+                drain_task = asyncio.create_task(set_drain_after_delay())
+                await orch.run()
+                await drain_task
+
+        # The story should have completed before exit (drain waited)
+        assert "3.1" in completed_stories
+
+    async def test_drain_loop_breaks_when_no_tasks_remain(self) -> None:
+        """When draining and _running_tasks is empty, the loop breaks."""
+        graph = _make_graph(
+            ready_sequence=[[]],
+            all_ids=["3.1"],
+        )
+        orch = _make_orchestrator(graph=graph)
+        orch._draining = True  # Pre-set draining
+
+        # No tasks in-flight — should break immediately
+        await orch.run()
+
+        # Should have saved state on exit
+        # (implicitly verified by no hang / timeout)
+
+    async def test_drain_saves_state_before_exit(self) -> None:
+        """State is saved before exiting when draining."""
+        graph = _make_graph(
+            ready_sequence=[[]],
+            all_ids=["3.1"],
+        )
+        orch = _make_orchestrator(graph=graph)
+        orch._draining = True
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.save_state"
+        ) as mock_save:
+            await orch.run()
+
+        # save_state should have been called at least once during shutdown
+        assert mock_save.call_count >= 1
+
+    async def test_stagger_delay_interrupted_by_drain(self) -> None:
+        """If draining is set during stagger sleep, no subprocess spawns."""
+        config = _make_config(stagger_delay=0.1)
+        orch = _make_orchestrator(config=config)
+        orch._in_flight_ids.add("3.2")
+
+        async def set_drain_during_sleep(delay: float) -> None:
+            orch._draining = True
+
+        sleep_path = "bmad_assist_lite.parallel.orchestrator.asyncio.sleep"
+        with patch(sleep_path, side_effect=set_drain_during_sleep):
+            result = await orch._spawn_story("3.2")
+
+        # Should return -1 since draining was set during stagger delay
+        assert result == -1
+
+    async def test_no_stories_in_flight_at_ctrl_c(self) -> None:
+        """Orchestrator exits immediately with summary when no tasks are running."""
+        graph = _make_graph(
+            ready_sequence=[[]],
+            all_ids=["3.1", "3.2"],
+        )
+        orch = _make_orchestrator(graph=graph)
+        orch._draining = True
+        orch._done_ids.add("3.1")
+
+        # Should exit immediately and print summary
+        await orch.run()
+
+        # Verify exit summary was printed
+        summary_calls = [
+            c[0][0]
+            for c in orch._output_mux.write_orchestrator.call_args_list
+        ]
+        assert any("Exit summary" in msg for msg in summary_calls)
+
+    async def test_all_done_at_ctrl_c(self) -> None:
+        """Graceful exit with summary when all stories already done."""
+        graph = _make_graph(
+            ready_sequence=[[]],
+            all_ids=["3.1"],
+        )
+        orch = _make_orchestrator(graph=graph)
+        orch._draining = True
+        orch._done_ids.add("3.1")
+
+        await orch.run()
+
+        summary_calls = [
+            c[0][0]
+            for c in orch._output_mux.write_orchestrator.call_args_list
+        ]
+        assert any("Exit summary" in msg for msg in summary_calls)
+
+
+# ============================================================================
+# TestForceExit (Task 7.3, 7.4, 7.6)
+# ============================================================================
+
+
+class TestForceExit:
+    """Test force-exit cancels all tasks and saves state."""
+
+    async def test_force_exit_cancels_all_running_tasks(self) -> None:
+        """Setting _force_exit cancels all running asyncio tasks."""
+        graph = _make_graph(
+            ready_sequence=[["3.1"], []],
+            all_ids=["3.1"],
+        )
+        orch = _make_orchestrator(graph=graph)
+
+        cancelled = False
+
+        async def slow_spawn(sid: str) -> int:
+            nonlocal cancelled
+            try:
+                await asyncio.sleep(10)
+                return 0
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+
+        with patch.object(orch, "_spawn_story", side_effect=slow_spawn):
+            with patch.object(
+                orch, "_on_story_complete", new_callable=AsyncMock
+            ) as mock_complete:
+                async def complete_side_effect(
+                    sid: str, code: int
+                ) -> None:
+                    orch._merging_ids.add(sid)
+                    task = orch._running_tasks.pop(sid, None)
+                    if task:
+                        orch._task_to_story.pop(task, None)
+
+                mock_complete.side_effect = complete_side_effect
+
+                async def trigger_force_exit() -> None:
+                    await asyncio.sleep(0.05)
+                    orch._draining = True
+                    orch._force_exit = True
+
+                trigger = asyncio.create_task(trigger_force_exit())
+                await orch.run()
+                await trigger
+
+        assert cancelled is True
+
+    async def test_force_exit_saves_state(self) -> None:
+        """State is saved immediately after force-exit."""
+        orch = _make_orchestrator()
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.save_state"
+        ) as mock_save:
+            await orch._handle_force_exit()
+
+        # save_state is called during force-exit cleanup
+        mock_save.assert_called_once()
+
+    async def test_force_exit_calls_stop_all_on_output_mux(self) -> None:
+        """Force-exit calls stop_all on the output multiplexer."""
+        orch = _make_orchestrator()
+
+        await orch._handle_force_exit()
+
+        orch._output_mux.stop_all.assert_awaited_once()
+
+    async def test_handle_force_exit_cancels_tasks(self) -> None:
+        """_handle_force_exit cancels all tasks in _running_tasks."""
+        orch = _make_orchestrator()
+
+        mock_task = MagicMock()
+        mock_task.cancel = MagicMock()
+        orch._running_tasks["3.1"] = mock_task
+
+        with patch("asyncio.gather", new_callable=AsyncMock):
+            await orch._handle_force_exit()
+
+        mock_task.cancel.assert_called_once()
+
+    async def test_handle_force_exit_gathers_with_return_exceptions(
+        self,
+    ) -> None:
+        """_handle_force_exit uses gather with return_exceptions=True."""
+        orch = _make_orchestrator()
+
+        mock_task = MagicMock()
+        mock_task.cancel = MagicMock()
+        orch._running_tasks["3.1"] = mock_task
+
+        with patch("asyncio.gather", new_callable=AsyncMock) as mock_gather:
+            await orch._handle_force_exit()
+
+        mock_gather.assert_called_once_with(mock_task, return_exceptions=True)
+
+    async def test_force_exit_summary_includes_git_lock_warning(
+        self,
+    ) -> None:
+        """Force-exit summary warns about potential stale git lock files."""
+        graph = _make_graph(all_ids=["3.1"])
+        orch = _make_orchestrator(graph=graph)
+        orch._force_exit = True
+
+        await orch._print_exit_summary()
+
+        messages = [
+            c[0][0]
+            for c in orch._output_mux.write_orchestrator.call_args_list
+        ]
+        assert any(
+            ".git/index.lock" in msg
+            for msg in messages
+        )
+
+    async def test_no_git_lock_warning_on_drain_exit(self) -> None:
+        """Drain mode exit does NOT warn about stale git lock files."""
+        graph = _make_graph(all_ids=["3.1"])
+        orch = _make_orchestrator(graph=graph)
+        orch._draining = True
+        orch._force_exit = False
+
+        await orch._print_exit_summary()
+
+        messages = [
+            c[0][0]
+            for c in orch._output_mux.write_orchestrator.call_args_list
+        ]
+        assert not any(
+            ".git/index.lock" in msg
+            for msg in messages
+        )
+
+    async def test_force_exit_triggers_kill_process_via_finally(self) -> None:
+        """Force-exit cancellation invokes _kill_process via _spawn_story finally block."""
+        orch = _make_orchestrator()
+
+        mock_proc = _mock_process()
+        mock_proc.returncode = None  # Simulate still-running process
+        mock_proc.wait = AsyncMock(side_effect=asyncio.CancelledError())
+
+        kill_called = False
+
+        async def tracking_kill(proc: MagicMock) -> None:
+            nonlocal kill_called
+            kill_called = True
+
+        # Patch create_subprocess_exec and to_thread to set up real _spawn_story
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=Path("/fake/worktree"),
+        ), patch(
+            "bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=mock_proc,
+        ), patch(
+            "bmad_assist_lite.parallel.orchestrator._kill_process",
+            side_effect=tracking_kill,
+        ):
+            orch._in_flight_ids.add("3.1")
+            task = asyncio.create_task(orch._spawn_story("3.1"))
+            await asyncio.sleep(0.01)
+
+            # Force-exit: cancel the task (simulates _handle_force_exit)
+            orch._force_exit = True
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert kill_called is True
+
+    async def test_asyncio_wait_timeout_continues_loop(self) -> None:
+        """Loop continues when asyncio.wait timeout expires with no completions."""
+        graph = _make_graph(
+            ready_sequence=[["3.1"], []],
+            all_ids=["3.1"],
+        )
+        orch = _make_orchestrator(graph=graph)
+
+        async def spawn_then_drain(sid: str) -> int:
+            # Takes a while — loop may timeout waiting before completion
+            await asyncio.sleep(0.05)
+            return 0
+
+        with patch.object(orch, "_spawn_story", side_effect=spawn_then_drain):
+            with patch.object(
+                orch, "_on_story_complete", new_callable=AsyncMock
+            ) as mock_complete:
+                async def complete_side_effect(
+                    sid: str, code: int
+                ) -> None:
+                    orch._merging_ids.add(sid)
+                    task = orch._running_tasks.pop(sid, None)
+                    if task:
+                        orch._task_to_story.pop(task, None)
+
+                mock_complete.side_effect = complete_side_effect
+                await orch.run()
+
+        # Should have completed normally (timeout didn't break the loop)
+        assert "3.1" in orch._merging_ids
+
+
+# ============================================================================
+# TestExitSummary (Task 7.7, 7.8)
+# ============================================================================
+
+
+class TestExitSummary:
+    """Test exit summary content and blocked story dependency listing."""
+
+    async def test_exit_summary_includes_all_counts(self) -> None:
+        """Exit summary shows done, merging, in-flight, blocked, remaining."""
+        graph = _make_graph(
+            all_ids=["3.1", "3.2", "3.3", "3.4", "3.5"],
+        )
+        orch = _make_orchestrator(graph=graph)
+        orch._done_ids = {"3.1"}
+        orch._merging_ids = {"3.2"}
+        orch._in_flight_ids = {"3.3"}
+        orch._blocked_ids = {"3.4"}
+        # 3.5 is remaining (backlog)
+
+        await orch._print_exit_summary()
+
+        messages = [
+            c[0][0]
+            for c in orch._output_mux.write_orchestrator.call_args_list
+        ]
+        summary = messages[0]
+        assert "Done: 1" in summary
+        assert "Merging: 1" in summary
+        assert "In-flight: 1" in summary
+        assert "Blocked: 1" in summary
+        assert "Remaining: 1" in summary
+
+    async def test_exit_summary_lists_blocked_with_unmet_deps(self) -> None:
+        """Blocked stories list their unmet dependencies."""
+        graph = _make_graph(all_ids=["3.1", "3.2", "3.3"])
+        # Configure dependencies_of to return actual deps
+        graph.dependencies_of = MagicMock(return_value=["3.1", "3.3"])
+        orch = _make_orchestrator(graph=graph)
+        orch._blocked_ids = {"3.2"}
+        orch._done_ids = {"3.1"}
+        # 3.3 is NOT done, so it's an unmet dependency
+
+        await orch._print_exit_summary()
+
+        messages = [
+            c[0][0]
+            for c in orch._output_mux.write_orchestrator.call_args_list
+        ]
+        blocked_msgs = [m for m in messages if "Blocked: 3.2" in m]
+        assert len(blocked_msgs) == 1
+        assert "3.3" in blocked_msgs[0]
+        assert "unmet deps" in blocked_msgs[0]
+
+    async def test_exit_summary_blocked_no_unmet_deps(self) -> None:
+        """Blocked story with all deps satisfied shows 'failed execution'."""
+        graph = _make_graph(all_ids=["3.1", "3.2"])
+        graph.dependencies_of = MagicMock(return_value=["3.1"])
+        orch = _make_orchestrator(graph=graph)
+        orch._blocked_ids = {"3.2"}
+        orch._done_ids = {"3.1"}
+
+        await orch._print_exit_summary()
+
+        messages = [
+            c[0][0]
+            for c in orch._output_mux.write_orchestrator.call_args_list
+        ]
+        blocked_msgs = [m for m in messages if "Blocked: 3.2" in m]
+        assert len(blocked_msgs) == 1
+        assert "failed execution" in blocked_msgs[0]
+
+    async def test_exit_summary_no_blocked_stories(self) -> None:
+        """Exit summary with no blocked stories doesn't list any."""
+        graph = _make_graph(all_ids=["3.1"])
+        orch = _make_orchestrator(graph=graph)
+        orch._done_ids = {"3.1"}
+
+        await orch._print_exit_summary()
+
+        messages = [
+            c[0][0]
+            for c in orch._output_mux.write_orchestrator.call_args_list
+        ]
+        assert not any("Blocked:" in m for m in messages if "Blocked: 0" not in m)
+
+    async def test_exit_summary_called_from_run(self) -> None:
+        """run() calls _print_exit_summary on exit."""
+        graph = _make_graph(ready_sequence=[[]], all_ids=[])
+        orch = _make_orchestrator(graph=graph)
+
+        with patch.object(
+            orch, "_print_exit_summary", new_callable=AsyncMock
+        ) as mock_summary:
+            await orch.run()
+
+        mock_summary.assert_called_once()
+
+    async def test_signal_handlers_removed_on_run_exit(self) -> None:
+        """Signal handlers are removed when run() exits (via finally)."""
+        graph = _make_graph(ready_sequence=[[]], all_ids=[])
+        orch = _make_orchestrator(graph=graph)
+
+        with patch.object(orch, "_install_signal_handlers"), patch.object(
+            orch, "_remove_signal_handlers"
+        ) as mock_remove:
+            await orch.run()
+
+        mock_remove.assert_called_once()
+
+    async def test_signal_handlers_removed_on_run_exception(self) -> None:
+        """Signal handlers are removed even if run() raises an exception."""
+        graph = _make_graph(ready_sequence=[[]], all_ids=[])
+        orch = _make_orchestrator(graph=graph)
+
+        with patch.object(orch, "_install_signal_handlers"), patch.object(
+            orch, "_remove_signal_handlers"
+        ) as mock_remove, patch.object(
+            orch, "_print_exit_summary", new_callable=AsyncMock
+        ):
+            # Make get_ready_stories raise to test exception path
+            graph.get_ready_stories = MagicMock(
+                side_effect=RuntimeError("test")
+            )
+            with pytest.raises(RuntimeError, match="test"):
+                await orch.run()
+
+        mock_remove.assert_called_once()
+
+
+# ============================================================================
+# TestSubprocessIsolation (Task 7.12)
+# ============================================================================
+
+
+class TestSubprocessIsolation:
+    """Test subprocess process group isolation for drain mode."""
+
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
+    @patch(
+        "bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec"
+    )
+    async def test_start_new_session_on_unix(
+        self,
+        mock_exec: AsyncMock,
+        mock_to_thread: AsyncMock,
+    ) -> None:
+        """On Unix, subprocess uses start_new_session=True for isolation."""
+        mock_to_thread.return_value = Path("/fake/worktree")
+        mock_exec.return_value = _mock_process(returncode=0)
+
+        orch = _make_orchestrator()
+        orch._in_flight_ids.add("3.2")
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.sys"
+        ) as mock_sys:
+            mock_sys.platform = "linux"
+            mock_sys.executable = sys.executable
+            await orch._spawn_story("3.2")
+
+        call_kwargs = mock_exec.call_args[1]
+        assert call_kwargs.get("start_new_session") is True
+
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
+    @patch(
+        "bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec"
+    )
+    async def test_create_new_process_group_on_windows_isolation(
+        self,
+        mock_exec: AsyncMock,
+        mock_to_thread: AsyncMock,
+    ) -> None:
+        """On Windows, subprocess uses CREATE_NEW_PROCESS_GROUP for isolation."""
+        mock_to_thread.return_value = Path("/fake/worktree")
+        mock_exec.return_value = _mock_process(returncode=0)
+
+        orch = _make_orchestrator()
+        orch._in_flight_ids.add("3.2")
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.sys"
+        ) as mock_sys:
+            mock_sys.platform = "win32"
+            mock_sys.executable = sys.executable
+            await orch._spawn_story("3.2")
+
+        call_kwargs = mock_exec.call_args[1]
+        assert call_kwargs.get("creationflags") == (
+            subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+
+    @patch("bmad_assist_lite.parallel.orchestrator.asyncio.to_thread")
+    @patch(
+        "bmad_assist_lite.parallel.orchestrator.asyncio.create_subprocess_exec"
+    )
+    async def test_unix_no_creationflags(
+        self,
+        mock_exec: AsyncMock,
+        mock_to_thread: AsyncMock,
+    ) -> None:
+        """On Unix, no creationflags are set (only start_new_session)."""
+        mock_to_thread.return_value = Path("/fake/worktree")
+        mock_exec.return_value = _mock_process(returncode=0)
+
+        orch = _make_orchestrator()
+        orch._in_flight_ids.add("3.2")
+
+        with patch(
+            "bmad_assist_lite.parallel.orchestrator.sys"
+        ) as mock_sys:
+            mock_sys.platform = "linux"
+            mock_sys.executable = sys.executable
+            await orch._spawn_story("3.2")
+
+        call_kwargs = mock_exec.call_args[1]
+        assert "creationflags" not in call_kwargs

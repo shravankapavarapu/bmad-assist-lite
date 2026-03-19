@@ -62,8 +62,8 @@ development_status:
   3-2-orchestrator-core-loop-and-subprocess-spawning: done
   3-3-parallel-state-persistence: done
   3-4-parallel-run-cli-command-and-branch-guard: done
-  3-5-live-output-multiplexing: review
-  3-6-graceful-shutdown-and-drain-mode: backlog
+  3-5-live-output-multiplexing: done
+  3-6-graceful-shutdown-and-drain-mode: review
   epic-3-retrospective: optional
 
   # Epic 4: Merge & Integration Safety
