@@ -26,7 +26,7 @@ class RetrospectiveCompiler:
 
     def get_required_files(self) -> list[str]:
         """Return glob patterns for required files."""
-        return ["**/epics*.md", "**/prd*.md"]
+        return []
 
     def get_variables(self) -> dict[str, Any]:
         """Return default variables for this workflow."""
