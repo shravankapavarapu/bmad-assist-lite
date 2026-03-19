@@ -50,15 +50,15 @@ development_status:
   epic-1-retrospective: optional
 
   # Epic 2: Dependency Resolution
-  epic-2: in-progress
+  epic-2: done
   2-1-epic-dependency-parsing-and-dag-construction: done
   2-2-circular-dependency-detection-and-scheduling-scores: done
-  2-3-ready-story-discovery-and-re-evaluation: review
+  2-3-ready-story-discovery-and-re-evaluation: done
   epic-2-retrospective: optional
 
   # Epic 3: Parallel Execution Core
-  epic-3: backlog
-  3-1-worktree-manager: backlog
+  epic-3: in-progress
+  3-1-worktree-manager: review
   3-2-orchestrator-core-loop-and-subprocess-spawning: backlog
   3-3-parallel-state-persistence: backlog
   3-4-parallel-run-cli-command-and-branch-guard: backlog
