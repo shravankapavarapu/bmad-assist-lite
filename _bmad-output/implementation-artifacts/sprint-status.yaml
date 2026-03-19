@@ -51,8 +51,8 @@ development_status:
 
   # Epic 2: Dependency Resolution
   epic-2: in-progress
-  2-1-epic-dependency-parsing-and-dag-construction: review
-  2-2-circular-dependency-detection-and-scheduling-scores: backlog
+  2-1-epic-dependency-parsing-and-dag-construction: done
+  2-2-circular-dependency-detection-and-scheduling-scores: review
   2-3-ready-story-discovery-and-re-evaluation: backlog
   epic-2-retrospective: optional
 

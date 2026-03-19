@@ -2,16 +2,21 @@
 
 Parses story dependencies from parsed EpicStory objects and builds a directed
 acyclic graph (DAG) representing the dependency relationships between stories.
-Provides efficient queries for roots, dependencies, and dependents.
+Provides efficient queries for roots, dependencies, dependents, cycle detection,
+and scheduling score computation.
 """
 
 import logging
 import re
+from collections import deque
 
 from bmad_assist_lite.bmad.parser import EpicStory
 from bmad_assist_lite.parallel.exceptions import ParallelError
 
 logger = logging.getLogger(__name__)
+
+# Default priority when EpicStory.priority is empty or non-numeric
+_DEFAULT_PRIORITY = 5
 
 # Pattern to strip "Story " prefix from dependency strings like "Story 3.2"
 _STORY_PREFIX_RE = re.compile(r"^\s*(?:Story\s+)?(\d+\.\d+)\s*$", re.IGNORECASE)
@@ -49,7 +54,7 @@ def _normalize_dependency(raw: str) -> str | None:
     match = _STORY_PREFIX_RE.match(raw)
     if match:
         return match.group(1)
-    logger.warning("Could not parse dependency string: %r", raw)
+    logger.warning("[DependencyGraph] Could not parse dependency string: %r", raw)
     return None
 
 
@@ -70,14 +75,19 @@ class DependencyGraph:
             stories: List of EpicStory objects from the epic parser.
 
         Raises:
-            ParallelError: If duplicate story numbers are found in the input.
+            ParallelError: If duplicate story numbers are found in the input,
+                or if a circular dependency is detected.
 
         """
         self._forward: dict[str, list[str]] = {}
         self._reverse: dict[str, list[str]] = {}
         self._dep_count: dict[str, int] = {}
+        self._priorities: dict[str, int] = {}
+        self._scores: dict[str, int] = {}
 
         self._build(stories)
+        self.detect_cycles()
+        self._scores = self._compute_scores()
 
     def __repr__(self) -> str:
         """Return a developer-friendly string representation."""
@@ -104,7 +114,7 @@ class DependencyGraph:
             sid = story.number
             if sid in known_ids:
                 msg = f"Duplicate story number: {sid!r}"
-                logger.error(msg)
+                logger.error("[DependencyGraph] %s", msg)
                 raise ParallelError(msg)
             known_ids.add(sid)
             ordered_ids.append(sid)
@@ -114,6 +124,14 @@ class DependencyGraph:
             self._forward[sid] = []
             self._reverse[sid] = []
             self._dep_count[sid] = 0
+
+        # Parse priorities
+        for story in stories:
+            sid = story.number
+            try:
+                self._priorities[sid] = int(story.priority)
+            except ValueError:
+                self._priorities[sid] = _DEFAULT_PRIORITY
 
         # Build edges
         for story in stories:
@@ -128,7 +146,8 @@ class DependencyGraph:
                 # Skip self-references
                 if dep_id == sid:
                     logger.warning(
-                        "Story %s lists itself as a dependency; skipping self-reference",
+                        "[DependencyGraph] Story %s lists itself as a dependency;"
+                        " skipping self-reference",
                         sid,
                     )
                     continue
@@ -136,7 +155,8 @@ class DependencyGraph:
                 # Skip unknown dependencies
                 if dep_id not in known_ids:
                     logger.warning(
-                        "Story %s depends on %s which is not in the epic; skipping",
+                        "[DependencyGraph] Story %s depends on %s which is not in the epic;"
+                        " skipping",
                         sid,
                         dep_id,
                     )
@@ -154,7 +174,7 @@ class DependencyGraph:
                 self._dep_count[sid] += 1
 
         logger.debug(
-            "Built dependency graph: %d stories, %d roots",
+            "[DependencyGraph] Built dependency graph: %d stories, %d roots",
             len(known_ids),
             sum(1 for c in self._dep_count.values() if c == 0),
         )
@@ -227,3 +247,196 @@ class DependencyGraph:
 
         """
         return len(self._forward)
+
+    @property
+    def scores(self) -> dict[str, int]:
+        """Return the computed scheduling scores for all stories.
+
+        Returns:
+            Dict mapping story_id to its scheduling score.
+
+        """
+        return dict(self._scores)
+
+    def score_of(self, story_id: str) -> int:
+        """Return the scheduling score for a specific story.
+
+        Args:
+            story_id: The story ID to query.
+
+        Returns:
+            The scheduling score for the story.
+
+        Raises:
+            KeyError: If story_id is not in the graph.
+
+        """
+        if story_id not in self._scores:
+            raise KeyError(f"Story {story_id!r} not found in graph")
+        return self._scores[story_id]
+
+    # ========================================================================
+    # Cycle detection
+    # ========================================================================
+
+    def detect_cycles(self) -> None:
+        """Detect circular dependencies using DFS with three-color marking.
+
+        Iterate over ALL nodes to cover disconnected subgraphs. If a cycle is
+        found, reconstruct the cycle path and raise ParallelError.
+
+        Raises:
+            ParallelError: If a circular dependency is detected, with the
+                cycle path in the error message.
+
+        """
+        # Three-color marking: WHITE=unvisited, GRAY=in-progress, BLACK=done
+        white = 0
+        gray = 1
+        black = 2
+
+        color: dict[str, int] = dict.fromkeys(self._forward, white)
+        # Track the DFS path for cycle reconstruction
+        path: list[str] = []
+
+        def _dfs(node: str) -> list[str] | None:
+            """Perform DFS from node, returning cycle path if found."""
+            color[node] = gray
+            path.append(node)
+
+            for neighbor in self._forward[node]:
+                if color[neighbor] == gray:
+                    # Found a cycle — reconstruct path from neighbor to neighbor
+                    cycle_start = path.index(neighbor)
+                    cycle = path[cycle_start:] + [neighbor]
+                    return cycle
+                if color[neighbor] == white:
+                    result = _dfs(neighbor)
+                    if result is not None:
+                        return result
+
+            path.pop()
+            color[node] = black
+            return None
+
+        # Check all nodes (handles disconnected subgraphs)
+        for story_id in self._forward:
+            if color[story_id] == white:
+                cycle = _dfs(story_id)
+                if cycle is not None:
+                    cycle_str = " -> ".join(cycle)
+                    msg = f"Circular dependency: {cycle_str}"
+                    logger.error("[DependencyGraph] %s", msg)
+                    raise ParallelError(msg)
+
+        logger.debug(
+            "[DependencyGraph] Cycle detection complete: no cycles found in %d stories",
+            len(self._forward),
+        )
+
+    # ========================================================================
+    # Scheduling score computation
+    # ========================================================================
+
+    def _compute_scores(self) -> dict[str, int]:
+        """Compute scheduling scores for all stories.
+
+        Score formula: (1000 * unblock_potential) + (100 * depth_score) + (10 * priority)
+
+        Where:
+        - unblock_potential: count of all transitive downstream dependents
+        - depth_score: max_depth - node_depth (roots get highest)
+        - priority: parsed from EpicStory.priority, default 5
+
+        Returns:
+            Dict mapping story_id to its scheduling score.
+
+        """
+        if not self._forward:
+            return {}
+
+        unblock = self._compute_unblock_potential()
+        depths = self._compute_topological_depths()
+
+        max_depth = max(depths.values()) if depths else 0
+
+        result: dict[str, int] = {}
+        for sid in self._forward:
+            unblock_potential = unblock[sid]
+            depth_score = max_depth - depths[sid]
+            priority = self._priorities.get(sid, _DEFAULT_PRIORITY)
+            score = (1000 * unblock_potential) + (100 * depth_score) + (10 * priority)
+            result[sid] = score
+            logger.debug(
+                "[DependencyGraph] Score for %s: %d "
+                "(unblock=%d, depth_score=%d, priority=%d)",
+                sid,
+                score,
+                unblock_potential,
+                depth_score,
+                priority,
+            )
+
+        return result
+
+    def _compute_unblock_potential(self) -> dict[str, int]:
+        """Compute transitive downstream dependent count for each story.
+
+        Use BFS on reverse adjacency to count all stories transitively
+        dependent on each story.
+
+        Returns:
+            Dict mapping story_id to count of transitive dependents.
+
+        """
+        result: dict[str, int] = {}
+
+        for sid in self._forward:
+            # BFS on reverse adjacency from sid
+            visited: set[str] = set()
+            queue: deque[str] = deque()
+            for dep in self._reverse[sid]:
+                if dep not in visited:
+                    visited.add(dep)
+                    queue.append(dep)
+            while queue:
+                current = queue.popleft()
+                for dep in self._reverse[current]:
+                    if dep not in visited:
+                        visited.add(dep)
+                        queue.append(dep)
+            result[sid] = len(visited)
+
+        return result
+
+    def _compute_topological_depths(self) -> dict[str, int]:
+        """Compute longest path from any root to each node.
+
+        Use BFS (Kahn's algorithm style) to compute topological depth as
+        the longest path from any root to each node.
+
+        Returns:
+            Dict mapping story_id to its topological depth.
+
+        """
+        depths: dict[str, int] = dict.fromkeys(self._forward, 0)
+        # in-degree based on forward edges (story depends on = forward edge)
+        in_degree: dict[str, int] = {sid: len(self._forward[sid]) for sid in self._forward}
+
+        queue: deque[str] = deque()
+        for sid in self._forward:
+            if in_degree[sid] == 0:
+                queue.append(sid)
+
+        while queue:
+            current = queue.popleft()
+            # For each story that depends on current (reverse edges)
+            for dependent in self._reverse[current]:
+                new_depth = depths[current] + 1
+                if new_depth > depths[dependent]:
+                    depths[dependent] = new_depth
+                in_degree[dependent] -= 1
+                if in_degree[dependent] == 0:
+                    queue.append(dependent)
+
+        return depths

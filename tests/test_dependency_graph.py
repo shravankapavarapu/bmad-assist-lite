@@ -15,12 +15,18 @@ from bmad_assist_lite.parallel.exceptions import ParallelError
 # ============================================================================
 
 
-def _story(number: str, title: str = "", deps: list[str] | None = None) -> EpicStory:
+def _story(
+    number: str,
+    title: str = "",
+    deps: list[str] | None = None,
+    priority: str = "",
+) -> EpicStory:
     """Create an EpicStory with minimal required fields."""
     return EpicStory(
         number=number,
         title=title or f"Story {number}",
         dependencies=deps if deps is not None else [],
+        priority=priority,
     )
 
 
@@ -322,7 +328,7 @@ class TestPerformance:
     """Test performance with 50 stories completes in <1 second."""
 
     def test_50_stories_under_one_second(self) -> None:
-        """DAG construction for 50 stories completes in <1 second (NFR9)."""
+        """DAG construction + cycle detection + scoring for 50 stories in <1s."""
         stories = []
         for i in range(1, 51):
             deps = [f"Story 1.{j}" for j in range(1, i) if j % 3 == 0]
@@ -334,6 +340,8 @@ class TestPerformance:
 
         assert elapsed < 1.0
         assert graph.story_count == 50
+        # Verify scoring was also computed
+        assert len(graph.scores) == 50
 
 
 # ============================================================================
@@ -512,3 +520,238 @@ class TestNaturalSortOrder:
         stories = [_story(f"1.{i}") for i in [10, 2, 1]]
         graph = DependencyGraph(stories)
         assert graph.all_story_ids == ["1.1", "1.2", "1.10"]
+
+
+# ============================================================================
+# Story 2.2 Task 4.1–4.7: Cycle detection tests
+# ============================================================================
+
+
+class TestCycleDetection:
+    """Test circular dependency detection."""
+
+    def test_simple_2_node_cycle_raises(self) -> None:
+        """A depends on B and B depends on A raises ParallelError with cycle path."""
+        stories = [
+            _story("2.1", deps=["Story 2.2"]),
+            _story("2.2", deps=["Story 2.1"]),
+        ]
+        with pytest.raises(ParallelError, match="Circular dependency"):
+            DependencyGraph(stories)
+
+    def test_3_node_cycle_raises(self) -> None:
+        """A→B→C→A cycle raises ParallelError with cycle path."""
+        stories = [
+            _story("2.1", deps=["Story 2.3"]),
+            _story("2.2", deps=["Story 2.1"]),
+            _story("2.3", deps=["Story 2.2"]),
+        ]
+        with pytest.raises(ParallelError, match="Circular dependency"):
+            DependencyGraph(stories)
+
+    def test_self_cycle_no_error(self) -> None:
+        """Self-reference is silently removed by _build(), so detect_cycles() should not trigger."""
+        stories = [
+            _story("1.1", deps=["Story 1.1"]),
+        ]
+        # Should not raise — self-refs are stripped in _build()
+        graph = DependencyGraph(stories)
+        assert graph.dependencies_of("1.1") == []
+
+    def test_valid_dag_diamond_no_cycle(self) -> None:
+        """Valid diamond DAG does NOT raise (no false positives)."""
+        stories = [
+            _story("1.1", deps=[]),
+            _story("1.2", deps=["Story 1.1"]),
+            _story("1.3", deps=["Story 1.1"]),
+            _story("1.4", deps=["Story 1.2", "Story 1.3"]),
+        ]
+        graph = DependencyGraph(stories)
+        assert graph.story_count == 4
+
+    def test_disconnected_subgraphs_with_cycle(self) -> None:
+        """One valid subgraph + one with cycle → cycle detected."""
+        stories = [
+            # Valid subgraph
+            _story("1.1", deps=[]),
+            _story("1.2", deps=["Story 1.1"]),
+            # Cyclic subgraph
+            _story("2.1", deps=["Story 2.2"]),
+            _story("2.2", deps=["Story 2.1"]),
+        ]
+        with pytest.raises(ParallelError, match="Circular dependency"):
+            DependencyGraph(stories)
+
+    def test_linear_chain_no_cycle(self) -> None:
+        """Linear chain A→B→C has no cycle."""
+        stories = [
+            _story("1.1", deps=[]),
+            _story("1.2", deps=["Story 1.1"]),
+            _story("1.3", deps=["Story 1.2"]),
+        ]
+        graph = DependencyGraph(stories)
+        assert graph.story_count == 3
+
+    def test_cycle_error_message_contains_path(self) -> None:
+        """Cycle error message contains the specific cycle path."""
+        stories = [
+            _story("2.1", deps=["Story 2.2"]),
+            _story("2.2", deps=["Story 2.1"]),
+        ]
+        with pytest.raises(ParallelError, match=r"2\.\d+ -> 2\.\d+ -> 2\.\d+"):
+            DependencyGraph(stories)
+
+    def test_detect_cycles_called_from_init(self) -> None:
+        """Constructing DependencyGraph with cyclic stories raises from __init__."""
+        stories = [
+            _story("3.1", deps=["Story 3.2"]),
+            _story("3.2", deps=["Story 3.1"]),
+        ]
+        with pytest.raises(ParallelError, match="Circular dependency"):
+            DependencyGraph(stories)
+
+
+# ============================================================================
+# Story 2.2 Task 4.8–4.16: Scheduling score tests
+# ============================================================================
+
+
+class TestSchedulingScores:
+    """Test scheduling score computation."""
+
+    def test_linear_chain_scoring(self) -> None:
+        """Linear chain: A→B→C — A has highest score, C has lowest."""
+        stories = [
+            _story("1.1", deps=[]),
+            _story("1.2", deps=["Story 1.1"]),
+            _story("1.3", deps=["Story 1.2"]),
+        ]
+        graph = DependencyGraph(stories)
+        scores = graph.scores
+        assert scores["1.1"] > scores["1.2"] > scores["1.3"]
+
+    def test_diamond_scoring(self) -> None:
+        """Diamond: A←{B,C}←D — A has highest unblock_potential (3 transitive)."""
+        stories = [
+            _story("1.1", deps=[]),
+            _story("1.2", deps=["Story 1.1"]),
+            _story("1.3", deps=["Story 1.1"]),
+            _story("1.4", deps=["Story 1.2", "Story 1.3"]),
+        ]
+        graph = DependencyGraph(stories)
+        scores = graph.scores
+        # 1.1 unblocks all 3 transitively
+        assert scores["1.1"] > scores["1.2"]
+        assert scores["1.1"] > scores["1.3"]
+        assert scores["1.1"] > scores["1.4"]
+        # Exact values: max_depth=2
+        # 1.1: unblock=3, depth_score=2 (2-0), priority=5 → 3000+200+50=3250
+        # 1.2: unblock=1, depth_score=1 (2-1), priority=5 → 1000+100+50=1150
+        # 1.3: unblock=1, depth_score=1 (2-1), priority=5 → 1000+100+50=1150
+        # 1.4: unblock=0, depth_score=0 (2-2), priority=5 → 0+0+50=50
+        assert scores["1.1"] == 3250
+        assert scores["1.2"] == 1150
+        assert scores["1.3"] == 1150
+        assert scores["1.4"] == 50
+
+    def test_all_independent_scoring(self) -> None:
+        """All independent stories have unblock_potential=0 and same score."""
+        stories = [_story(f"1.{i}") for i in range(1, 4)]
+        graph = DependencyGraph(stories)
+        scores = graph.scores
+        # All should have same score: unblock=0, depth_score=0, priority=5 → 50
+        assert scores["1.1"] == scores["1.2"] == scores["1.3"]
+        assert scores["1.1"] == 50
+
+    def test_empty_graph_scoring(self) -> None:
+        """Empty graph returns empty dict."""
+        graph = DependencyGraph([])
+        assert graph.scores == {}
+
+    def test_single_story_scoring(self) -> None:
+        """Single story: unblock=0, depth_score=0, priority=5 → score=50."""
+        graph = DependencyGraph([_story("1.1")])
+        assert graph.scores["1.1"] == 50
+
+    def test_wide_fan_out_scoring(self) -> None:
+        """One root with 5 direct dependents — root scores highest."""
+        stories = [_story("1.1", deps=[])]
+        for i in range(2, 7):
+            stories.append(_story(f"1.{i}", deps=["Story 1.1"]))
+        graph = DependencyGraph(stories)
+        scores = graph.scores
+        # Root unblocks 5 stories
+        for i in range(2, 7):
+            assert scores["1.1"] > scores[f"1.{i}"]
+
+    def test_scoring_with_numeric_priority(self) -> None:
+        """Explicit numeric priority='8' produces 10*8=80 in priority component."""
+        stories = [_story("1.1", priority="8")]
+        graph = DependencyGraph(stories)
+        # unblock=0, depth_score=0, priority=8 → score = 10*8 = 80
+        assert graph.scores["1.1"] == 80
+
+    def test_scoring_with_non_numeric_priority(self) -> None:
+        """Non-numeric priority='high' falls back to default 5 (10*5=50)."""
+        stories = [_story("1.1", priority="high")]
+        graph = DependencyGraph(stories)
+        # unblock=0, depth_score=0, priority=5 → score = 50
+        assert graph.scores["1.1"] == 50
+
+    def test_scoring_with_empty_priority(self) -> None:
+        """Empty priority='' falls back to default 5 (10*5=50)."""
+        stories = [_story("1.1", priority="")]
+        graph = DependencyGraph(stories)
+        assert graph.scores["1.1"] == 50
+
+    def test_score_of_accessor(self) -> None:
+        """score_of() returns correct score for a story."""
+        stories = [_story("1.1")]
+        graph = DependencyGraph(stories)
+        assert graph.score_of("1.1") == 50
+
+    def test_score_of_unknown_raises(self) -> None:
+        """score_of() raises KeyError for unknown story."""
+        graph = DependencyGraph([_story("1.1")])
+        with pytest.raises(KeyError):
+            graph.score_of("9.9")
+
+    def test_scores_property_returns_copy(self) -> None:
+        """scores property returns a copy, not the internal dict."""
+        graph = DependencyGraph([_story("1.1")])
+        s1 = graph.scores
+        s2 = graph.scores
+        assert s1 == s2
+        assert s1 is not s2
+
+    def test_linear_chain_unblock_values(self) -> None:
+        """Linear chain: A unblocks 2, B unblocks 1, C unblocks 0."""
+        stories = [
+            _story("1.1", deps=[]),
+            _story("1.2", deps=["Story 1.1"]),
+            _story("1.3", deps=["Story 1.2"]),
+        ]
+        graph = DependencyGraph(stories)
+        scores = graph.scores
+        # A: unblock=2, depth_score=2, priority=5 → 2000+200+50=2250
+        # B: unblock=1, depth_score=1, priority=5 → 1000+100+50=1150
+        # C: unblock=0, depth_score=0, priority=5 → 0+0+50=50
+        assert scores["1.1"] == 2250
+        assert scores["1.2"] == 1150
+        assert scores["1.3"] == 50
+
+    def test_scoring_formula_components(self) -> None:
+        """Verify the formula: (1000 * unblock) + (100 * depth_score) + (10 * priority)."""
+        # Single root with one dependent, priority=3
+        stories = [
+            _story("1.1", deps=[], priority="3"),
+            _story("1.2", deps=["Story 1.1"], priority="7"),
+        ]
+        graph = DependencyGraph(stories)
+        scores = graph.scores
+        # 1.1: unblock=1, depth_score=1 (max_depth=1, depth=0), priority=3
+        # → 1000*1 + 100*1 + 10*3 = 1130
+        assert scores["1.1"] == 1130
+        # 1.2: unblock=0, depth_score=0 (max_depth=1, depth=1), priority=7
+        # → 1000*0 + 100*0 + 10*7 = 70
+        assert scores["1.2"] == 70
