@@ -33,6 +33,11 @@ class ParallelConfig(BaseModel):
         ge=0,
         description="Number of retry attempts for post-merge quality gate fixes",
     )
+    conflict_resolution_timeout: int = Field(
+        default=120,
+        ge=10,
+        description="Timeout in seconds for Claude CLI conflict resolution",
+    )
     worktree_base_dir: Path | None = Field(
         default=None,
         description="Custom base directory for git worktrees (None = auto)",

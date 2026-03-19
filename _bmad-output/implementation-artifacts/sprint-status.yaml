@@ -68,8 +68,8 @@ development_status:
 
   # Epic 4: Merge & Integration Safety
   epic-4: in-progress
-  4-1-sequential-merge-queue-and-git-merge: review
-  4-2-claude-cli-merge-conflict-resolution: backlog
+  4-1-sequential-merge-queue-and-git-merge: done
+  4-2-claude-cli-merge-conflict-resolution: review
   4-3-post-merge-quality-gate: backlog
   4-4-post-merge-fix-quality-gate-and-sprint-status-update: backlog
   epic-4-retrospective: optional
