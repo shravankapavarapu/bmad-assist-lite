@@ -1,0 +1,417 @@
+"""Orchestrate parallel story execution via asyncio subprocess spawning.
+
+Spawns loop subprocesses in git worktrees for each ready story, monitors
+their completion, and manages the story lifecycle (in-flight, merging,
+blocked). Concurrency is controlled by an asyncio semaphore and an
+optional stagger delay between spawns.
+"""
+
+import asyncio
+import contextlib
+import logging
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+from bmad_assist_lite.parallel.config import ParallelConfig
+from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
+from bmad_assist_lite.parallel.exceptions import ParallelError
+from bmad_assist_lite.parallel.worktree_manager import cleanup_worktree, create_worktree
+
+logger = logging.getLogger(__name__)
+
+# Pattern to extract the story number from a story_id like "3.2", "3-2", "10.1"
+_STORY_NUM_RE = re.compile(r"[-.]")
+
+
+# ============================================================================
+# Story number extraction
+# ============================================================================
+
+
+def _extract_story_num(story_id: str) -> str:
+    """Extract the story number (last segment) from a story ID.
+
+    Splits on ``"."`` or ``"-"`` and returns the last segment.
+
+    Args:
+        story_id: A story identifier, e.g. ``"3.2"``, ``"3-2"``, ``"3.10"``.
+
+    Returns:
+        The last numeric segment (e.g. ``"2"``, ``"2"``, ``"10"``).
+
+    Raises:
+        ParallelError: If the story_id has no separator or is empty.
+
+    """
+    parts = _STORY_NUM_RE.split(story_id)
+    if len(parts) < 2:  # noqa: PLR2004
+        msg = f"Cannot extract story number from story_id: {story_id!r}"
+        raise ParallelError(msg)
+    return parts[-1]
+
+
+# ============================================================================
+# Platform-safe process termination
+# ============================================================================
+
+
+async def _kill_process(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a subprocess and wait for it to exit.
+
+    Uses platform-appropriate termination: ``taskkill /F /T`` on Windows
+    for process-tree kill, ``proc.kill()`` on Unix.
+
+    Args:
+        proc: The asyncio subprocess to terminate.
+
+    """
+    pid = proc.pid
+    if pid is None:
+        return
+
+    try:
+        if sys.platform == "win32":
+            # Use taskkill for process-tree termination on Windows
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode != 0:
+                    # taskkill failed (e.g. access denied) — fallback to basic kill
+                    with contextlib.suppress(ProcessLookupError):
+                        proc.kill()
+            except Exception:
+                # Fallback to basic kill on any exception (FileNotFoundError, etc.)
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+        else:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+    except Exception as exc:
+        logger.warning("[ORCHESTRATOR] Failed to kill process PID %d: %s", pid, exc)
+
+    # Always wait to avoid zombies — use timeout to prevent indefinite hang
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=15)
+    except TimeoutError:
+        logger.warning(
+            "[ORCHESTRATOR] Process PID %d did not exit within 15s after kill", pid,
+        )
+    except Exception:
+        pass
+
+
+# ============================================================================
+# Orchestrator
+# ============================================================================
+
+
+class Orchestrator:
+    """Asyncio orchestrator for parallel story execution.
+
+    Spawns loop subprocesses in git worktrees, monitors their completion
+    via ``asyncio.wait(FIRST_COMPLETED)``, and manages concurrency via
+    ``asyncio.Semaphore``.
+    """
+
+    def __init__(
+        self,
+        dependency_graph: DependencyGraph,
+        config: ParallelConfig,
+        project_root: Path,
+        epic_num: int,
+    ) -> None:
+        """Initialize the orchestrator with injected dependencies.
+
+        Args:
+            dependency_graph: Pre-built DAG of story dependencies.
+            config: Parallel execution configuration.
+            project_root: Path to the main git repository.
+            epic_num: The epic number being executed.
+
+        """
+        self._dependency_graph = dependency_graph
+        self._config = config
+        self._project_root = project_root
+        self._epic_num = epic_num
+
+        # Concurrency control
+        self._semaphore = asyncio.Semaphore(config.max_concurrency)
+
+        # Active task tracking
+        self._running_tasks: dict[str, asyncio.Task[int]] = {}
+        self._task_to_story: dict[asyncio.Task[int], str] = {}
+        self._story_worktrees: dict[str, Path] = {}
+
+        # Status tracking sets
+        self._done_ids: set[str] = set()
+        self._in_flight_ids: set[str] = set()
+        self._blocked_ids: set[str] = set()
+        self._merging_ids: set[str] = set()
+
+    # ========================================================================
+    # Subprocess spawning
+    # ========================================================================
+
+    async def _spawn_story(self, story_id: str) -> int:
+        """Spawn a story loop subprocess in a dedicated worktree.
+
+        Acquires a semaphore slot, creates the worktree, applies the
+        stagger delay, then spawns the subprocess and waits for it.
+
+        Args:
+            story_id: The story ID to execute (e.g. ``"3.2"``).
+
+        Returns:
+            The subprocess exit code.
+
+        """
+        proc: asyncio.subprocess.Process | None = None
+
+        async with self._semaphore:
+            try:
+                # Apply stagger delay inside semaphore to avoid blocking
+                # the main loop dispatcher during delay
+                if self._config.stagger_delay > 0:
+                    await asyncio.sleep(self._config.stagger_delay)
+
+                # Create worktree (sync function, bridge via to_thread)
+                worktree_path: Path = await asyncio.to_thread(
+                    create_worktree,
+                    story_id,
+                    self._project_root,
+                    self._config.worktree_base_dir,
+                )
+                self._story_worktrees[story_id] = worktree_path
+
+                # Extract story number for CLI flag
+                story_num = _extract_story_num(story_id)
+
+                # Build environment
+                env = {**os.environ, "BMAD_PARALLEL_MODE": "1"}
+
+                # Spawn subprocess
+                logger.info(
+                    "[ORCHESTRATOR] Spawning story %s in worktree %s",
+                    story_id,
+                    worktree_path,
+                )
+                exec_args = [
+                    sys.executable,
+                    "-m",
+                    "bmad_assist_lite",
+                    "run",
+                    "--epic",
+                    str(self._epic_num),
+                    "--story",
+                    str(story_num),
+                    "--single-story",
+                ]
+                if sys.platform == "win32":
+                    proc = await asyncio.create_subprocess_exec(
+                        *exec_args,
+                        cwd=str(worktree_path),
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        env=env,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    )
+                else:
+                    proc = await asyncio.create_subprocess_exec(
+                        *exec_args,
+                        cwd=str(worktree_path),
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        env=env,
+                    )
+
+                # Wait for completion (prefer communicate over wait)
+                await proc.communicate()
+                return_code = proc.returncode
+                if return_code is None:  # pragma: no cover
+                    return_code = -1
+
+                logger.info(
+                    "[ORCHESTRATOR] Story %s exited with code %d",
+                    story_id,
+                    return_code,
+                )
+                return return_code
+
+            except asyncio.CancelledError:
+                logger.warning(
+                    "[ORCHESTRATOR] Story %s task cancelled, killing subprocess",
+                    story_id,
+                )
+                raise
+
+            except Exception as exc:
+                logger.error(
+                    "[ORCHESTRATOR] Story %s spawn/execution failed: %s",
+                    story_id,
+                    exc,
+                )
+                raise
+
+            finally:
+                # Process cleanup in finally guarantees termination for ALL
+                # exception types including BaseException (KeyboardInterrupt,
+                # SystemExit). Use asyncio.shield to prevent CancelledError
+                # from aborting cleanup midway. Skip if process already exited
+                # (returncode is set by communicate/wait on success).
+                if proc is not None and proc.returncode is None:
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await asyncio.shield(_kill_process(proc))
+
+    # ========================================================================
+    # Completion handling
+    # ========================================================================
+
+    async def _on_story_complete(self, story_id: str, exit_code: int) -> None:
+        """Handle a completed story subprocess.
+
+        Transitions the story to ``_merging_ids`` on success or
+        ``_blocked_ids`` on failure, and cleans up all tracking state.
+        This is the single authority for story lifecycle transitions.
+
+        Args:
+            story_id: The story that completed.
+            exit_code: The subprocess exit code.
+
+        """
+        # Clean up all tracking state atomically — single source of truth
+        self._in_flight_ids.discard(story_id)
+        task = self._running_tasks.pop(story_id, None)
+        if task is not None:
+            self._task_to_story.pop(task, None)
+
+        if exit_code == 0:
+            self._merging_ids.add(story_id)
+            logger.info(
+                "[ORCHESTRATOR] Story %s completed successfully, status -> merging",
+                story_id,
+            )
+        else:
+            self._blocked_ids.add(story_id)
+            logger.error(
+                "[ORCHESTRATOR] Story %s failed with exit code %d, status -> blocked",
+                story_id,
+                exit_code,
+            )
+            # Clean up worktree for blocked stories (successful keep for merge)
+            if story_id in self._story_worktrees:
+                try:
+                    await asyncio.to_thread(
+                        cleanup_worktree,
+                        story_id,
+                        self._project_root,
+                        self._config.worktree_base_dir,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[ORCHESTRATOR] Worktree cleanup failed for %s: %s",
+                        story_id,
+                        exc,
+                    )
+                finally:
+                    # Remove worktree path mapping for blocked stories
+                    del self._story_worktrees[story_id]
+
+    # ========================================================================
+    # Main orchestration loop
+    # ========================================================================
+
+    async def run(self) -> None:
+        """Execute the main orchestration loop.
+
+        Continuously evaluates ready stories from the dependency graph,
+        spawns them as asyncio tasks, and waits for completions. Exits
+        when all stories are done, merging, or blocked, and no tasks
+        remain in-flight.
+
+        """
+        logger.info(
+            "[ORCHESTRATOR] Starting orchestration for epic %d (%d stories)",
+            self._epic_num,
+            self._dependency_graph.story_count,
+        )
+
+        while True:
+            # Re-evaluate ready stories: union _merging_ids with _done_ids
+            # so dependents of successfully-completed stories can proceed
+            ready = self._dependency_graph.get_ready_stories(
+                self._done_ids | self._merging_ids,
+                self._in_flight_ids,
+                self._blocked_ids,
+            )
+
+            # Spawn ready stories
+            for story_id in ready:
+                self._in_flight_ids.add(story_id)
+                task = asyncio.create_task(
+                    self._spawn_story(story_id),
+                    name=f"story-{story_id}",
+                )
+                self._running_tasks[story_id] = task
+                self._task_to_story[task] = story_id
+
+            # Check termination: no running tasks and no new ready stories
+            if not self._running_tasks:
+                # Stalemate detection: log warning with status summary
+                all_ids = set(self._dependency_graph.all_story_ids)
+                completed = self._done_ids | self._merging_ids
+                remaining = all_ids - completed - self._blocked_ids
+                if remaining:
+                    logger.warning(
+                        "[ORCHESTRATOR] Stalemate detected: no stories ready and "
+                        "none in-flight. Done: %d, Merging: %d, Blocked: %d, "
+                        "Remaining: %d (%s)",
+                        len(self._done_ids),
+                        len(self._merging_ids),
+                        len(self._blocked_ids),
+                        len(remaining),
+                        sorted(remaining),
+                    )
+                break
+
+            # Wait for at least one task to complete
+            # Snapshot via set() to prevent RuntimeError if dict mutated
+            done_tasks, _pending = await asyncio.wait(
+                set(self._running_tasks.values()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Process completed tasks
+            for completed_task in done_tasks:
+                completed_story_id = self._task_to_story.get(completed_task)
+                if completed_story_id is None:
+                    continue
+
+                try:
+                    exit_code = completed_task.result()
+                except asyncio.CancelledError:
+                    exit_code = -1
+                except Exception:
+                    logger.exception(
+                        "[ORCHESTRATOR] Unexpected error in story %s task",
+                        completed_story_id,
+                    )
+                    exit_code = -1
+
+                await self._on_story_complete(completed_story_id, exit_code)
+
+        # Log final summary
+        logger.info(
+            "[ORCHESTRATOR] Orchestration complete. "
+            "Done: %d, Merging: %d, Blocked: %d",
+            len(self._done_ids),
+            len(self._merging_ids),
+            len(self._blocked_ids),
+        )

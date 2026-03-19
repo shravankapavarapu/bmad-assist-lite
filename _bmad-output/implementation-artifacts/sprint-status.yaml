@@ -58,8 +58,8 @@ development_status:
 
   # Epic 3: Parallel Execution Core
   epic-3: in-progress
-  3-1-worktree-manager: review
-  3-2-orchestrator-core-loop-and-subprocess-spawning: backlog
+  3-1-worktree-manager: done
+  3-2-orchestrator-core-loop-and-subprocess-spawning: review
   3-3-parallel-state-persistence: backlog
   3-4-parallel-run-cli-command-and-branch-guard: backlog
   3-5-live-output-multiplexing: backlog
