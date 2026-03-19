@@ -6,10 +6,13 @@ from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.git_ops import get_current_branch, is_protected_branch
 from bmad_assist_lite.parallel.merger import (
     ConflictResolutionResult,
+    GateResult,
     MergeQueue,
     MergeResult,
+    PostMergeQGResult,
     merge_story,
     resolve_conflicts,
+    run_post_merge_qg,
 )
 from bmad_assist_lite.parallel.orchestrator import Orchestrator
 from bmad_assist_lite.parallel.output import OutputMultiplexer
@@ -33,6 +36,7 @@ from bmad_assist_lite.parallel.worktree_manager import (
 __all__ = [
     "ConflictResolutionResult",
     "DependencyGraph",
+    "GateResult",
     "MergeQueue",
     "MergeResult",
     "Orchestrator",
@@ -40,6 +44,7 @@ __all__ = [
     "ParallelConfig",
     "ParallelError",
     "ParallelState",
+    "PostMergeQGResult",
     "StoryState",
     "StoryStatus",
     "WorktreeInfo",
@@ -54,5 +59,6 @@ __all__ = [
     "merge_story",
     "prune_worktrees",
     "resolve_conflicts",
+    "run_post_merge_qg",
     "save_state",
 ]

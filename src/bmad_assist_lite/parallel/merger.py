@@ -8,19 +8,31 @@ Conflict resolution via Claude CLI is opt-in: when enabled, merge conflicts
 are sent to ``claude --print`` with full story context, and the resolved
 content is applied, validated, and committed automatically.
 
+Post-merge quality gates (``run_post_merge_qg()``) run lint, typecheck,
+build, and test on the base branch after each successful merge so that
+integration issues between parallel stories are caught immediately.  This
+module does **not** write to ``parallel-state.yaml``; state transitions are
+the orchestrator's responsibility.
+
 All git operations use ``_run_git()`` from ``git_ops`` — never raw
-``subprocess``.  This module does **not** write to ``parallel-state.yaml``;
-state transitions are the orchestrator's responsibility.
+``subprocess``.  Shell quality-gate commands use ``run_command()`` from
+``core/command_runner``.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import re
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
+from bmad_assist_lite.core.command_runner import clean_test_output, run_command
+from bmad_assist_lite.core.quality_gates import QualityGateEntry
+from bmad_assist_lite.core.toolchain import detect_toolchain
 from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.git_ops import _run_git
 from bmad_assist_lite.parallel.worktree_manager import (
@@ -32,12 +44,59 @@ from bmad_assist_lite.providers._windows import (
     kill_process,
 )
 
+if TYPE_CHECKING:
+    from bmad_assist_lite.core.config import Config
+
 logger = logging.getLogger(__name__)
 
 
 # ============================================================================
 # MergeResult Model
 # ============================================================================
+
+
+class GateResult(BaseModel):
+    """Immutable result of a single quality gate command execution.
+
+    Attributes:
+        name: Gate name (e.g. ``"Lint"``, ``"Typecheck"``).
+        command: Shell command that was executed.
+        passed: ``True`` when the command exited with code 0.
+        exit_code: Raw process exit code.
+        stdout: Captured standard output.
+        stderr: Captured standard error.
+        duration_ms: Wall-clock execution time in milliseconds.
+
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    command: str
+    passed: bool
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: int
+
+
+class PostMergeQGResult(BaseModel):
+    """Immutable result of the post-merge quality gate run.
+
+    Attributes:
+        all_passed: ``True`` only when every gate passed.
+        story_id: The story identifier the QG ran for.
+        gate_results: Per-gate execution results.
+        duration_ms: Total wall-clock time across all gates.
+
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    all_passed: bool
+    story_id: str
+    gate_results: list[GateResult] = []
+    duration_ms: int = 0
 
 
 class MergeResult(BaseModel):
@@ -48,6 +107,8 @@ class MergeResult(BaseModel):
         story_id: The story identifier that was merged.
         conflict_files: List of conflicting file paths (empty on success).
         error: Human-readable error description, or ``None`` on success.
+        qg_result: Post-merge quality gate result, or ``None`` when QG
+            was not run (e.g. merge failed).
 
     """
 
@@ -57,6 +118,7 @@ class MergeResult(BaseModel):
     story_id: str
     conflict_files: list[str] = []
     error: str | None = None
+    qg_result: PostMergeQGResult | None = None
 
 
 # ============================================================================
@@ -584,6 +646,195 @@ def merge_story(
 
 
 # ============================================================================
+# Post-Merge Quality Gate
+# ============================================================================
+
+
+def _resolve_qg_commands(
+    project_root: Path,
+    config: Config | None = None,
+) -> list[QualityGateEntry]:
+    """Resolve quality gate commands from config or auto-detected toolchain.
+
+    Priority order:
+
+    1. ``config.quality_gate`` section — build entries from ``lint``,
+       ``typecheck``, ``build``, and **test** fields.  For the test command
+       we prefer ``test`` (full suite) over ``test_unit`` because post-merge
+       QG runs at the project level for integration validation.
+    2. ``detect_toolchain(project_root)`` — auto-detected commands.
+
+    Returns an empty list when no commands are found (the caller treats
+    this as an all-pass).
+
+    Args:
+        project_root: Path to the project root directory.
+        config: Optional loaded configuration.
+
+    Returns:
+        Ordered list of :class:`QualityGateEntry` objects.
+
+    """
+    # Priority 1: Config quality_gate section
+    if config is not None and config.quality_gate is not None:
+        qg = config.quality_gate
+        entries: list[QualityGateEntry] = []
+        if qg.lint:
+            entries.append(QualityGateEntry(name="Lint", command=qg.lint, status="PENDING"))
+        if qg.typecheck:
+            entries.append(
+                QualityGateEntry(name="Typecheck", command=qg.typecheck, status="PENDING")
+            )
+        if qg.build:
+            entries.append(QualityGateEntry(name="Build", command=qg.build, status="PENDING"))
+        # Post-merge QG prefers full test suite over unit-only
+        test_cmd = qg.test or qg.test_unit
+        if test_cmd:
+            entries.append(QualityGateEntry(name="Tests", command=test_cmd, status="PENDING"))
+        if entries:
+            return entries
+
+    # Priority 2: Auto-detect from project root
+    tc = detect_toolchain(project_root)
+    entries = []
+    if tc.lint:
+        entries.append(QualityGateEntry(name="Lint", command=tc.lint, status="PENDING"))
+    if tc.typecheck:
+        entries.append(
+            QualityGateEntry(name="Typecheck", command=tc.typecheck, status="PENDING")
+        )
+    if tc.build:
+        entries.append(QualityGateEntry(name="Build", command=tc.build, status="PENDING"))
+    test_cmd = tc.test or tc.test_unit
+    if test_cmd:
+        entries.append(QualityGateEntry(name="Tests", command=test_cmd, status="PENDING"))
+    return entries
+
+
+def _write_post_merge_failure_report(
+    story_id: str,
+    project_root: Path,
+    qg_result: PostMergeQGResult,
+) -> Path:
+    """Write a failure report for post-merge quality gate failures.
+
+    Creates a Markdown report at
+    ``.bmad-assist-lite/cache/post-merge-qg-failures-{story_id}.md``
+    containing per-gate details (command, exit code, stdout/stderr).
+
+    Args:
+        story_id: The story identifier.
+        project_root: Path to the project root directory.
+        qg_result: The post-merge QG result containing gate details.
+
+    Returns:
+        Path to the written report file.
+
+    """
+    cache_dir = project_root / ".bmad-assist-lite" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    report_path = cache_dir / f"post-merge-qg-failures-{story_id}.md"
+
+    lines = [f"# Post-Merge Quality Gate Failures — Story {story_id}\n"]
+    for gate in qg_result.gate_results:
+        if not gate.passed:
+            lines.append(f"\n## Failed: {gate.name}\n")
+            lines.append(f"**Command:** `{gate.command}`\n")
+            lines.append(f"**Exit Code:** {gate.exit_code}\n")
+            raw_output = ((gate.stdout or "") + "\n" + (gate.stderr or "")).strip()
+            output = clean_test_output(raw_output)
+            lines.append(f"**Output:**\n```\n{output}\n```\n")
+
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    tag = f"[QG|post-merge|{story_id}]"
+    logger.info("%s Wrote failure report to %s", tag, report_path)
+    return report_path
+
+
+def run_post_merge_qg(
+    story_id: str,
+    project_root: Path,
+    config: Config | None = None,
+    command_timeout: int = 120,
+) -> PostMergeQGResult:
+    """Run post-merge quality gates on the base branch.
+
+    Executes lint, typecheck, build, and test commands on the base branch
+    after a successful merge.  Commands are sourced from the config
+    ``quality_gate`` section first, falling back to auto-detected toolchain.
+
+    Normal gate failures are captured in the return model — they are **not**
+    raised as exceptions.
+
+    Args:
+        story_id: Story identifier that was just merged.
+        project_root: Path to the project root (base branch checkout).
+        config: Optional loaded configuration for command sourcing.
+        command_timeout: Per-command timeout in seconds; overridden by
+            ``config.quality_gate.command_timeout`` when available.
+
+    Returns:
+        A :class:`PostMergeQGResult` describing the outcome.
+
+    """
+    tag = f"[QG|post-merge|{story_id}]"
+
+    commands = _resolve_qg_commands(project_root, config)
+    if not commands:
+        logger.info("%s No QG commands found — passing by default", tag)
+        return PostMergeQGResult(
+            all_passed=True,
+            story_id=story_id,
+            gate_results=[],
+            duration_ms=0,
+        )
+
+    # Resolve command_timeout from config if available
+    if config is not None and config.quality_gate is not None:
+        command_timeout = config.quality_gate.command_timeout
+
+    gate_results: list[GateResult] = []
+    for entry in commands:
+        logger.info("%s Running: %s", tag, entry.command)
+        cmd_result = run_command(entry.command, project_root, timeout=command_timeout)
+
+        gate = GateResult(
+            name=entry.name,
+            command=entry.command,
+            passed=cmd_result.success,
+            exit_code=cmd_result.exit_code,
+            stdout=cmd_result.stdout,
+            stderr=cmd_result.stderr,
+            duration_ms=cmd_result.duration_ms,
+        )
+        gate_results.append(gate)
+
+        icon = "\u2714" if gate.passed else "\u2718"
+        logger.info("%s %s %s: %s", tag, icon, gate.name, "PASS" if gate.passed else "FAIL")
+
+    all_passed = all(g.passed for g in gate_results)
+    total_duration = sum(g.duration_ms for g in gate_results)
+
+    result = PostMergeQGResult(
+        all_passed=all_passed,
+        story_id=story_id,
+        gate_results=gate_results,
+        duration_ms=total_duration,
+    )
+
+    if not all_passed:
+        try:
+            _write_post_merge_failure_report(story_id, project_root, result)
+        except OSError:
+            logger.warning(
+                "%s Failed to write failure report (non-fatal)", tag, exc_info=True
+            )
+
+    return result
+
+
+# ============================================================================
 # MergeQueue — Async Sequential Queue
 # ============================================================================
 
@@ -596,12 +847,19 @@ class MergeQueue:
 
     Args:
         project_root: Path to the main git repository.
+        config: Optional configuration for post-merge quality gate
+            command sourcing.
 
     """
 
-    def __init__(self, project_root: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        config: Config | None = None,
+    ) -> None:
         """Initialise the merge queue for the given repository."""
         self._project_root = project_root
+        self._config = config
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._lock = asyncio.Lock()
 
@@ -622,6 +880,10 @@ class MergeQueue:
         a time.  Uses ``get_nowait()`` to avoid blocking on an empty
         queue.
 
+        After a successful merge, runs post-merge quality gates on the
+        base branch.  The ``qg_result`` field on the returned
+        ``MergeResult`` conveys the quality gate outcome to the caller.
+
         Returns:
             A ``MergeResult`` on success/conflict, or ``None`` when the
             queue is empty.
@@ -638,6 +900,25 @@ class MergeQueue:
                 result = await asyncio.to_thread(
                     merge_story, story_id, self._project_root
                 )
+
+                # Run post-merge QG only on successful merge
+                if result.success:
+                    try:
+                        qg_result = await asyncio.to_thread(
+                            run_post_merge_qg,
+                            story_id,
+                            self._project_root,
+                            self._config,
+                        )
+                        result = result.model_copy(update={"qg_result": qg_result})
+                    except Exception:
+                        logger.error(
+                            "[MERGE|%s] Post-merge QG failed with unexpected error "
+                            "(merge was successful, returning result without QG)",
+                            story_id,
+                            exc_info=True,
+                        )
+
                 return result
             finally:
                 self._queue.task_done()

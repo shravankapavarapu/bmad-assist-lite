@@ -706,13 +706,20 @@ class TestMergeQueueEnqueue:
 class TestMergeQueueProcessNext:
     """Test MergeQueue.process_next() merge execution."""
 
+    @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
     async def test_process_next_calls_merge_story(
         self,
         mock_merge: MagicMock,
+        mock_qg: MagicMock,
     ) -> None:
         """Verify process_next calls merge_story with correct arguments."""
+        from bmad_assist_lite.parallel.merger import PostMergeQGResult
+
         mock_merge.return_value = MergeResult(success=True, story_id="3.1")
+        mock_qg.return_value = PostMergeQGResult(
+            all_passed=True, story_id="3.1",
+        )
 
         queue = MergeQueue(project_root=Path("/repo"))
         await queue.enqueue("3.1")
@@ -763,12 +770,16 @@ class TestMergeQueueProcessNext:
 class TestMergeQueueSequentialExecution:
     """Test that MergeQueue enforces one-at-a-time merge execution."""
 
+    @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
     async def test_concurrent_process_next_executes_serially(
         self,
         mock_merge: MagicMock,
+        mock_qg: MagicMock,
     ) -> None:
         """Verify two concurrent process_next calls execute serially (never overlap)."""
+        from bmad_assist_lite.parallel.merger import PostMergeQGResult
+
         execution_log: list[str] = []
 
         def slow_merge(story_id: str, project_root: Path) -> MergeResult:
@@ -778,6 +789,9 @@ class TestMergeQueueSequentialExecution:
             return MergeResult(success=True, story_id=story_id)
 
         mock_merge.side_effect = slow_merge
+        mock_qg.side_effect = lambda sid, root, cfg=None: PostMergeQGResult(
+            all_passed=True, story_id=sid,
+        )
 
         queue = MergeQueue(project_root=Path("/repo"))
         await queue.enqueue("3.1")
@@ -807,12 +821,16 @@ class TestMergeQueueSequentialExecution:
         assert execution_log[3] == f"end-{second_id}"
         assert first_id != second_id
 
+    @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
     async def test_fifo_merge_ordering(
         self,
         mock_merge: MagicMock,
+        mock_qg: MagicMock,
     ) -> None:
         """Verify stories are merged in FIFO order."""
+        from bmad_assist_lite.parallel.merger import PostMergeQGResult
+
         merged_order: list[str] = []
 
         def record_merge(story_id: str, project_root: Path) -> MergeResult:
@@ -820,6 +838,9 @@ class TestMergeQueueSequentialExecution:
             return MergeResult(success=True, story_id=story_id)
 
         mock_merge.side_effect = record_merge
+        mock_qg.side_effect = lambda sid, root, cfg=None: PostMergeQGResult(
+            all_passed=True, story_id=sid,
+        )
 
         queue = MergeQueue(project_root=Path("/repo"))
         await queue.enqueue("3.1")
