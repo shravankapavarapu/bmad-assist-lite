@@ -409,6 +409,89 @@ class DependencyGraph:
 
         return result
 
+    # ========================================================================
+    # Ready story discovery
+    # ========================================================================
+
+    def are_dependencies_satisfied(self, story_id: str, done_ids: set[str]) -> bool:
+        """Check whether all dependencies of a story are satisfied.
+
+        Performs O(1) set membership lookup per dependency, making the total
+        cost O(k) where k is the number of direct dependencies (typically 0-3).
+
+        Args:
+            story_id: The story ID to check.
+            done_ids: Set of story IDs that have been completed.
+
+        Returns:
+            True if every dependency of story_id is present in done_ids,
+            or if the story has no dependencies (vacuously satisfied).
+
+        Raises:
+            KeyError: If story_id is not in the graph.
+
+        """
+        if story_id not in self._forward:
+            raise KeyError(f"Story {story_id!r} not found in graph")
+        return all(dep_id in done_ids for dep_id in self._forward[story_id])
+
+    def get_ready_stories(
+        self,
+        done_ids: set[str],
+        in_flight_ids: set[str],
+        blocked_ids: set[str],
+    ) -> list[str]:
+        """Determine which stories are ready to execute.
+
+        A story is "ready" if ALL of the following hold:
+        - All its dependencies are in done_ids (satisfied).
+        - The story itself is NOT in done_ids (already completed).
+        - The story itself is NOT in in_flight_ids (currently running).
+        - The story itself is NOT in blocked_ids (failed/blocked).
+
+        Ready stories are sorted by descending scheduling score so that the
+        orchestrator can pick the highest-value stories first. Stories with
+        equal scores are sorted by natural numeric order for deterministic
+        tiebreaking.
+
+        This is a pure query method — it does not mutate any internal state.
+        The orchestrator calls this after every story completion or block event
+        with updated sets. Re-evaluation is simply calling this method again.
+
+        Args:
+            done_ids: Set of story IDs that completed successfully.
+            in_flight_ids: Set of story IDs currently being executed.
+            blocked_ids: Set of story IDs that are blocked/failed.
+
+        Returns:
+            List of story IDs that are ready to execute, sorted by descending
+            scheduling score with natural numeric tiebreaking.
+
+        """
+        ready: list[str] = []
+
+        for story_id in self._forward:
+            if story_id in done_ids or story_id in in_flight_ids or story_id in blocked_ids:
+                continue
+            if self.are_dependencies_satisfied(story_id, done_ids):
+                ready.append(story_id)
+
+        # Sort by descending score, then by natural numeric order for tiebreaking
+        ready.sort(key=lambda sid: (-self._scores[sid], _story_sort_key(sid)))
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[DependencyGraph] Ready stories: %s (scores: %s)",
+                ready,
+                {sid: self._scores[sid] for sid in ready},
+            )
+
+        return ready
+
+    # ========================================================================
+    # Topological depth computation
+    # ========================================================================
+
     def _compute_topological_depths(self) -> dict[str, int]:
         """Compute longest path from any root to each node.
 
