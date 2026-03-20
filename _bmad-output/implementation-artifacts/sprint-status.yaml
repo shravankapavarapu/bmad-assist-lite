@@ -95,7 +95,7 @@ development_status:
   epic-7: in-progress
   7-1-fix-phase-timeout-defaults: done
   7-2-result-collector: done
-  7-3-graceful-timeout-base-provider: review
-  7-4-claude-sdk-graceful-timeout: backlog
+  7-3-graceful-timeout-base-provider: done
+  7-4-claude-sdk-graceful-timeout: review
   7-5-gemini-alignment-and-documentation-sync: backlog
   epic-7-retrospective: optional
