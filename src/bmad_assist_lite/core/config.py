@@ -8,7 +8,7 @@
 import copy
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -101,16 +101,17 @@ class TimeoutsConfig(BaseModel):
     retrospective: int | None = None
 
     # Phases that need longer timeouts than default (300s)
-    _PHASE_DEFAULTS: dict[str, int] = {
+    _PHASE_DEFAULTS: ClassVar[dict[str, int]] = {
         "create_story": 900,
         "validate_story": 600,
         "validate_story_synthesis": 600,
         "dev_story": 1200,
         "code_review": 900,
-        "code_review_synthesis": 600,
+        "code_review_synthesis": 900,
         "quality_gate": 300,
-        "fix_quality_gate": 600,
+        "fix_quality_gate": 900,
         "epic_quality_gate": 600,
+        "retrospective": 600,
     }
 
     def get_timeout(self, phase: str) -> int:

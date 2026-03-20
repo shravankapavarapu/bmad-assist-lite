@@ -6,6 +6,7 @@ from bmad_assist_lite.core.config import (
     Config,
     LoopConfig,
     QualityGateConfig,
+    TimeoutsConfig,
     _deep_merge,
     _reset_config,
     get_config,
@@ -13,6 +14,7 @@ from bmad_assist_lite.core.config import (
     load_config,
 )
 from bmad_assist_lite.core.exceptions import ConfigError
+from bmad_assist_lite.core.state import Phase
 
 # ============================================================================
 # load_config
@@ -147,8 +149,9 @@ class TestGetPhaseTimeout:
         assert get_phase_timeout(cfg, "dev_story") == 999
         # create_story has a phase-specific default (900s) since it needs longer
         assert get_phase_timeout(cfg, "create_story") == 900
-        # Unknown phase falls back to timeouts.default
-        assert get_phase_timeout(cfg, "retrospective") == 200
+        # Changed in 7.1: was 200 (fell through to timeouts.default), now 600
+        # because retrospective has a phase-specific default that wins over timeouts.default
+        assert get_phase_timeout(cfg, "retrospective") == 600
 
     def test_get_phase_timeout_without_timeouts(self):
         """When config.timeouts is None, falls back to config.timeout."""
@@ -245,3 +248,68 @@ class TestLoopConfigDefaults:
         assert lc.epic_teardown == ["epic_quality_gate", "retrospective"]
         assert len(lc.story) == 7
         assert len(lc.epic_teardown) == 2
+
+
+# ============================================================================
+# Phase defaults coverage regression test
+# ============================================================================
+
+
+class TestPhaseDefaultsCoverage:
+    """Regression test: every Phase enum member must have a _PHASE_DEFAULTS entry.
+
+    Uses the Phase enum from state.py for 100% coverage of all phases,
+    including detour phases like fix_quality_gate that aren't in LoopConfig lists.
+    """
+
+    @pytest.mark.parametrize("phase", list(Phase), ids=lambda p: p.value)
+    def test_all_phases_have_defaults(self, phase: Phase):
+        """Each phase in the Phase enum must have an entry in _PHASE_DEFAULTS."""
+        assert phase.value in TimeoutsConfig._PHASE_DEFAULTS, (
+            f"Phase '{phase.value}' is missing from TimeoutsConfig._PHASE_DEFAULTS. "
+            f"Add a timeout default for this phase."
+        )
+
+
+# ============================================================================
+# Direct unit tests for new/changed default values
+# ============================================================================
+
+
+class TestPhaseDefaultValues:
+    """Direct tests for specific _PHASE_DEFAULTS values.
+
+    Uses TimeoutsConfig() directly (not get_phase_timeout()) to bypass
+    the autouse reset_config_singleton fixture which loads MINIMAL_CONFIG_DATA
+    without a timeouts section.
+    """
+
+    def test_retrospective_default_is_600(self):
+        """retrospective phase default timeout is 600s."""
+        tc = TimeoutsConfig()
+        assert tc.get_timeout("retrospective") == 600
+
+    def test_code_review_synthesis_default_is_900(self):
+        """code_review_synthesis phase default timeout is 900s."""
+        tc = TimeoutsConfig()
+        assert tc.get_timeout("code_review_synthesis") == 900
+
+    def test_fix_quality_gate_default_is_900(self):
+        """fix_quality_gate phase default timeout is 900s."""
+        tc = TimeoutsConfig()
+        assert tc.get_timeout("fix_quality_gate") == 900
+
+    def test_explicit_config_overrides_phase_default(self):
+        """Explicitly setting retrospective timeout overrides the phase default."""
+        _reset_config()
+        cfg = load_config({
+            "providers": {"master": {"provider": "claude", "model": "opus"}},
+            "timeouts": {"retrospective": 120},
+        })
+        assert cfg.timeouts is not None
+        assert cfg.timeouts.get_timeout("retrospective") == 120
+
+    def test_unknown_phase_falls_back_to_global_default(self):
+        """A phase not in _PHASE_DEFAULTS falls back to the global default."""
+        tc = TimeoutsConfig(default=250)
+        assert tc.get_timeout("nonexistent_phase") == 250

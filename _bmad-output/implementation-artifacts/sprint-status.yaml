@@ -90,3 +90,12 @@ development_status:
   6-3-summary-report-generation: backlog
   6-4-epic-teardown-phases: backlog
   epic-6-retrospective: optional
+
+  # Epic 7: Graceful Provider Timeout & Partial Result Recovery
+  epic-7: in-progress
+  7-1-fix-phase-timeout-defaults: review
+  7-2-result-collector: backlog
+  7-3-graceful-timeout-base-provider: backlog
+  7-4-claude-sdk-graceful-timeout: backlog
+  7-5-gemini-alignment-and-documentation-sync: backlog
+  epic-7-retrospective: optional
