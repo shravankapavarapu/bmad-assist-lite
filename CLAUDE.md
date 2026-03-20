@@ -27,7 +27,7 @@ Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 5 comman
 ### Core Subsystems
 
 - **`core/`** — Config (2-tier YAML: global + project), paths singleton, state machine (10 phases), sprint status tracking, resume validation, toolchain detection (`toolchain.py`), quality gates parser (`quality_gates.py`), command runner (`command_runner.py`), exceptions, async utilities
-- **`providers/`** — BaseProvider ABC with Claude SDK + Gemini implementations. Windows-safe process management in `_windows.py`
+- **`providers/`** — BaseProvider ABC (Template Method pattern) with Claude SDK + Gemini implementations. `base.py` defines concrete `invoke()` that creates `ResultCollector`, delegates to `_do_invoke()`, catches `TimeoutError` → `_handle_timeout()` with grace period, and calls `_cleanup()` in `finally`. `result_collector.py` provides thread-safe `ResultCollector` for streaming chunk accumulation and activity tracking. Windows-safe process management in `_windows.py`
 - **`compiler/`** — Workflow compilation: parse workflow.yaml → resolve variables → discover files → generate XML prompt
 - **`loop/`** — Main BMAD loop orchestration with 10 phase handlers (7 LLM + 3 non-LLM quality gate), crash recovery cleanup, sprint sync, Windows-safe signals/locking
 - **`plugins/`** — Plugin architecture: ProviderPlugin, PhasePlugin, WorkflowPlugin protocols with entry point + local directory discovery
@@ -79,6 +79,17 @@ Deterministic, non-LLM quality gate enforcement after code review synthesis:
 - **2-tier config** — `~/.bmad-assist-lite/config.yaml` (global) + `bmad-assist-lite.yaml` (project)
 - **Singleton configs** — `get_config()`, `get_paths()` with `_reset_*()` for testing
 - **Atomic writes** — State and sprint-status files use temp + `os.replace` pattern to prevent corruption
+- **Graceful timeout** — Providers use a grace period pattern: on timeout, if `ResultCollector.is_active()` detects recent streaming activity (within `ACTIVE_STREAM_THRESHOLD=30s`), a grace period of `max(MIN_GRACE_PERIOD_SECONDS=60, timeout * GRACE_PERIOD_RATIO=0.25)` seconds is granted. After grace, partial text >= `MIN_USEFUL_RESPONSE_CHARS=200` chars → `ProviderResult(timed_out=True)`; < 200 chars → `ProviderTimeoutError`. Constants defined in `base.py`: `DEFAULT_TIMEOUT=300`, `MIN_GRACE_PERIOD_SECONDS=60`, `GRACE_PERIOD_RATIO=0.25`, `ACTIVE_STREAM_THRESHOLD=30.0`, `MIN_USEFUL_RESPONSE_CHARS=200`
+
+### Provider Implementor Reference
+
+New providers must extend `BaseProvider` and implement:
+
+- **`_do_invoke()`** — Provider-specific invocation. Feed `collector.add(chunk)` as streaming text arrives. Raise `TimeoutError` when the provider's internal timeout fires. The base class `invoke()` catches it and handles grace period logic
+- **`_cleanup()`** — Kill process / close connection. Called in `finally` by the base class, guaranteed to run on success, timeout, and exceptions
+- **`parse_output(result)`** — Extract response text from `ProviderResult`
+- **`supports_model(model)`** — Return `True` if the provider supports the given model string
+- **`provider_name`** property — Return the provider identifier string (e.g., `"claude"`, `"gemini"`)
 
 ### Init Command
 
