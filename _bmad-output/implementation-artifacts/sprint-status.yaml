@@ -93,8 +93,8 @@ development_status:
 
   # Epic 7: Graceful Provider Timeout & Partial Result Recovery
   epic-7: in-progress
-  7-1-fix-phase-timeout-defaults: review
-  7-2-result-collector: backlog
+  7-1-fix-phase-timeout-defaults: done
+  7-2-result-collector: review
   7-3-graceful-timeout-base-provider: backlog
   7-4-claude-sdk-graceful-timeout: backlog
   7-5-gemini-alignment-and-documentation-sync: backlog
