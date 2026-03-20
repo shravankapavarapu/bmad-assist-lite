@@ -25,6 +25,7 @@ from bmad_assist_lite.providers.base import (
     validate_settings_file,
     write_progress,
 )
+from bmad_assist_lite.providers.result_collector import ResultCollector
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +302,24 @@ class GeminiProvider(BaseProvider):
             command=tuple(command),
             provider_session_id=session_id,
         )
+
+    def _do_invoke(
+        self,
+        prompt: str,
+        *,
+        collector: ResultCollector,
+        model: str | None = None,
+        timeout: int = 300,
+        settings_file: Path | None = None,
+        cwd: Path | None = None,
+        allowed_tools: list[str] | None = None,
+        color_index: int | None = None,
+    ) -> ProviderResult:
+        """Not yet implemented; awaiting Story 7.5 migration."""
+        raise NotImplementedError("Use invoke() directly until Story 7.5 migration")
+
+    def _cleanup(self) -> None:
+        """No-op stub; awaiting Story 7.5 migration."""
 
     def parse_output(self, result: ProviderResult) -> str:
         """Extract response text from provider result."""
