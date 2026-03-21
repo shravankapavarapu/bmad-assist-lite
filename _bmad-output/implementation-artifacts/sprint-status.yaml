@@ -67,12 +67,12 @@ development_status:
   epic-3-retrospective: done
 
   # Epic 4: Merge & Integration Safety
-  epic-4: in-progress
+  epic-4: done
   4-1-sequential-merge-queue-and-git-merge: done
   4-2-claude-cli-merge-conflict-resolution: done
   4-3-post-merge-quality-gate: done
-  4-4-post-merge-fix-quality-gate-and-sprint-status-update: review
-  epic-4-retrospective: optional
+  4-4-post-merge-fix-quality-gate-and-sprint-status-update: done
+  epic-4-retrospective: done
 
   # Epic 5: Resilience & Recovery
   epic-5: backlog
@@ -92,10 +92,10 @@ development_status:
   epic-6-retrospective: optional
 
   # Epic 7: Graceful Provider Timeout & Partial Result Recovery
-  epic-7: in-progress
+  epic-7: done
   7-1-fix-phase-timeout-defaults: done
   7-2-result-collector: done
   7-3-graceful-timeout-base-provider: done
   7-4-claude-sdk-graceful-timeout: done
-  7-5-gemini-alignment-and-documentation-sync: review
-  epic-7-retrospective: optional
+  7-5-gemini-alignment-and-documentation-sync: done
+  epic-7-retrospective: done
