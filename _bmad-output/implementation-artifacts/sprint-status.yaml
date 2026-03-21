@@ -99,3 +99,10 @@ development_status:
   7-4-claude-sdk-graceful-timeout: done
   7-5-gemini-alignment-and-documentation-sync: done
   epic-7-retrospective: done
+
+  # Epic 8: Context Requirements Validation & Compiler Hardening
+  epic-8: backlog
+  8-1-context-filter-error-on-missing-sections: backlog
+  8-2-optional-reference-convention: backlog
+  8-3-epic-documentation-sync: backlog
+  epic-8-retrospective: optional

@@ -604,6 +604,193 @@ Epic file → dependency_resolver → ready stories → orchestrator
   → re-evaluate ready stories → next cycle
 ```
 
+## Feature Architecture
+
+This section provides feature-scoped architectural decisions for subsystems introduced by later epics. Each H3 subsection is referenced by epic Context Requirements tables — header names are a public API (renaming requires updating all referencing epics).
+
+### Crash Recovery
+
+**Scope:** Epic 5 — recovering orchestrator and in-flight story state after unexpected termination.
+
+**Recovery strategy:** On orchestrator restart, recovery runs before any new work begins:
+
+1. **Load `parallel-state.yaml`** — last atomically-written orchestrator state. Stories marked `running` were in-flight at crash time.
+2. **Scan worktrees** via `git worktree list --porcelain` — detect which worktrees still exist on disk.
+3. **Cross-reference** worktrees against parallel state:
+   - Worktree exists + state `running` → Check per-worktree `state.yaml` for last completed phase. Mark story as `resumable` or `failed` based on phase progress.
+   - Worktree exists + state unknown → Orphaned worktree. Queue for cleanup.
+   - No worktree + state `running` → Process died before worktree cleanup. Mark story as `failed`, reset to `ready`.
+4. **Clean up** — Remove orphaned worktrees, delete stale `.lock` files, prune temp files (`*.tmp` in cache directories).
+5. **Resume** — Re-evaluate dependency graph with recovered state. Ready stories enter the normal scheduling flow.
+
+**Invariants:**
+- Recovery must complete in <30 seconds (NFR2)
+- No story data loss — per-worktree commits are preserved in git even if worktree is removed
+- Atomic state writes guarantee `parallel-state.yaml` is never corrupted
+
+**Affects:** `orchestrator.py` (startup recovery flow), `state.py` (status transitions: `running` → `resumable`/`failed`), `worktree_manager.py` (orphan detection)
+
+### Blocked Story Handling
+
+**Scope:** Epic 5 — handling stories that cannot proceed due to failures, and cascading blocks through the dependency graph.
+
+**Block triggers:**
+- Quality gate fails after max retries (existing pattern from sequential loop)
+- Merge conflicts that Claude CLI cannot resolve
+- Post-merge quality gate fails after fix attempt
+- Dependency on a blocked story
+
+**Cascade algorithm:**
+1. When story S is marked `blocked`, traverse the dependency DAG forward (all stories that transitively depend on S)
+2. Mark all downstream stories as `blocked_by: [S]` — they cannot be scheduled until S is unblocked
+3. Stories already `running` that depend on S are NOT interrupted — they continue but their merge will be deferred
+4. Re-evaluate ready stories after cascade — some stories may become unschedulable
+
+**Unblock flow:**
+1. User runs `parallel unblock <story-id>` CLI command
+2. Validates the block reason has been manually resolved (user confirms)
+3. Resets story status from `blocked` to `ready`
+4. Removes story from all `blocked_by` lists in downstream stories
+5. Re-evaluates dependency graph — newly unblocked stories enter scheduling
+
+**State model:**
+- `StoryStatus` enum: `ready`, `running`, `merging`, `done`, `failed`, `blocked`
+- `blocked_by: list[str]` field on each story state — tracks which upstream stories caused the block
+- `block_reason: str | None` — human-readable reason (e.g., "QG failed after 2 retries", "merge conflict unresolvable")
+
+**Affects:** `orchestrator.py` (scheduling exclusion), `state.py` (blocked status + cascade fields), `dependency_resolver.py` (exclude blocked from ready evaluation), `cli.py` (unblock command)
+
+### State Persistence
+
+**Scope:** Epics 5-6 — parallel orchestrator state model and persistence guarantees.
+
+**State file:** `parallel-state.yaml` in project root (sibling to `bmad-assist-lite.yaml`).
+
+**State model (`ParallelState`):**
+```
+epic_id: str
+base_branch: str
+started_at: datetime
+status: "running" | "completed" | "failed" | "recovered"
+stories:
+  {story_id}:
+    status: "ready" | "running" | "merging" | "done" | "failed" | "blocked"
+    worktree_path: str | None
+    branch: str | None
+    pid: int | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    blocked_by: list[str]
+    block_reason: str | None
+    last_phase: str | None
+merge_queue: list[str]
+completed_merges: list[str]
+failed_qa_stories: list[str]
+```
+
+**Write protocol:**
+- Atomic writes only: write to `parallel-state.yaml.tmp`, then `os.replace()`
+- Write triggers: story status change, merge queue update, recovery completion
+- Frequency: after every state transition (not periodic) — ensures crash consistency
+
+**Read protocol:**
+- Read once at startup (or recovery)
+- CLI `status` command reads independently (no lock needed — atomic writes guarantee consistent reads)
+- Per-worktree loop processes never read `parallel-state.yaml` — isolation boundary
+
+**Consistency guarantees:**
+- Last-writer-wins is safe because only the orchestrator process writes
+- If orchestrator crashes mid-write, the `.tmp` file is discarded on recovery, and the last complete state is used
+
+**Affects:** `state.py` (model + I/O), `orchestrator.py` (write triggers), `cli.py` (status read)
+
+### Parallel Module Layout
+
+**Scope:** All parallel epics — directory structure and module boundaries.
+
+**Directory structure:**
+```
+src/bmad_assist_lite/parallel/
+  __init__.py              # Module exports
+  cli.py                   # Typer sub-app: parallel run/status/unblock
+  orchestrator.py          # Main asyncio coordination loop
+  dependency_resolver.py   # Kahn's algorithm, scheduling scores, cycle detection
+  worktree_manager.py      # Git worktree create/cleanup/prune
+  merger.py                # Claude CLI merge + conflict resolution + post-merge QG
+  git_ops.py               # Low-level git subprocess wrapper (_run_git)
+  state.py                 # ParallelState Pydantic model + YAML I/O
+  sprint_status_manager.py # Orchestrator-owned sprint-status updates
+  config.py                # ParallelConfig Pydantic model
+  logging.py               # Orchestrator log setup, prefix formatting, summary report
+  recovery.py              # Crash recovery and orphan detection (Epic 5)
+  exceptions.py            # ParallelError and subclasses
+```
+
+**Module boundary rule:** The `parallel/` package communicates with existing code through exactly 3 touch points (see Architectural Boundaries section). New files for resilience (Epic 5) and observability (Epic 6) are added within `parallel/`, never in `core/` or `loop/`.
+
+**Import rules:**
+- `parallel/` modules may import from `core/` (config, paths, exceptions, sprint_status)
+- `parallel/` modules must NOT import from `loop/` or `providers/`
+- `core/` and `loop/` must NOT import from `parallel/`
+- Within `parallel/`, follow the internal dependency graph (see Architectural Boundaries)
+
+### Observability
+
+**Scope:** Epic 6 — logging, status display, and summary reporting for parallel execution.
+
+**Three-tier logging architecture:**
+
+| Tier | Destination | Content | Owner |
+|------|-------------|---------|-------|
+| Orchestrator log | `parallel-run.log` (file) | All orchestrator decisions, state transitions, merge results, errors | `logging.py` |
+| Per-story output | Console (multiplexed) | Prefixed stdout from each worktree subprocess | `orchestrator.py` stream readers |
+| Summary report | Console + log file | Post-run summary with story outcomes, timings, failures | `logging.py` |
+
+**Orchestrator log (`parallel-run.log`):**
+- Append-only file in project root, created at run start
+- Rotated per run (timestamp in filename or truncate on new run)
+- Includes all INFO+ messages from orchestrator, merger, worktree manager
+- Machine-parseable: each line prefixed with `[TIMESTAMP] [LEVEL] [COMPONENT]`
+
+**Enhanced status display:**
+- `parallel status` CLI command reads `parallel-state.yaml` and renders a table
+- Columns: Story ID, Status, Phase, Duration, Worktree, Branch
+- Color-coded status: green=done, yellow=running, red=blocked/failed
+- Includes phase info by peeking at per-worktree `state.yaml` (read-only)
+
+**Summary report generation:**
+- Generated after all stories complete (or on graceful shutdown)
+- Content: total duration, per-story timing breakdown, pass/fail/blocked counts, QG failure details, merge conflict summary
+- Written to orchestrator log and echoed to console
+
+**Affects:** `logging.py` (all three tiers), `cli.py` (status command), `orchestrator.py` (stream readers, summary trigger)
+
+### Epic Teardown
+
+**Scope:** Epic 6 — cleanup and finalization after all stories in an epic complete in parallel mode.
+
+**Teardown sequence:**
+1. **Wait for completion** — All stories must be in terminal state (`done`, `blocked`, or `failed`)
+2. **Final merge verification** — Confirm all `done` stories have been merged to the base branch
+3. **Run epic quality gate** — Full project test suite on the base branch (reuses existing `epic_quality_gate` phase logic)
+4. **Generate summary report** — Aggregate results from all stories (see Observability)
+5. **Update sprint status** — Mark epic as `done` (if all stories done) or `blocked` (if any stories blocked/failed)
+6. **Clean up worktrees** — Remove all remaining worktrees for this epic
+7. **Clean up branches** — Delete all merged story branches (`parallel/{story-id}`)
+8. **Run retrospective** — Optional, reuses existing `retrospective` phase
+
+**Partial completion handling:**
+- If some stories are `blocked`/`failed`, epic teardown still runs for completed stories
+- Blocked stories are reported in the summary with block reasons
+- Epic status becomes `blocked` (not `done`) — requires manual intervention before marking complete
+
+**Integration with existing phases:**
+- `epic_quality_gate` and `retrospective` are existing phase handlers in `loop/handlers/`
+- In parallel mode, the orchestrator calls these directly (not via subprocess loop) after all merges complete
+- They run on the base branch with all merged code
+
+**Affects:** `orchestrator.py` (teardown sequence), `worktree_manager.py` (bulk cleanup), `sprint_status_manager.py` (epic status update), `logging.py` (summary report)
+
 ## Architecture Validation Results
 
 ### Coherence Validation

@@ -68,7 +68,24 @@ inputDocuments: []
 | `architecture.md` | {{Section Name 1; Section Name 2; Section Name 3}} |
 | `prd.md` | {{Section Name 1; Section Name 2}} |
 | `ux-design-specification.md` | {{Section Name 1; Section Name 2}} or `(skip)` |
-| `project-context.md` | `(full)` |
+| `project-context.md` | `(full)` or `(optional)` |
+
+<!-- CONVENTIONS:
+     - (optional): Document/section is nice-to-have but not required for story creation.
+       Missing optional references produce a WARNING. Missing non-optional references produce an ERROR
+       that blocks story creation until resolved.
+-->
+
+<!-- PRE-FINALIZATION CHECKLIST (Architect must complete before epic is ready):
+     1. For each row in Context Requirements table above:
+        - Open the referenced document
+        - Verify every semicolon-separated section name exists as an H2 or H3 header
+     2. If sections are MISSING:
+        - Add the section to the referenced document with architectural content
+        - Do NOT use placeholder/stub text - write real architectural decisions
+     3. If a section name doesn't match exactly, update THIS table to match the actual header
+     4. Validation: The compiler will ERROR on missing non-optional sections at story creation time
+-->
 
 <!-- Example for a booking/conversion epic:
 | Document | Sections to Load |
