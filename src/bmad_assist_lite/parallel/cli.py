@@ -1,10 +1,16 @@
-"""Implement parallel run CLI command with branch guard and orchestrator startup."""
+"""Implement parallel CLI commands: run and status."""
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
+import yaml
+
+if TYPE_CHECKING:
+    from bmad_assist_lite.parallel.state import ParallelState
 
 logger = logging.getLogger(__name__)
 
@@ -185,3 +191,253 @@ def parallel_run(
             err=True,
         )
         raise typer.Exit(1) from None
+
+
+# ============================================================================
+# Timestamp helper
+# ============================================================================
+
+
+def _utc_now() -> datetime:
+    """Get current UTC datetime without timezone info (naive UTC)."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+# ============================================================================
+# Phase peeking helper (Task 1b)
+# ============================================================================
+
+
+def _peek_worktree_phase(worktree_path: Path | None) -> str | None:
+    """Read the current phase from a worktree's state.yaml.
+
+    Returns the phase string or None if the file is missing, corrupt,
+    or the path is None. Performs read-only access only.
+    """
+    if worktree_path is None:
+        return None
+
+    state_file = worktree_path / ".bmad-assist" / "state.yaml"
+    try:
+        # Size limit: skip files over 1 MB to avoid blocking
+        if state_file.exists() and state_file.stat().st_size > 1_048_576:
+            return None
+
+        content = state_file.read_text(encoding="utf-8")
+        data = yaml.safe_load(content)
+        if isinstance(data, dict):
+            phase = data.get("current_phase")
+            if isinstance(phase, str):
+                return phase
+    except (OSError, yaml.YAMLError, UnicodeDecodeError, ValueError):
+        pass
+
+    return None
+
+
+# ============================================================================
+# Duration calculation helper (Task 2)
+# ============================================================================
+
+
+def _format_duration(
+    started_at: datetime | None,
+    completed_at: datetime | None,
+) -> str:
+    """Format a duration string from start/end timestamps.
+
+    For running stories: elapsed from started_at to now.
+    For done/blocked stories: elapsed from started_at to completed_at.
+    For stories not yet started: returns "-".
+    """
+    if started_at is None:
+        return "-"
+
+    end = completed_at if completed_at is not None else _utc_now()
+    delta = end - started_at
+    total_seconds = max(0, int(delta.total_seconds()))
+
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+
+    if hours > 0:
+        if minutes > 0:
+            return f"{hours}h {minutes}m {seconds}s"
+        return f"{hours}h {seconds}s"
+    if minutes > 0:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+# ============================================================================
+# Table formatting (Task 3)
+# ============================================================================
+
+
+def _format_status_table(state: "ParallelState") -> str:
+    """Build a human-readable aligned text table of story statuses.
+
+    Columns: Story ID, Status, Phase, Duration, Blocked By, Info
+    """
+    from bmad_assist_lite.parallel.state import StoryStatus
+
+    # Column headers
+    headers = ["Story ID", "Status", "Phase", "Duration", "Blocked By", "Info"]
+
+    # Build rows
+    rows: list[list[str]] = []
+    for story_id, story in sorted(state.stories.items()):
+        status_val = story.status.value
+
+        # Phase column
+        phase: str = "-"
+        if story.status == StoryStatus.IN_FLIGHT:
+            # For running stories, peek at worktree state.yaml
+            peeked = _peek_worktree_phase(story.worktree_path)
+            if peeked is not None:
+                phase = peeked
+        # For non-running stories, no last_phase field exists in model
+
+        # Duration
+        duration = _format_duration(story.started_at, story.completed_at)
+
+        # Blocked By — not available in current model, leave empty
+        blocked_by = ""
+
+        # Info column — show error for blocked/failed stories
+        info = ""
+        if story.error:
+            if len(story.error) > 80:
+                info = story.error[:77] + "..."
+            else:
+                info = story.error
+
+        rows.append([story_id, status_val, phase, duration, blocked_by, info])
+
+    # Calculate column widths
+    col_widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            col_widths[i] = max(col_widths[i], len(cell))
+
+    # Build the table
+    lines: list[str] = []
+
+    # Header row
+    header_line = "  ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
+    lines.append(header_line)
+
+    # Separator
+    sep_line = "  ".join("-" * col_widths[i] for i in range(len(headers)))
+    lines.append(sep_line)
+
+    # Data rows
+    for row in rows:
+        data_line = "  ".join(cell.ljust(col_widths[i]) for i, cell in enumerate(row))
+        lines.append(data_line)
+
+    return "\n".join(lines)
+
+
+# ============================================================================
+# Summary counts (Task 4)
+# ============================================================================
+
+
+def _format_summary(state: "ParallelState") -> str:
+    """Build summary counts and overall status display."""
+    from bmad_assist_lite.parallel.state import StoryStatus
+
+    counts: dict[str, int] = {
+        "done": 0,
+        "in_flight": 0,
+        "merging": 0,
+        "blocked": 0,
+        "backlog": 0,
+    }
+
+    for story in state.stories.values():
+        status_key = story.status.value
+        if status_key in counts:
+            counts[status_key] += 1
+
+    lines: list[str] = []
+
+    # Header with epic and base branch
+    lines.append(f"Epic: {state.epic}  |  Base branch: {state.base_branch}")
+    lines.append("")
+
+    # Status counts
+    count_parts = [
+        f"Done: {counts['done']}",
+        f"In-flight: {counts['in_flight']}",
+        f"Merging: {counts['merging']}",
+        f"Blocked: {counts['blocked']}",
+        f"Backlog: {counts['backlog']}",
+    ]
+    lines.append(" | ".join(count_parts))
+
+    # All done message (guard against vacuous truth on empty dict)
+    if state.stories and all(
+        s.status == StoryStatus.DONE for s in state.stories.values()
+    ):
+        lines.append("")
+        lines.append("All stories complete!")
+
+    # Blocked stories warning
+    blocked_count = counts["blocked"]
+    if blocked_count > 0:
+        suffix = "y" if blocked_count == 1 else "ies"
+        lines.append("")
+        lines.append(f"\u26a0 {blocked_count} stor{suffix} blocked \u2014 see Info column")
+
+    return "\n".join(lines)
+
+
+# ============================================================================
+# Parallel status command (Task 1)
+# ============================================================================
+
+
+def parallel_status(
+    project: Path = typer.Option(
+        Path("."),
+        "--project",
+        "-p",
+        help="Path to project directory.",
+        exists=True,
+        dir_okay=True,
+        file_okay=False,
+    ),
+) -> None:
+    """Show the current state of a parallel run.
+
+    Reads parallel-state.yaml and displays a human-readable table
+    showing story statuses, durations, and diagnostic info. This
+    command is read-only and safe to run from another terminal.
+    """
+    from bmad_assist_lite.parallel.exceptions import ParallelError
+    from bmad_assist_lite.parallel.state import get_parallel_state_path, load_state
+
+    project = project.resolve()
+    state_path = get_parallel_state_path(project)
+
+    try:
+        state = load_state(state_path)
+    except ParallelError as exc:
+        typer.echo(f"Error reading state file: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+    if state is None:
+        typer.echo("No parallel run state found")
+        return
+
+    # Display summary header
+    summary = _format_summary(state)
+    typer.echo(summary)
+    typer.echo("")
+
+    # Display table
+    table = _format_status_table(state)
+    typer.echo(table)

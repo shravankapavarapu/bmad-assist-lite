@@ -32,9 +32,10 @@ parallel_app = typer.Typer(
 )
 app.add_typer(parallel_app, name="parallel")
 
-from bmad_assist_lite.parallel.cli import parallel_run  # noqa: E402
+from bmad_assist_lite.parallel.cli import parallel_run, parallel_status  # noqa: E402
 
 parallel_app.command(name="run")(parallel_run)
+parallel_app.command(name="status")(parallel_status)
 
 
 def _setup_logging(verbosity: int) -> None:
