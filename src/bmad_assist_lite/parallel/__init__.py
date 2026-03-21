@@ -18,6 +18,7 @@ from bmad_assist_lite.parallel.merger import (
 )
 from bmad_assist_lite.parallel.orchestrator import Orchestrator
 from bmad_assist_lite.parallel.output import OutputMultiplexer
+from bmad_assist_lite.parallel.recovery import recover_state
 from bmad_assist_lite.parallel.state import (
     ParallelState,
     StoryState,
@@ -60,6 +61,7 @@ __all__ = [
     "load_state",
     "merge_story",
     "prune_worktrees",
+    "recover_state",
     "resolve_conflicts",
     "run_post_merge_fix",
     "run_post_merge_qg",

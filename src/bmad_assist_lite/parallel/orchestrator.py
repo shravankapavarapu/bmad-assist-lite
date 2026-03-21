@@ -23,6 +23,7 @@ from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.output import OutputMultiplexer
+from bmad_assist_lite.parallel.recovery import recover_state
 from bmad_assist_lite.parallel.state import (
     ParallelState,
     StoryStatus,
@@ -203,8 +204,11 @@ class Orchestrator:
         self._state_path = get_parallel_state_path(project_root)
         existing_state = load_state(self._state_path)
         if existing_state is not None:
-            self._state: ParallelState = existing_state
-            # Populate in-memory sets from persisted state
+            # Run crash recovery to reconcile state against on-disk worktrees
+            self._state: ParallelState = recover_state(
+                existing_state, project_root, config.worktree_base_dir,
+            )
+            # Populate in-memory sets from RECOVERED state
             for story_id, story_state in self._state.stories.items():
                 if story_state.status == StoryStatus.DONE:
                     self._done_ids.add(story_id)
@@ -334,11 +338,14 @@ class Orchestrator:
     # Subprocess spawning
     # ========================================================================
 
-    async def _spawn_story(self, story_id: str) -> int:
+    async def _spawn_story(
+        self, story_id: str, *, resume: bool = False,
+    ) -> int:
         """Spawn a story loop subprocess in a dedicated worktree.
 
-        Acquires a semaphore slot, creates the worktree, applies the
-        stagger delay, then spawns the subprocess and waits for it.
+        Acquires a semaphore slot, creates the worktree (or reuses an
+        existing one when ``resume=True``), applies the stagger delay,
+        then spawns the subprocess and waits for it.
 
         Subprocesses are isolated from the parent's console process group
         via ``start_new_session=True`` (Unix) or
@@ -347,6 +354,9 @@ class Orchestrator:
 
         Args:
             story_id: The story ID to execute (e.g. ``"3.2"``).
+            resume: If True, skip worktree creation, use the existing
+                ``worktree_path`` from state, and append ``--resume``
+                to the CLI args.
 
         Returns:
             The subprocess exit code.
@@ -366,22 +376,45 @@ class Orchestrator:
                 if self._draining:
                     return -1
 
-                # Create worktree (sync function, bridge via to_thread)
-                worktree_path: Path = await asyncio.to_thread(
-                    create_worktree,
-                    story_id,
-                    self._project_root,
-                    self._config.worktree_base_dir,
-                )
-                self._story_worktrees[story_id] = worktree_path
+                if resume:
+                    # Re-spawn in existing worktree — skip create_worktree
+                    worktree_path = self._story_worktrees.get(story_id)
+                    if worktree_path is None:
+                        # Fallback: look up from state
+                        story_state = self._state.stories.get(story_id)
+                        if story_state is not None and story_state.worktree_path is not None:
+                            worktree_path = story_state.worktree_path
+                            self._story_worktrees[story_id] = worktree_path
+                        else:
+                            logger.error(
+                                "[ORCHESTRATOR] Cannot resume story %s: "
+                                "no worktree path found",
+                                story_id,
+                            )
+                            return -1
+                    logger.info(
+                        "[ORCHESTRATOR] Re-spawning story %s with --resume "
+                        "in existing worktree %s",
+                        story_id,
+                        worktree_path,
+                    )
+                else:
+                    # Create worktree (sync function, bridge via to_thread)
+                    worktree_path = await asyncio.to_thread(
+                        create_worktree,
+                        story_id,
+                        self._project_root,
+                        self._config.worktree_base_dir,
+                    )
+                    self._story_worktrees[story_id] = worktree_path
 
-                # Persist worktree_path to state for crash recovery (AC #2)
-                self._state = self._state.with_story_status(
-                    story_id,
-                    StoryStatus.IN_FLIGHT,
-                    worktree_path=worktree_path,
-                )
-                save_state(self._state, self._state_path)
+                    # Persist worktree_path to state for crash recovery (AC #2)
+                    self._state = self._state.with_story_status(
+                        story_id,
+                        StoryStatus.IN_FLIGHT,
+                        worktree_path=worktree_path,
+                    )
+                    save_state(self._state, self._state_path)
 
                 # Extract story number for CLI flag
                 story_num = _extract_story_num(story_id)
@@ -393,7 +426,7 @@ class Orchestrator:
                 await self._output_mux.write_orchestrator(
                     f"Spawning story {story_id} in worktree {worktree_path}"
                 )
-                exec_args = [
+                exec_args: list[str] = [
                     sys.executable,
                     "-m",
                     "bmad_assist_lite",
@@ -404,6 +437,10 @@ class Orchestrator:
                     str(story_num),
                     "--single-story",
                 ]
+
+                # Append --resume flag for crash recovery re-spawn
+                if resume:
+                    exec_args.append("--resume")
                 # Task 3.0: Subprocess process group isolation
                 if sys.platform == "win32":
                     proc = await asyncio.create_subprocess_exec(
@@ -629,6 +666,18 @@ class Orchestrator:
                 f"Starting orchestration for epic {self._epic_num} "
                 f"({self._dependency_graph.story_count} stories)"
             )
+
+            # Re-spawn in-flight stories that survived crash recovery but
+            # have no running task (Task 6.3). These were preserved as
+            # in_flight by recover_state() because their worktrees exist.
+            stale_in_flight = self._in_flight_ids - set(self._running_tasks.keys())
+            for story_id in sorted(stale_in_flight):
+                task = asyncio.create_task(
+                    self._spawn_story(story_id, resume=True),
+                    name=f"story-{story_id}",
+                )
+                self._running_tasks[story_id] = task
+                self._task_to_story[task] = story_id
 
             while True:
                 # Check if draining and no tasks remain — break to exit
