@@ -22,6 +22,7 @@ from pathlib import Path
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
+from bmad_assist_lite.parallel.merger import MergeQueue
 from bmad_assist_lite.parallel.output import OutputMultiplexer
 from bmad_assist_lite.parallel.recovery import recover_state
 from bmad_assist_lite.parallel.state import (
@@ -185,6 +186,13 @@ class Orchestrator:
 
         # Output multiplexer for live prefixed output
         self._output_mux = OutputMultiplexer()
+
+        # Merge queue — sequential merge with post-merge QG fix retries.
+        # process_merge_with_fix() is async and handles asyncio.to_thread()
+        # wrapping internally for sync git/QG operations.
+        self._merge_queue: MergeQueue = MergeQueue(
+            project_root, parallel_config=config,
+        )
 
         # Status tracking sets
         self._done_ids: set[str] = set()
@@ -550,12 +558,13 @@ class Orchestrator:
             self._state = self._state.with_story_status(
                 story_id,
                 StoryStatus.MERGING,
-                completed_at=_utc_now(),
             )
             save_state(self._state, self._state_path)
             await self._output_mux.write_orchestrator(
                 f"Story {story_id} completed successfully, status -> merging"
             )
+            # Enqueue for merge processing
+            await self._merge_queue.enqueue(story_id)
         else:
             self._blocked_ids.add(story_id)
             self._state = self._state.with_story_status(
@@ -588,6 +597,126 @@ class Orchestrator:
                     del self._story_worktrees[story_id]
 
     # ========================================================================
+    # Merge queue processing
+    # ========================================================================
+
+    async def _process_merge_queue(self) -> None:
+        """Drain the merge queue one story at a time.
+
+        Calls ``process_merge_with_fix()`` in a loop until it returns ``None``
+        (empty queue). For each result, transitions the story state:
+
+        - **merge + QG success**: ``merging`` -> ``done``
+        - **merge conflict**: ``merging`` -> ``blocked`` (worktree cleaned)
+        - **merge success + QG failure**: ``merging`` -> ``blocked``
+
+        Note: ``process_merge_with_fix()`` is async and handles
+        ``asyncio.to_thread()`` wrapping internally for sync git/QG
+        operations — the orchestrator does NOT add its own thread-bridging.
+        Sprint-status update (FR26) is handled inside ``process_merge_with_fix()``
+        via ``update_sprint_status_done()`` — NOT duplicated here.
+        """
+        while True:
+            result = await self._merge_queue.process_merge_with_fix()
+            if result is None:
+                break
+
+            story_id = result.story_id
+
+            if result.success and result.qg_result is not None and result.qg_result.all_passed:
+                # Merge + QG success -> done
+                self._done_ids.add(story_id)
+                self._merging_ids.discard(story_id)
+                self._state = self._state.with_story_status(
+                    story_id,
+                    StoryStatus.DONE,
+                    completed_at=_utc_now(),
+                )
+                save_state(self._state, self._state_path)
+                # Clean up worktree mapping (worktree already removed by merge_story)
+                self._story_worktrees.pop(story_id, None)
+                await self._output_mux.write_orchestrator(
+                    f"Story {story_id} merged and QG passed, status -> done"
+                )
+
+            elif result.success and result.qg_result is not None and not result.qg_result.all_passed:
+                # Merge success but QG failure after fix retries -> blocked
+                self._blocked_ids.add(story_id)
+                self._merging_ids.discard(story_id)
+                # Build descriptive error from failed gate results
+                failed_gates = [
+                    g.name for g in result.qg_result.gate_results if not g.passed
+                ]
+                if failed_gates:
+                    qg_error = (
+                        f"Post-merge quality gate failed: {', '.join(failed_gates)}"
+                    )
+                else:
+                    qg_error = "Post-merge quality gate failed"
+                self._state = self._state.with_story_status(
+                    story_id,
+                    StoryStatus.BLOCKED,
+                    error=qg_error,
+                    completed_at=_utc_now(),
+                )
+                save_state(self._state, self._state_path)
+                # Worktree was already cleaned up by merge_story's _cleanup_after_merge
+                self._story_worktrees.pop(story_id, None)
+                await self._output_mux.write_orchestrator(
+                    f"Story {story_id} merged but post-merge QG failed, status -> blocked"
+                )
+
+            elif result.success and result.qg_result is None:
+                # Merge success, no QG was run (no commands found) -> done
+                self._done_ids.add(story_id)
+                self._merging_ids.discard(story_id)
+                self._state = self._state.with_story_status(
+                    story_id,
+                    StoryStatus.DONE,
+                    completed_at=_utc_now(),
+                )
+                save_state(self._state, self._state_path)
+                self._story_worktrees.pop(story_id, None)
+                await self._output_mux.write_orchestrator(
+                    f"Story {story_id} merged (no QG configured), status -> done"
+                )
+
+            else:
+                # Merge failure (conflict) -> blocked
+                self._blocked_ids.add(story_id)
+                self._merging_ids.discard(story_id)
+                error_msg = result.error or "Merge failed"
+                self._state = self._state.with_story_status(
+                    story_id,
+                    StoryStatus.BLOCKED,
+                    error=error_msg,
+                    completed_at=_utc_now(),
+                )
+                save_state(self._state, self._state_path)
+
+                # Clean up worktree for merge conflict
+                if story_id in self._story_worktrees:
+                    try:
+                        await asyncio.to_thread(
+                            cleanup_worktree,
+                            story_id,
+                            self._project_root,
+                            self._config.worktree_base_dir,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[ORCHESTRATOR] Worktree cleanup failed for %s: %s",
+                            story_id,
+                            exc,
+                        )
+                    finally:
+                        del self._story_worktrees[story_id]
+
+                await self._output_mux.write_orchestrator(
+                    f"Story {story_id} merge failed ({error_msg}), status -> blocked"
+                )
+
+    # ========================================================================
     # Exit summary (Task 5)
     # ========================================================================
 
@@ -595,9 +724,11 @@ class Orchestrator:
         """Print a summary of story statuses on exit.
 
         Lists counts of done, merging, in-flight, blocked, and remaining
-        stories. For blocked stories, lists each blocked story along with
-        its specific unmet dependencies. On force-exit, includes a warning
-        about potential stale git lock files.
+        stories. For blocked stories, shows the ``error`` field from
+        ``StoryState`` to distinguish between execution failure, merge
+        conflict, and post-merge QG failure. Includes a count of stories
+        blocked-by-dependency (dependents of blocked stories). On force-exit,
+        includes a warning about potential stale git lock files.
         """
         all_ids = set(self._dependency_graph.all_story_ids)
         completed = self._done_ids | self._merging_ids
@@ -612,16 +743,31 @@ class Orchestrator:
             f"Remaining: {len(remaining)}"
         )
 
-        # List blocked stories with their unmet dependencies
+        # List blocked stories with their error details and unmet dependencies
         if self._blocked_ids:
             for story_id in sorted(self._blocked_ids):
+                # Retrieve the error from persisted state
+                story_state = self._state.stories.get(story_id)
+                error_detail = (
+                    story_state.error if story_state is not None else None
+                )
                 try:
                     deps = self._dependency_graph.dependencies_of(story_id)
                     unmet = [
                         d for d in deps
                         if d not in self._done_ids and d not in self._merging_ids
                     ]
-                    if unmet:
+                    if error_detail:
+                        if unmet:
+                            await self._output_mux.write_orchestrator(
+                                f"  Blocked: {story_id} — {error_detail} "
+                                f"(unmet deps: {', '.join(sorted(unmet))})"
+                            )
+                        else:
+                            await self._output_mux.write_orchestrator(
+                                f"  Blocked: {story_id} — {error_detail}"
+                            )
+                    elif unmet:
                         await self._output_mux.write_orchestrator(
                             f"  Blocked: {story_id} "
                             f"(unmet deps: {', '.join(sorted(unmet))})"
@@ -631,9 +777,32 @@ class Orchestrator:
                             f"  Blocked: {story_id} (failed execution)"
                         )
                 except KeyError:
-                    await self._output_mux.write_orchestrator(
-                        f"  Blocked: {story_id}"
-                    )
+                    if error_detail:
+                        await self._output_mux.write_orchestrator(
+                            f"  Blocked: {story_id} — {error_detail}"
+                        )
+                    else:
+                        await self._output_mux.write_orchestrator(
+                            f"  Blocked: {story_id}"
+                        )
+
+            # Count stories blocked-by-dependency: stories that cannot be
+            # scheduled because they (directly or transitively) depend on a
+            # blocked story. A story is blocked-by-dependency if its
+            # dependencies are NOT all satisfied (i.e., not all in done/merging).
+            blocked_by_dep_count = 0
+            for sid in all_ids - self._blocked_ids - completed - self._in_flight_ids:
+                try:
+                    if not self._dependency_graph.are_dependencies_satisfied(
+                        sid, completed,
+                    ):
+                        blocked_by_dep_count += 1
+                except KeyError:
+                    pass
+            if blocked_by_dep_count > 0:
+                await self._output_mux.write_orchestrator(
+                    f"  Stories blocked-by-dependency: {blocked_by_dep_count}"
+                )
 
         # Force-exit warning about potential stale git locks
         if self._force_exit:
@@ -763,6 +932,12 @@ class Orchestrator:
                         exit_code = -1
 
                     await self._on_story_complete(completed_story_id, exit_code)
+
+                # Process merge queue after handling completions.
+                # process_merge_with_fix() is async and handles
+                # asyncio.to_thread() internally — awaiting it does NOT
+                # block the event loop.
+                await self._process_merge_queue()
 
                 # Check force-exit after processing completions (Task 4.2)
                 if self._force_exit:

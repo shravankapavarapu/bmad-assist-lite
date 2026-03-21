@@ -77,8 +77,8 @@ development_status:
   # Epic 5: Resilience & Recovery
   epic-5: in-progress
   5-1-crash-recovery-and-resume-in-flight-stories: done
-  5-2-orphan-detection-and-worktree-pruning: review
-  5-3-blocked-story-handling-and-dependency-cascade: backlog
+  5-2-orphan-detection-and-worktree-pruning: done
+  5-3-blocked-story-handling-and-dependency-cascade: review
   5-4-status-cli-command: backlog
   5-5-unblock-cli-command: backlog
   epic-5-retrospective: optional
