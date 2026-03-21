@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from bmad_assist_lite.parallel.recovery import recover_state, _cleanup_temp_files
+from bmad_assist_lite.parallel.recovery import (
+    _cleanup_temp_files,
+    prune_and_clean_orphaned_worktrees,
+    recover_state,
+)
 from bmad_assist_lite.parallel.state import (
     ParallelState,
     StoryState,
@@ -76,12 +80,16 @@ def _make_worktree_info(
 class TestRecoverStateInFlight:
     """Test recovery behavior for in-flight stories."""
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_in_flight_with_existing_worktree_preserved(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """In-flight story with existing worktree remains in_flight (AC #1)."""
         wt_path = Path("/worktrees/parallel-3-1").resolve()
@@ -103,12 +111,16 @@ class TestRecoverStateInFlight:
         assert result.stories["3.1"].status == StoryStatus.IN_FLIGHT
         assert result.stories["3.1"].worktree_path == wt_path
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_in_flight_with_missing_worktree_reset_to_backlog(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """In-flight story with missing worktree is reset to backlog (AC #2)."""
@@ -136,12 +148,16 @@ class TestRecoverStateInFlight:
             for r in caplog.records
         )
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_in_flight_with_none_worktree_path_reset_to_backlog(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """In-flight story with worktree_path=None is treated as missing (edge case)."""
         state = _make_state(
@@ -168,12 +184,16 @@ class TestRecoverStateInFlight:
 class TestRecoverStateTerminalStatuses:
     """Test recovery preserves terminal statuses (AC #3)."""
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_done_stories_preserved(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """Done stories remain done after recovery (AC #3)."""
         state = _make_state(
@@ -190,12 +210,16 @@ class TestRecoverStateTerminalStatuses:
 
         assert result.stories["3.1"].status == StoryStatus.DONE
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_blocked_stories_preserved(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """Blocked stories remain blocked after recovery (AC #3)."""
         state = _make_state(
@@ -223,12 +247,16 @@ class TestRecoverStateTerminalStatuses:
 class TestRecoverStateMerging:
     """Test recovery behavior for merging stories (AC #7)."""
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_merging_with_missing_worktree_reset_to_backlog(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Merging story with missing worktree is reset to backlog (AC #7)."""
@@ -254,12 +282,16 @@ class TestRecoverStateMerging:
             for r in caplog.records
         )
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_merging_with_existing_worktree_preserved(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """Merging story with existing worktree remains merging (AC #7)."""
         wt_path = Path("/worktrees/parallel-3-2").resolve()
@@ -290,12 +322,16 @@ class TestRecoverStateMerging:
 class TestRecoverStateBacklog:
     """Test recovery preserves backlog stories unchanged."""
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_backlog_stories_preserved(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """Backlog stories pass through recovery unchanged."""
         state = _make_state(
@@ -318,12 +354,16 @@ class TestRecoverStateBacklog:
 class TestRecoverStateEdgeCases:
     """Test recovery edge cases."""
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_empty_stories_dict(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """Recovery with empty stories dict is a no-op (edge case)."""
         state = _make_state(stories={})
@@ -333,12 +373,16 @@ class TestRecoverStateEdgeCases:
 
         assert result.stories == {}
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_all_stories_done(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """Recovery with all stories done is a no-op."""
         state = _make_state(
@@ -354,12 +398,16 @@ class TestRecoverStateEdgeCases:
         assert result.stories["3.1"].status == StoryStatus.DONE
         assert result.stories["3.2"].status == StoryStatus.DONE
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_mixed_statuses_reconciled_correctly(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """Mixed statuses are all reconciled correctly."""
         wt_path_1 = Path("/worktrees/parallel-3-1").resolve()
@@ -413,6 +461,8 @@ class TestRecoverStateEdgeCases:
 class TestRecoverStatePersistence:
     """Test state persistence after recovery (AC #6)."""
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     @patch("bmad_assist_lite.parallel.recovery.get_parallel_state_path")
@@ -421,6 +471,8 @@ class TestRecoverStatePersistence:
         mock_get_path: MagicMock,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
     ) -> None:
         """save_state is called after recovery reconciliation (AC #6)."""
         state_path = Path("/project/.bmad-assist-lite/parallel-state.yaml")
@@ -448,12 +500,16 @@ class TestRecoverStatePersistence:
 class TestRecoverStateLogging:
     """Test recovery logging and summary."""
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_logs_warning_for_reset_story(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Warning is logged when an in-flight story is reset to backlog."""
@@ -477,12 +533,16 @@ class TestRecoverStateLogging:
             for r in caplog.records
         )
 
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_logs_recovery_summary(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Recovery logs a summary of actions taken including temp file count."""
@@ -507,6 +567,8 @@ class TestRecoverStateLogging:
         assert len(summary_records) >= 1
         # Verify temp file count is included in summary (Task 5.2)
         assert "temp files cleaned" in summary_records[0].message.lower()
+        # Verify orphan count is included in summary (Story 5.2, Task 4.3)
+        assert "orphaned worktrees cleaned" in summary_records[0].message.lower()
 
 
 # ============================================================================
@@ -638,14 +700,20 @@ class TestCleanupTempFiles:
 
 
 class TestRecoverStateListWorktreesError:
-    """Test recovery gracefully handles list_worktrees failure."""
+    """Test recovery gracefully handles list_worktrees failure.
 
+    Also covers Task 6.10: list_worktrees failure skips orphan detection
+    since the early return bypasses both reconciliation and orphan cleanup.
+    """
+
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
     @patch("bmad_assist_lite.parallel.recovery.save_state")
     def test_list_worktrees_error_returns_state_unchanged(
         self,
         mock_save: MagicMock,
         mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """If list_worktrees fails, recovery logs error and returns state as-is."""
@@ -1019,3 +1087,567 @@ class TestRunResumeDetection:
         # Check the first call had resume=True
         first_call = mock_spawn.call_args_list[0]
         assert first_call == (("3.1",), {"resume": True})
+
+
+# ============================================================================
+# Story 5.2 — Orphan Detection & Worktree Pruning
+# ============================================================================
+
+
+# ============================================================================
+# TestPruneAndCleanOrphanedWorktrees — Direct unit tests (Tasks 6.2-6.8, 6.12-6.14)
+# ============================================================================
+
+
+class TestPruneAndCleanOrphanedWorktrees:
+    """Test orphan detection and cleanup logic."""
+
+    def test_orphan_no_state_record_cleaned(self) -> None:
+        """Worktree with parallel/ branch and no state record is orphaned (Task 6.2)."""
+        state = _make_state(stories={})  # No stories at all
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        assert count == 1
+        mock_cleanup.assert_called_once_with("3.1", Path("/project"), None)
+
+    def test_orphan_done_status_cleaned(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Worktree with parallel/ branch and done status is orphaned (Task 6.3)."""
+        state = _make_state(
+            stories={
+                "3.2": _make_story(
+                    status=StoryStatus.DONE, completed_at=_utc_now(),
+                ),
+            }
+        )
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-2").resolve(),
+                branch="parallel/3-2",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            with caplog.at_level(logging.WARNING):
+                count = prune_and_clean_orphaned_worktrees(
+                    state, Path("/project"), worktrees,
+                )
+
+        assert count == 1
+        mock_cleanup.assert_called_once_with("3.2", Path("/project"), None)
+        # Task 3.3: Verify warning logged with reason
+        assert any(
+            "3.2" in r.message and "done" in r.message
+            for r in caplog.records
+        )
+
+    def test_in_flight_not_orphaned(self) -> None:
+        """Worktree for in_flight story is NOT cleaned up (Task 6.4)."""
+        state = _make_state(
+            stories={
+                "3.1": _make_story(
+                    status=StoryStatus.IN_FLIGHT,
+                    worktree_path=Path("/worktrees/parallel-3-1").resolve(),
+                    started_at=_utc_now(),
+                ),
+            }
+        )
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        assert count == 0
+        mock_cleanup.assert_not_called()
+
+    def test_merging_not_orphaned(self) -> None:
+        """Worktree for merging story is NOT cleaned up (Task 6.5)."""
+        state = _make_state(
+            stories={
+                "3.1": _make_story(
+                    status=StoryStatus.MERGING,
+                    worktree_path=Path("/worktrees/parallel-3-1").resolve(),
+                    completed_at=_utc_now(),
+                ),
+            }
+        )
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        assert count == 0
+        mock_cleanup.assert_not_called()
+
+    def test_blocked_not_orphaned(self) -> None:
+        """Worktree for blocked story is NOT cleaned up (Task 6.6)."""
+        state = _make_state(
+            stories={
+                "3.1": _make_story(
+                    status=StoryStatus.BLOCKED,
+                    error="Exit code 1",
+                    completed_at=_utc_now(),
+                ),
+            }
+        )
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        assert count == 0
+        mock_cleanup.assert_not_called()
+
+    def test_backlog_not_orphaned(self) -> None:
+        """Worktree for backlog story is NOT cleaned up."""
+        state = _make_state(
+            stories={
+                "3.1": _make_story(status=StoryStatus.BACKLOG),
+            }
+        )
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        assert count == 0
+        mock_cleanup.assert_not_called()
+
+    def test_non_parallel_branch_skipped(self) -> None:
+        """Worktree with non-parallel/ branch is skipped entirely (Task 6.7)."""
+        state = _make_state(stories={})
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/project").resolve(), branch="main",
+            ),
+            _make_worktree_info(
+                path=Path("/worktrees/feature-foo").resolve(),
+                branch="feature/foo",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        assert count == 0
+        mock_cleanup.assert_not_called()
+
+    def test_cleanup_failure_continues_to_next_orphan(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """cleanup_worktree failure is caught; remaining orphans still processed (Task 6.8)."""
+        state = _make_state(stories={})  # No stories — all parallel are orphans
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-2").resolve(),
+                branch="parallel/3-2",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            # First call fails, second succeeds
+            mock_cleanup.side_effect = [RuntimeError("locked"), None]
+            with caplog.at_level(logging.WARNING):
+                count = prune_and_clean_orphaned_worktrees(
+                    state, Path("/project"), worktrees,
+                )
+
+        # Only one succeeded
+        assert count == 1
+        # Both were attempted
+        assert mock_cleanup.call_count == 2  # noqa: PLR2004
+        # Failure was logged
+        assert any("3.1" in r.message and "locked" in r.message for r in caplog.records)
+        # Success was logged (Task 3.3: warning for each orphan cleaned)
+        assert any(
+            "3.2" in r.message and "no_state_record" in r.message
+            for r in caplog.records
+        )
+
+    def test_empty_worktree_list_returns_zero(self) -> None:
+        """Empty worktree list → no orphans, returns 0 (Task 6.12)."""
+        state = _make_state(
+            stories={"3.1": _make_story(status=StoryStatus.IN_FLIGHT)},
+        )
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), [],
+            )
+
+        assert count == 0
+        mock_cleanup.assert_not_called()
+
+    def test_all_parallel_worktrees_are_orphans(self) -> None:
+        """All parallel worktrees are orphans → all cleaned, correct count (Task 6.13)."""
+        state = _make_state(stories={})  # Empty state
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-2").resolve(),
+                branch="parallel/3-2",
+            ),
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-3").resolve(),
+                branch="parallel/3-3",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        assert count == 3  # noqa: PLR2004
+        assert mock_cleanup.call_count == 3  # noqa: PLR2004
+
+    def test_branch_to_story_id_reverse_mapping(self) -> None:
+        """Verify parallel/3-4 correctly maps to story ID 3.4 (Task 6.14)."""
+        state = _make_state(stories={})
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-4").resolve(),
+                branch="parallel/3-4",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        # Verify the story_id passed to cleanup_worktree is "3.4"
+        mock_cleanup.assert_called_once_with("3.4", Path("/project"), None)
+
+    def test_non_standard_branch_name_skipped(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Branch like parallel/foo-bar is skipped with warning (Task 2.1 validation)."""
+        state = _make_state(stories={})
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-foo-bar").resolve(),
+                branch="parallel/foo-bar",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            with caplog.at_level(logging.WARNING):
+                count = prune_and_clean_orphaned_worktrees(
+                    state, Path("/project"), worktrees,
+                )
+
+        assert count == 0
+        mock_cleanup.assert_not_called()
+        assert any(
+            "non-standard" in r.message and "foo-bar" in r.message
+            for r in caplog.records
+        )
+
+    def test_none_branch_worktree_skipped(self) -> None:
+        """Worktree with branch=None is skipped."""
+        state = _make_state(stories={})
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/detached-head").resolve(), branch=None,
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
+
+        assert count == 0
+        mock_cleanup.assert_not_called()
+
+    def test_base_dir_passed_through(self) -> None:
+        """base_dir parameter is passed through to cleanup_worktree."""
+        state = _make_state(stories={})
+        base_dir = Path("/custom/base")
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        with patch(
+            "bmad_assist_lite.parallel.recovery.cleanup_worktree"
+        ) as mock_cleanup:
+            prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees, base_dir,
+            )
+
+        mock_cleanup.assert_called_once_with("3.1", Path("/project"), base_dir)
+
+    def test_orphan_no_state_record_logs_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Orphan with no state record logs warning with correct reason."""
+        state = _make_state(stories={})
+        worktrees = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        with patch("bmad_assist_lite.parallel.recovery.cleanup_worktree"):
+            with caplog.at_level(logging.WARNING):
+                prune_and_clean_orphaned_worktrees(
+                    state, Path("/project"), worktrees,
+                )
+
+        assert any(
+            "3.1" in r.message and "no_state_record" in r.message
+            for r in caplog.records
+        )
+
+
+# ============================================================================
+# TestRecoverStatePruneWorktreesOrder — Task 6.1, 6.9
+# ============================================================================
+
+
+class TestRecoverStatePruneWorktreesOrder:
+    """Test prune_worktrees is called before list_worktrees in recover_state."""
+
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.save_state")
+    @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
+    def test_prune_called_before_list(
+        self,
+        mock_prune: MagicMock,
+        mock_list_wt: MagicMock,
+        mock_save: MagicMock,
+        mock_cleanup: MagicMock,
+    ) -> None:
+        """prune_worktrees() is called before list_worktrees() (Task 6.1)."""
+        call_order: list[str] = []
+        mock_prune.side_effect = lambda *a, **kw: call_order.append("prune")
+        mock_list_wt.side_effect = lambda *a, **kw: (
+            call_order.append("list") or []  # type: ignore[func-returns-value]
+        )
+
+        state = _make_state(stories={})
+        recover_state(state, Path("/project"))
+
+        assert call_order == ["prune", "list"]
+
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.save_state")
+    @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
+    def test_prune_failure_does_not_prevent_list(
+        self,
+        mock_prune: MagicMock,
+        mock_list_wt: MagicMock,
+        mock_save: MagicMock,
+        mock_cleanup: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """prune_worktrees failure is caught; list_worktrees still proceeds (Task 6.9)."""
+        from bmad_assist_lite.parallel.exceptions import ParallelError
+
+        mock_prune.side_effect = ParallelError("git worktree prune failed")
+        mock_list_wt.return_value = []
+
+        state = _make_state(stories={})
+
+        with caplog.at_level(logging.WARNING):
+            result = recover_state(state, Path("/project"))
+
+        # list_worktrees was still called
+        mock_list_wt.assert_called_once()
+        # Prune failure was logged
+        assert any("prune" in r.message.lower() for r in caplog.records)
+        # Recovery completed normally
+        assert result.stories == {}
+
+
+# ============================================================================
+# TestRecoverStateOrphanIntegration — Task 6.11
+# ============================================================================
+
+
+class TestRecoverStateOrphanIntegration:
+    """Test recover_state() includes orphan count in summary log."""
+
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
+    @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
+    @patch("bmad_assist_lite.parallel.recovery.save_state")
+    def test_recovery_summary_includes_orphan_count(
+        self,
+        mock_save: MagicMock,
+        mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Recovery summary includes orphan cleanup count (Task 6.11)."""
+        state = _make_state(
+            stories={
+                "3.1": _make_story(status=StoryStatus.DONE, completed_at=_utc_now()),
+            }
+        )
+        # Worktree exists for done story → orphan
+        mock_list_wt.return_value = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        with caplog.at_level(logging.INFO):
+            recover_state(state, Path("/project"))
+
+        # Find the summary record
+        summary_records = [
+            r for r in caplog.records
+            if "recovery complete" in r.message.lower()
+        ]
+        assert len(summary_records) >= 1
+        assert "orphaned" in summary_records[0].message.lower()
+        assert "cleaned" in summary_records[0].message.lower()
+        # Verify count: 1 orphan cleaned (singular grammar)
+        assert "1 orphaned worktree cleaned" in summary_records[0].message
+
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
+    @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
+    @patch("bmad_assist_lite.parallel.recovery.save_state")
+    def test_orphan_detection_uses_reconciled_state(
+        self,
+        mock_save: MagicMock,
+        mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
+    ) -> None:
+        """Orphan detection runs on reconciled state, not original state."""
+        # Story is in_flight with missing worktree → will be reset to backlog
+        # Worktree list includes the parallel branch for this story
+        wt_path = Path("/worktrees/parallel-3-1").resolve()
+        state = _make_state(
+            stories={
+                "3.1": _make_story(
+                    status=StoryStatus.IN_FLIGHT,
+                    worktree_path=Path("/other/missing").resolve(),
+                    started_at=_utc_now(),
+                ),
+            }
+        )
+        mock_list_wt.return_value = [
+            _make_worktree_info(path=wt_path, branch="parallel/3-1"),
+        ]
+
+        recover_state(state, Path("/project"))
+
+        # After reconciliation, story 3.1 is reset to backlog
+        # As a backlog story, it should NOT be orphaned
+        mock_cleanup.assert_not_called()
+
+    @patch("bmad_assist_lite.parallel.recovery.cleanup_worktree")
+    @patch("bmad_assist_lite.parallel.recovery.prune_worktrees")
+    @patch("bmad_assist_lite.parallel.recovery.list_worktrees")
+    @patch("bmad_assist_lite.parallel.recovery.save_state")
+    def test_worktree_base_dir_passed_to_orphan_cleanup(
+        self,
+        mock_save: MagicMock,
+        mock_list_wt: MagicMock,
+        mock_prune: MagicMock,
+        mock_cleanup: MagicMock,
+    ) -> None:
+        """worktree_base_dir is passed through to orphan cleanup (Task 4.4)."""
+        state = _make_state(stories={})
+        base_dir = Path("/custom/worktree/base")
+        mock_list_wt.return_value = [
+            _make_worktree_info(
+                path=Path("/worktrees/parallel-3-1").resolve(),
+                branch="parallel/3-1",
+            ),
+        ]
+
+        recover_state(state, Path("/project"), worktree_base_dir=base_dir)
+
+        mock_cleanup.assert_called_once_with("3.1", Path("/project"), base_dir)
