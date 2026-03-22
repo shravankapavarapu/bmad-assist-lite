@@ -503,6 +503,7 @@ src/bmad_assist_lite/
 │   ├── sprint_status_manager.py       # Orchestrator-owned sprint-status updates
 │   ├── config.py                      # ParallelConfig Pydantic model
 │   ├── logging.py                     # Orchestrator log setup, prefix formatting, summary report
+│   ├── bootstrap.py                   # Worktree bootstrap: file copy, setup, validation (Epic 9)
 │   └── exceptions.py                  # ParallelError and subclasses
 │
 ├── cli.py                             # MODIFIED: Register parallel sub-app, add --epic/--story/--single-story
@@ -520,7 +521,8 @@ tests/
 ├── test_parallel_config.py            # NEW: ParallelConfig validation
 ├── test_parallel_cli.py               # NEW: CLI commands (parallel run/status/unblock)
 ├── test_orchestrator.py               # NEW: Orchestrator coordination loop (async)
-└── test_sprint_status_manager.py      # NEW: Orchestrator sprint-status updates
+├── test_sprint_status_manager.py      # NEW: Orchestrator sprint-status updates
+└── test_parallel_bootstrap.py         # NEW: Bootstrap pipeline: copy, setup, validation, canary
 ```
 
 ### Architectural Boundaries
@@ -546,6 +548,7 @@ parallel/orchestrator.py (main loop)
   ├── uses → parallel/dependency_resolver.py (pure functions, no state)
   ├── uses → parallel/worktree_manager.py (git worktree operations)
   │              └── uses → parallel/git_ops.py (low-level git wrapper)
+  ├── uses → parallel/bootstrap.py (worktree bootstrap: copy, setup, validate)
   ├── uses → parallel/merger.py (merge + QG + fix)
   │              └── uses → parallel/git_ops.py
   ├── uses → parallel/state.py (parallel-state.yaml read/write)
@@ -723,6 +726,7 @@ src/bmad_assist_lite/parallel/
   config.py                # ParallelConfig Pydantic model
   logging.py               # Orchestrator log setup, prefix formatting, summary report
   recovery.py              # Crash recovery and orphan detection (Epic 5)
+  bootstrap.py             # Worktree bootstrap: file copy, setup commands, validation (Epic 9)
   exceptions.py            # ParallelError and subclasses
 ```
 
@@ -764,6 +768,64 @@ src/bmad_assist_lite/parallel/
 - Written to orchestrator log and echoed to console
 
 **Affects:** `logging.py` (all three tiers), `cli.py` (status command), `orchestrator.py` (stream readers, summary trigger)
+
+### Worktree Bootstrap
+
+**Scope:** Epic 9 — configurable worktree setup with file copying, dependency installation, and build validation before LLM invocation.
+
+**Problem:** Git worktrees only contain tracked files. Untracked files (`.env`, `local.settings.json`) and installed dependencies (`node_modules/`, `.venv/`) are absent. Without bootstrap, worktree subprocesses fail at quality gates, wasting LLM tokens on a broken environment.
+
+**Three-phase bootstrap pipeline:**
+
+1. **Copy files** — Copy listed untracked files/directories from project root to worktree using `shutil.copy2` (files) / `shutil.copytree` (directories). Configurable strict mode: missing file = warning (default) or error.
+2. **Setup commands** — Run ordered list of shell commands sequentially in worktree cwd (e.g., `pip install -e .`, `npm ci`). Each worktree needs its own installed dependencies since worktrees don't share working directory files. Non-zero exit = failure.
+3. **Validation command** — Single smoke test command (e.g., `pytest -q -x`, `npm run build`). Non-zero exit = failure.
+
+**Canary pattern:**
+
+All worktrees fork from the same base branch HEAD. If bootstrap fails for one worktree, it will fail for all. The orchestrator uses a canary pattern to fail fast:
+
+```
+1. First story in batch = canary
+2. Create canary worktree
+3. Run full bootstrap (copy + setup + validation)
+4. If FAIL → abort entire parallel run, clean up, exit with error
+5. If PASS → proceed with remaining worktrees:
+   - Each runs copy + setup (needs own dependencies)
+   - Skip validation (canary proved the recipe works)
+   - If setup fails for a non-canary → block that story, continue others
+```
+
+**Configuration (`ParallelConfig` additions):**
+```python
+copy_to_worktree: list[str] = []       # Files/dirs to copy (e.g., [".env", "secrets/"])
+copy_strict: bool = False               # True = error on missing, False = warn
+setup_commands: list[str] = []          # Sequential commands (e.g., ["pip install -e ."])
+validation_command: str | None = None   # Smoke test (e.g., "pytest -q -x")
+bootstrap_timeout: int = 120            # Per-command timeout in seconds
+```
+
+**Zero-overhead default:** When no bootstrap fields are configured, `bootstrap_worktree()` returns immediately with `success=True`. Existing users experience no change.
+
+**Result model:**
+```python
+class BootstrapResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    success: bool
+    failed_phase: str | None       # "copy" | "setup" | "validation" | None
+    error_message: str | None
+    output: str                     # Captured stdout/stderr for diagnostics
+```
+
+**Integration point:** `orchestrator.py` calls `bootstrap_worktree()` via `asyncio.to_thread()` between `create_worktree()` and subprocess spawn. The canary gate blocks all other story spawns until bootstrap completes.
+
+**Error handling:**
+- Canary bootstrap failure → abort entire run, clean up worktree, log full diagnostic output
+- Non-canary setup failure → mark story as blocked (`block_reason="Bootstrap setup failed"`), clean up worktree, continue other stories
+- All subprocess calls use `timeout` parameter — no hanging processes
+- Log prefix: `[BOOTSTRAP]` for all bootstrap-related messages
+
+**Affects:** `config.py` (new fields), `bootstrap.py` (new module), `orchestrator.py` (canary integration), `__init__.py` (exports)
 
 ### Epic Teardown
 
@@ -848,9 +910,10 @@ src/bmad_assist_lite/parallel/
 **Important Gaps: 1**
 - Merger agent prompt template — specifies invocation but not the prompt content. Deferred to epic/story creation.
 
-**Nice-to-Have Gaps: 2**
+**Nice-to-Have Gaps: 3**
 - Performance baseline measurements — will be measured during implementation
 - Integration test fixture strategy for git worktree operations — addressed in story acceptance criteria
+- Worktree bootstrap for untracked files and dependency installation — addressed in Epic 9 (Worktree Bootstrap & Validation)
 
 ### Architecture Completeness Checklist
 
