@@ -8,8 +8,11 @@ input_file_patterns:
     pattern: "**/{epic_num}-{story_num}*.md"
     strategy: FULL_LOAD
   project_context:
-    pattern: "**/project_context*.md"
-    strategy: FULL_LOAD
+    pattern: "**/project-context.md"
+    strategy: SELECTIVE_LOAD
+  prd_file:
+    pattern: "{planning_artifacts}/*prd*.md"
+    strategy: SELECTIVE_LOAD
   architecture_file:
     pattern: "**/architecture*.md"
     strategy: FULL_LOAD
