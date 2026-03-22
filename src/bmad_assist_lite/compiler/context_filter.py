@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from bmad_assist_lite.compiler.types import CompilerContext
@@ -18,6 +18,7 @@ from bmad_assist_lite.core.exceptions import CompilerError
 logger = logging.getLogger(__name__)
 
 _HEADING_RE = re.compile(r"^#{2,4}\s+Context\s+Requirements", re.IGNORECASE)
+_OPTIONAL_RE = re.compile(r"\s*\(optional\)\s*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -28,12 +29,16 @@ class ContextRequirement:
         document: Filename (e.g. ``"architecture.md"``).
         sections: Section header names to extract.
         directive: ``"full"``, ``"skip"``, or ``"sections"``.
+        optional: Whether the entire document reference is optional.
+        optional_sections: Indices (into ``sections``) that are optional.
 
     """
 
     document: str
     sections: list[str]
     directive: str  # "full", "skip", or "sections"
+    optional: bool = False
+    optional_sections: frozenset[int] = field(default_factory=frozenset)
 
 
 # ---------------------------------------------------------------------------
@@ -120,19 +125,53 @@ def parse_context_requirements(epic_content: str) -> list[ContextRequirement] | 
         if not document:
             continue
 
-        sections_lower = sections_raw.lower()
-        if sections_lower == "(skip)":
+        # Strip (optional) from the raw cell to isolate the directive keyword.
+        # "(full) (optional)" → "(full)", "(skip) (optional)" → "(skip)"
+        directive_val = _OPTIONAL_RE.sub("", sections_raw).strip().strip("`").strip()
+
+        directive_lower = directive_val.lower()
+        if directive_lower == "(skip)":
             directive = "skip"
             sections: list[str] = []
-        elif sections_lower == "(full)" or not sections_raw:
+            optional_indices: frozenset[int] = frozenset()
+            # Document-level optional: (optional) in a (skip)/(full) directive row
+            doc_optional = bool(_OPTIONAL_RE.search(sections_raw))
+        elif directive_lower == "(full)" or not directive_val:
             directive = "full"
             sections = []
+            optional_indices = frozenset()
+            doc_optional = bool(_OPTIONAL_RE.search(sections_raw))
         else:
             directive = "sections"
-            sections = [s.strip().strip("`") for s in sections_raw.split(";") if s.strip()]
+            # Split by semicolon, then detect per-section (optional)
+            raw_parts = [s.strip() for s in sections_raw.split(";") if s.strip()]
+            sections = []
+            opt_idx: set[int] = set()
+            for part in raw_parts:
+                # Detect (optional) before stripping backticks
+                if _OPTIONAL_RE.search(part):
+                    cleaned = _OPTIONAL_RE.sub("", part).strip().strip("`").strip()
+                    if cleaned:
+                        opt_idx.add(len(sections))
+                        sections.append(cleaned)
+                else:
+                    cleaned = part.strip("`").strip()
+                    if cleaned:
+                        sections.append(cleaned)
+            optional_indices = frozenset(opt_idx)
+            # Document-level optional only if ALL sections are optional
+            doc_optional = bool(
+                optional_indices and len(optional_indices) == len(sections)
+            )
 
         reqs.append(
-            ContextRequirement(document=document, sections=sections, directive=directive)
+            ContextRequirement(
+                document=document,
+                sections=sections,
+                directive=directive,
+                optional=doc_optional,
+                optional_sections=optional_indices,
+            )
         )
 
     return reqs if reqs else None
@@ -413,14 +452,17 @@ def apply_context_filter(context: CompilerContext) -> None:
     for req in reqs:
         doc_lower = req.document.lower()
         content_key = filename_to_key.get(doc_lower)
-        if content_key is None:
-            if req.directive != "skip":
-                missing_docs.append(req.document)
-            continue
 
-        if content_key not in context.file_contents:
+        # Document not discovered or not loaded — handle missing doc
+        if content_key is None or content_key not in context.file_contents:
             if req.directive != "skip":
-                missing_docs.append(req.document)
+                if req.optional:
+                    logger.warning(
+                        "Optional document '%s' not found, skipping",
+                        req.document,
+                    )
+                else:
+                    missing_docs.append(req.document)
             continue
 
         if req.directive == "skip":
@@ -430,12 +472,19 @@ def apply_context_filter(context: CompilerContext) -> None:
         elif req.directive == "sections":
             original = context.file_contents[content_key]
             extracted_parts: list[str] = []
-            for section_name in req.sections:
+            for idx, section_name in enumerate(req.sections):
                 section = _extract_section_from_content(original, section_name)
                 if section is None:
-                    missing_sections.setdefault(req.document, []).append(
-                        section_name
-                    )
+                    if idx in req.optional_sections:
+                        logger.warning(
+                            "Optional section '%s' in '%s' not found, skipping",
+                            section_name,
+                            req.document,
+                        )
+                    else:
+                        missing_sections.setdefault(req.document, []).append(
+                            section_name
+                        )
                     continue
                 extracted_parts.append(section)
             if extracted_parts:

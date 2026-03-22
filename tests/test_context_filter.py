@@ -1,5 +1,6 @@
 """Tests for compiler.context_filter — epic-driven context filtering."""
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -889,4 +890,450 @@ class TestMissingContextRequirementsError:
         ctx.discovered_files = {}
 
         with pytest.raises(CompilerError, match="ghost.md"):
+            apply_context_filter(ctx)
+
+
+# ---------------------------------------------------------------------------
+# Optional reference parsing (Story 8.2)
+# ---------------------------------------------------------------------------
+
+
+class TestParseOptionalReferences:
+    """Tests for (optional) marker detection in parse_context_requirements."""
+
+    def test_full_optional_directive(self):
+        """Task 4.1: (full) (optional) → directive='full', optional=True."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | (full) (optional) | Nice to have |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        assert len(result) == 1
+        req = result[0]
+        assert req.directive == "full"
+        assert req.optional is True
+        assert req.sections == []
+
+    def test_per_section_optional_indices(self):
+        """Task 4.2: Per-section optional produces correct optional_sections."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Crash Recovery; State Persistence (optional); Blocked Story Handling | Core |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        req = result[0]
+        assert req.directive == "sections"
+        assert req.sections == [
+            "Crash Recovery",
+            "State Persistence",
+            "Blocked Story Handling",
+        ]
+        # "State Persistence" is index 1
+        assert req.optional_sections == frozenset({1})
+        # Document-level optional is False (not all sections optional)
+        assert req.optional is False
+
+    def test_optional_text_stripped_before_section_matching(self):
+        """Task 4.7: (optional) stripped so 'Foo (optional)' matches '## Foo'."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| doc.md | Foo (optional) | Nice |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        req = result[0]
+        assert req.sections == ["Foo"]
+        assert req.optional_sections == frozenset({0})
+
+    def test_case_insensitive_optional_uppercase(self):
+        """Task 4.8: (OPTIONAL) variant recognized."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | (full) (OPTIONAL) | Nice |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        assert result[0].optional is True
+        assert result[0].directive == "full"
+
+    def test_case_insensitive_optional_mixed_case(self):
+        """Task 4.8: (Optional) variant recognized."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Section A (Optional) | Nice |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        assert result[0].optional_sections == frozenset({0})
+        assert result[0].sections == ["Section A"]
+
+    def test_skip_optional_directive(self):
+        """Task 4.9: (skip) (optional) parsed correctly."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| ux.md | (skip) (optional) | Not needed |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        req = result[0]
+        assert req.directive == "skip"
+        assert req.optional is True
+
+    def test_no_optional_marker_backward_compat(self):
+        """Task 4.6: No (optional) → optional=False, empty optional_sections."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Tech Stack; Deployment | Core |
+| prd.md | (full) | All |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        assert result[0].optional is False
+        assert result[0].optional_sections == frozenset()
+        assert result[1].optional is False
+        assert result[1].optional_sections == frozenset()
+
+    def test_backtick_wrapped_optional_section(self):
+        """Task 2.4: Backtick-wrapped section with (optional) detected."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| doc.md | `Section A (optional)`; Section B | Partial |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        req = result[0]
+        assert req.sections == ["Section A", "Section B"]
+        assert req.optional_sections == frozenset({0})
+
+    def test_multiple_optional_sections(self):
+        """Multiple sections marked optional in one row."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| doc.md | A; B (optional); C; D (optional) | Mixed |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        req = result[0]
+        assert req.sections == ["A", "B", "C", "D"]
+        assert req.optional_sections == frozenset({1, 3})
+        assert req.optional is False
+
+    def test_all_sections_optional_sets_doc_optional(self):
+        """When all sections in a list are optional, doc-level optional is True."""
+        epic = """\
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| doc.md | A (optional); B (optional) | All optional |
+"""
+        result = parse_context_requirements(epic)
+        assert result is not None
+        req = result[0]
+        assert req.optional is True
+        assert req.optional_sections == frozenset({0, 1})
+
+
+# ---------------------------------------------------------------------------
+# Optional reference behavior in apply_context_filter (Story 8.2)
+# ---------------------------------------------------------------------------
+
+
+class TestOptionalReferenceFiltering:
+    """Integration tests for optional references in apply_context_filter."""
+
+    def test_optional_missing_document_warning_no_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Task 4.3: Optional missing document → WARNING, no error."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| missing-doc.md | (full) (optional) | Nice to have |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.file_contents = {"epic_file": epic}
+        ctx.discovered_files = {}
+
+        with caplog.at_level(logging.WARNING):
+            apply_context_filter(ctx)  # Should NOT raise
+
+        assert "missing-doc.md" in caplog.text
+        assert "Optional document" in caplog.text
+
+    def test_optional_missing_section_among_required(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Task 4.4: Optional missing section → WARNING, required present → ok."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Crash Recovery; State Persistence (optional); Blocked Story Handling | Core |
+"""
+        arch_content = """\
+# Architecture
+
+## Crash Recovery
+
+Recovery details.
+
+## Blocked Story Handling
+
+Blocked handling details.
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        ctx.file_contents = {"epic_file": epic, "arch_file": arch_content}
+
+        with caplog.at_level(logging.WARNING):
+            apply_context_filter(ctx)  # Should NOT raise
+
+        # Optional missing section logged as warning
+        assert "State Persistence" in caplog.text
+        assert "Optional section" in caplog.text
+
+        # Required sections extracted correctly
+        result = ctx.file_contents["arch_file"]
+        assert "Crash Recovery" in result
+        assert "Blocked Story Handling" in result
+
+    def test_optional_missing_section_required_missing_raises(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Required section missing raises even with optional also missing."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Crash Recovery; State Persistence (optional); Blocked Story Handling | Core |
+"""
+        arch_content = """\
+# Architecture
+
+## Overview
+
+Overview only, no matching sections.
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        ctx.file_contents = {"epic_file": epic, "arch_file": arch_content}
+
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(CompilerError) as exc_info:
+                apply_context_filter(ctx)
+
+        msg = str(exc_info.value)
+        # Required sections raise errors
+        assert "Crash Recovery" in msg
+        assert "Blocked Story Handling" in msg
+        # Optional section NOT in error message
+        assert "State Persistence" not in msg
+        # But optional section IS in warning log
+        assert "State Persistence" in caplog.text
+
+    def test_all_non_optional_present_optional_missing_no_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Task 4.5: All non-optional present, optional missing → no error."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Tech Stack | Core |
+| optional-doc.md | (full) (optional) | Nice to have |
+"""
+        arch_content = "# Arch\n\n## Tech Stack\n\nPython.\n"
+
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        ctx.file_contents = {"epic_file": epic, "arch_file": arch_content}
+
+        with caplog.at_level(logging.WARNING):
+            apply_context_filter(ctx)  # Should NOT raise
+
+        assert "optional-doc.md" in caplog.text
+        assert "Tech Stack" in ctx.file_contents["arch_file"]
+
+    def test_no_optional_markers_existing_error_behavior(self, tmp_path: Path):
+        """Task 4.6: No (optional) markers → CompilerError as before."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| ghost.md | (full) | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.file_contents = {"epic_file": epic}
+        ctx.discovered_files = {}
+
+        with pytest.raises(CompilerError, match="ghost.md"):
+            apply_context_filter(ctx)
+
+    def test_optional_section_name_matches_heading(self, tmp_path: Path):
+        """Task 4.7: Section 'Foo (optional)' matches heading '## Foo'."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| doc.md | Foo (optional); Bar | Both |
+"""
+        doc_content = """\
+# Doc
+
+## Foo
+
+Foo content.
+
+## Bar
+
+Bar content.
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"doc_file": [tmp_path / "doc.md"]}
+        ctx.file_contents = {"epic_file": epic, "doc_file": doc_content}
+
+        apply_context_filter(ctx)
+
+        result = ctx.file_contents["doc_file"]
+        assert "Foo content." in result
+        assert "Bar content." in result
+
+    def test_skip_optional_missing_document_no_error(self, tmp_path: Path):
+        """Task 4.9: (skip) (optional) on missing document → no error."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| nonexistent.md | (skip) (optional) | N/A |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.file_contents = {"epic_file": epic}
+        ctx.discovered_files = {}
+
+        # Should NOT raise — skip on missing doc is already a no-op
+        apply_context_filter(ctx)
+
+    def test_case_insensitive_optional_in_filter(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Task 4.8: Case-insensitive (OPTIONAL) works in apply_context_filter."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| missing.md | (full) (OPTIONAL) | Nice |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.file_contents = {"epic_file": epic}
+        ctx.discovered_files = {}
+
+        with caplog.at_level(logging.WARNING):
+            apply_context_filter(ctx)  # Should NOT raise
+
+        assert "missing.md" in caplog.text
+
+    def test_mixed_optional_required_documents(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Mix of optional and required missing documents."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| required.md | (full) | Must have |
+| optional.md | (full) (optional) | Nice to have |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.file_contents = {"epic_file": epic}
+        ctx.discovered_files = {}
+
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(CompilerError) as exc_info:
+                apply_context_filter(ctx)
+
+        msg = str(exc_info.value)
+        # Required doc in error
+        assert "required.md" in msg
+        # Optional doc NOT in error
+        assert "optional.md" not in msg
+        # Optional doc in warning log
+        assert "optional.md" in caplog.text
+
+    def test_sections_directive_missing_doc_with_mixed_optional_raises(
+        self, tmp_path: Path,
+    ):
+        """Entire document missing with mixed optional/required sections raises."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Crash Recovery; State Persistence (optional); Blocked Story Handling | Core |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.file_contents = {"epic_file": epic}
+        ctx.discovered_files = {}
+
+        # Document is missing and has required sections → must raise CompilerError
+        with pytest.raises(CompilerError, match="arch.md"):
             apply_context_filter(ctx)
