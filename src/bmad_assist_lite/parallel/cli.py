@@ -10,7 +10,8 @@ import typer
 import yaml
 
 if TYPE_CHECKING:
-    from bmad_assist_lite.parallel.state import ParallelState
+    from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
+    from bmad_assist_lite.parallel.state import ParallelState, StoryState, StoryStatus
 
 logger = logging.getLogger(__name__)
 
@@ -271,19 +272,83 @@ def _format_duration(
 
 
 # ============================================================================
+# Dependency status formatting (Story 6.2 — Task 3)
+# ============================================================================
+
+# Dependency status symbols — hoisted to module level to avoid per-call allocation.
+# Lazily populated on first use (after StoryStatus import).
+_DEP_SYMBOLS: dict["StoryStatus", str] | None = None
+
+
+def _get_dep_symbols() -> dict["StoryStatus", str]:
+    """Return the dependency status symbol mapping, building it on first call."""
+    global _DEP_SYMBOLS  # noqa: PLW0603
+    if _DEP_SYMBOLS is None:
+        from bmad_assist_lite.parallel.state import StoryStatus
+
+        _DEP_SYMBOLS = {
+            StoryStatus.DONE: "\u2713",
+            StoryStatus.IN_FLIGHT: "\u23f3",
+            StoryStatus.BLOCKED: "\u2717 (blocked)",
+            StoryStatus.BACKLOG: "\u2026",
+            StoryStatus.MERGING: "\u2026",
+        }
+    return _DEP_SYMBOLS
+
+
+def _format_dependency_status(
+    story_id: str,
+    graph: "DependencyGraph | None",
+    stories: dict[str, "StoryState"],
+) -> str:
+    """Format dependency status with visual indicators for a story.
+
+    Returns a comma-separated string of dependency statuses, e.g.
+    ``"3.1 ✓, 3.2 ⏳"``. Returns empty string when no graph is
+    available or the story has no dependencies.
+    """
+    if graph is None:
+        return ""
+
+    try:
+        deps = graph.dependencies_of(story_id)
+    except KeyError:
+        return ""
+
+    if not deps:
+        return ""
+
+    symbols = _get_dep_symbols()
+
+    parts: list[str] = []
+    for dep_id in deps:
+        dep_story = stories.get(dep_id)
+        if dep_story is None:
+            parts.append(f"{dep_id} ?")
+        else:
+            symbol = symbols.get(dep_story.status, "?")
+            parts.append(f"{dep_id} {symbol}")
+
+    return ", ".join(parts)
+
+
+# ============================================================================
 # Table formatting (Task 3)
 # ============================================================================
 
 
-def _format_status_table(state: "ParallelState") -> str:
+def _format_status_table(
+    state: "ParallelState",
+    graph: "DependencyGraph | None" = None,
+) -> str:
     """Build a human-readable aligned text table of story statuses.
 
-    Columns: Story ID, Status, Phase, Duration, Blocked By, Info
+    Columns: Story ID, Status, Phase, Duration, Depends On, Info
     """
     from bmad_assist_lite.parallel.state import StoryStatus
 
     # Column headers
-    headers = ["Story ID", "Status", "Phase", "Duration", "Blocked By", "Info"]
+    headers = ["Story ID", "Status", "Phase", "Duration", "Depends On", "Info"]
 
     # Build rows
     rows: list[list[str]] = []
@@ -302,8 +367,8 @@ def _format_status_table(state: "ParallelState") -> str:
         # Duration
         duration = _format_duration(story.started_at, story.completed_at)
 
-        # Blocked By — not available in current model, leave empty
-        blocked_by = ""
+        # Depends On — show formatted dependency status with symbols
+        depends_on = _format_dependency_status(story_id, graph, state.stories)
 
         # Info column — show error for blocked/failed stories
         info = ""
@@ -313,7 +378,7 @@ def _format_status_table(state: "ParallelState") -> str:
             else:
                 info = story.error
 
-        rows.append([story_id, status_val, phase, duration, blocked_by, info])
+        rows.append([story_id, status_val, phase, duration, depends_on, info])
 
     # Calculate column widths
     col_widths = [len(h) for h in headers]
@@ -345,7 +410,10 @@ def _format_status_table(state: "ParallelState") -> str:
 # ============================================================================
 
 
-def _format_summary(state: "ParallelState") -> str:
+def _format_summary(
+    state: "ParallelState",
+    graph: "DependencyGraph | None" = None,
+) -> str:
     """Build summary counts and overall status display."""
     from bmad_assist_lite.parallel.state import StoryStatus
 
@@ -392,7 +460,87 @@ def _format_summary(state: "ParallelState") -> str:
         lines.append("")
         lines.append(f"\u26a0 {blocked_count} stor{suffix} blocked \u2014 see Info column")
 
+    # Dependency health: stories waiting on blocked dependencies
+    if graph is not None:
+        blocked_ids = {
+            sid
+            for sid, story in state.stories.items()
+            if story.status == StoryStatus.BLOCKED
+        }
+        if blocked_ids:
+            waiting_count = 0
+            for sid, story in state.stories.items():
+                # Exclude stories that are themselves blocked
+                if story.status == StoryStatus.BLOCKED:
+                    continue
+                try:
+                    deps = graph.dependencies_of(sid)
+                except KeyError:
+                    continue
+                if any(dep_id in blocked_ids for dep_id in deps):
+                    waiting_count += 1
+            if waiting_count > 0:
+                suffix = "y" if waiting_count == 1 else "ies"
+                lines.append("")
+                lines.append(
+                    f"\u26a0 {waiting_count} stor{suffix} waiting on"
+                    " blocked dependencies"
+                )
+
     return "\n".join(lines)
+
+
+# ============================================================================
+# Dependency graph loader for status command (Story 6.2 — Task 1)
+# ============================================================================
+
+
+def _load_dependency_graph(
+    project: Path,
+    state: "ParallelState",
+    epic_file_override: Path | None = None,
+) -> "DependencyGraph | None":
+    """Attempt to load a DependencyGraph for the running epic.
+
+    Uses the epic number from *state* to discover and parse the epic
+    file.  Returns ``None`` (graceful degradation) when the epic file
+    cannot be found or parsed — the status command must never crash
+    due to missing epic data.
+    """
+    from bmad_assist_lite.core.exceptions import ParserError
+    from bmad_assist_lite.parallel.exceptions import ParallelError
+
+    try:
+        from bmad_assist_lite.bmad.parser import parse_epic_file
+        from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
+
+        resolved_file = epic_file_override
+        if resolved_file is None:
+            from bmad_assist_lite.cli import _find_epic_file
+            from bmad_assist_lite.core.paths import init_paths
+
+            paths = init_paths(project)
+            planning_dir = paths.planning_artifacts
+            resolved_file = _find_epic_file(planning_dir, state.epic)
+
+        if resolved_file is None:
+            logger.warning(
+                "Could not find epic file for epic %d; "
+                "dependency display disabled",
+                state.epic,
+            )
+            return None
+
+        epic_doc = parse_epic_file(resolved_file, epic_number=state.epic)
+        return DependencyGraph(epic_doc.stories)
+    except (ParallelError, ParserError, OSError, ValueError, yaml.YAMLError):
+        logger.warning(
+            "Failed to build dependency graph for epic %d; "
+            "dependency display disabled",
+            state.epic,
+            exc_info=True,
+        )
+        return None
 
 
 # ============================================================================
@@ -409,6 +557,11 @@ def parallel_status(
         exists=True,
         dir_okay=True,
         file_okay=False,
+    ),
+    epic_file: Path | None = typer.Option(
+        None,
+        "--epic-file",
+        help="Path to epic file for dependency display.",
     ),
 ) -> None:
     """Show the current state of a parallel run.
@@ -433,13 +586,18 @@ def parallel_status(
         typer.echo("No parallel run state found")
         return
 
+    # ------------------------------------------------------------------
+    # Build dependency graph for dependency status display (Story 6.2)
+    # ------------------------------------------------------------------
+    graph = _load_dependency_graph(project, state, epic_file)
+
     # Display summary header
-    summary = _format_summary(state)
+    summary = _format_summary(state, graph=graph)
     typer.echo(summary)
     typer.echo("")
 
     # Display table
-    table = _format_status_table(state)
+    table = _format_status_table(state, graph=graph)
     typer.echo(table)
 
 

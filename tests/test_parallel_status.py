@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from bmad_assist_lite.cli import app
 from bmad_assist_lite.parallel.cli import (
+    _format_dependency_status,
     _format_duration,
     _format_status_table,
     _format_summary,
@@ -174,6 +175,15 @@ class TestPeekWorktreePhase:
         state_file = state_dir / "state.yaml"
         state_file.write_text("", encoding="utf-8")
         assert _peek_worktree_phase(tmp_path) is None
+
+    def test_permission_error(self, tmp_path: Path) -> None:
+        """Returns None on permission error (OSError subclass)."""
+        state_dir = tmp_path / ".bmad-assist"
+        state_dir.mkdir(parents=True)
+        state_file = state_dir / "state.yaml"
+        state_file.write_text("current_phase: implement\n", encoding="utf-8")
+        with patch.object(Path, "read_text", side_effect=PermissionError("access denied")):
+            assert _peek_worktree_phase(tmp_path) is None
 
 
 # ============================================================================
@@ -645,3 +655,328 @@ class TestParallelStatus:
 
         assert result.exit_code == 0
         assert "\u26a0 1 story blocked" in result.output
+
+
+# ============================================================================
+# TestFormatDependencyStatus — Story 6.2 dependency status formatting
+# ============================================================================
+
+
+def _make_mock_graph(deps: dict[str, list[str]]) -> MagicMock:
+    """Create a mock DependencyGraph with given dependencies_of mapping."""
+    graph = MagicMock()
+
+    def _dependencies_of(story_id: str) -> list[str]:
+        if story_id not in deps:
+            raise KeyError(f"Story {story_id!r} not found in graph")
+        return deps[story_id]
+
+    graph.dependencies_of = MagicMock(side_effect=_dependencies_of)
+    return graph
+
+
+class TestFormatDependencyStatus:
+    """Test dependency status formatting with visual indicators."""
+
+    def test_done_dependency_shows_checkmark(self) -> None:
+        """DONE dependency shows checkmark symbol."""
+        graph = _make_mock_graph({"5.2": ["5.1"]})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.DONE),
+            "5.2": StoryState(),
+        }
+        result = _format_dependency_status("5.2", graph, stories)
+        assert "5.1 \u2713" in result
+
+    def test_in_flight_dependency_shows_hourglass(self) -> None:
+        """IN_FLIGHT dependency shows hourglass symbol."""
+        graph = _make_mock_graph({"5.2": ["5.1"]})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.IN_FLIGHT),
+            "5.2": StoryState(),
+        }
+        result = _format_dependency_status("5.2", graph, stories)
+        assert "5.1 \u23f3" in result
+
+    def test_blocked_dependency_shows_cross(self) -> None:
+        """BLOCKED dependency shows cross with text."""
+        graph = _make_mock_graph({"5.2": ["5.1"]})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.BLOCKED),
+            "5.2": StoryState(),
+        }
+        result = _format_dependency_status("5.2", graph, stories)
+        assert "5.1 \u2717 (blocked)" in result
+
+    def test_backlog_dependency_shows_ellipsis(self) -> None:
+        """BACKLOG dependency shows ellipsis symbol."""
+        graph = _make_mock_graph({"5.2": ["5.1"]})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.BACKLOG),
+            "5.2": StoryState(),
+        }
+        result = _format_dependency_status("5.2", graph, stories)
+        assert "5.1 \u2026" in result
+
+    def test_merging_dependency_shows_ellipsis(self) -> None:
+        """MERGING dependency shows ellipsis symbol."""
+        graph = _make_mock_graph({"5.2": ["5.1"]})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.MERGING),
+            "5.2": StoryState(),
+        }
+        result = _format_dependency_status("5.2", graph, stories)
+        assert "5.1 \u2026" in result
+
+    def test_multiple_dependencies_comma_separated(self) -> None:
+        """Multiple dependencies are comma-separated."""
+        graph = _make_mock_graph({"5.3": ["5.1", "5.2"]})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.DONE),
+            "5.2": StoryState(status=StoryStatus.IN_FLIGHT),
+            "5.3": StoryState(),
+        }
+        result = _format_dependency_status("5.3", graph, stories)
+        assert "5.1 \u2713" in result
+        assert "5.2 \u23f3" in result
+        assert ", " in result
+
+    def test_no_dependencies_returns_empty(self) -> None:
+        """Story with no dependencies returns empty string."""
+        graph = _make_mock_graph({"5.1": []})
+        stories = {"5.1": StoryState()}
+        result = _format_dependency_status("5.1", graph, stories)
+        assert result == ""
+
+    def test_none_graph_returns_empty(self) -> None:
+        """When graph is None, returns empty string."""
+        stories = {"5.1": StoryState()}
+        result = _format_dependency_status("5.1", None, stories)
+        assert result == ""
+
+    def test_unknown_dependency_shows_question_mark(self) -> None:
+        """Dependency not in stories dict shows question mark."""
+        graph = _make_mock_graph({"5.2": ["5.1"]})
+        # 5.1 not in stories dict (cross-epic or removed)
+        stories: dict[str, StoryState] = {"5.2": StoryState()}
+        result = _format_dependency_status("5.2", graph, stories)
+        assert "5.1 ?" in result
+
+    def test_story_not_in_graph_returns_empty(self) -> None:
+        """Story not found in graph returns empty string gracefully."""
+        graph = _make_mock_graph({})
+        stories = {"5.1": StoryState()}
+        result = _format_dependency_status("5.1", graph, stories)
+        assert result == ""
+
+
+# ============================================================================
+# TestFormatStatusTableWithDependencies — Story 6.2 table integration
+# ============================================================================
+
+
+class TestFormatStatusTableWithDependencies:
+    """Test table formatting with dependency column."""
+
+    def test_table_has_depends_on_column(self) -> None:
+        """Table header includes 'Depends On' column."""
+        state = _make_state({"5.1": StoryState()})
+        table = _format_status_table(state, graph=None)
+        lines = table.split("\n")
+        assert "Depends On" in lines[0]
+
+    def test_depends_on_column_populated_with_graph(self) -> None:
+        """Depends On column shows dependency status when graph provided."""
+        graph = _make_mock_graph({"5.2": ["5.1"], "5.1": []})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.DONE),
+            "5.2": StoryState(status=StoryStatus.IN_FLIGHT, started_at=_FIXED_NOW),
+        }
+        state = _make_state(stories)
+        with patch("bmad_assist_lite.parallel.cli._utc_now", return_value=_FIXED_NOW):
+            table = _format_status_table(state, graph=graph)
+        assert "5.1 \u2713" in table
+
+    def test_depends_on_column_empty_without_graph(self) -> None:
+        """Depends On column is empty when graph is None."""
+        stories = {
+            "5.1": StoryState(status=StoryStatus.DONE),
+            "5.2": StoryState(),
+        }
+        state = _make_state(stories)
+        table = _format_status_table(state, graph=None)
+        # No dependency symbols should appear
+        assert "\u2713" not in table
+        assert "\u23f3" not in table
+        assert "\u2717" not in table
+
+    def test_full_table_with_phase_and_dependencies(self, tmp_path: Path) -> None:
+        """Table shows both phase and dependency info simultaneously."""
+        # Set up worktree state for phase display
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        state_dir = worktree / ".bmad-assist"
+        state_dir.mkdir(parents=True)
+        state_file = state_dir / "state.yaml"
+        state_file.write_text("current_phase: implement\n", encoding="utf-8")
+
+        graph = _make_mock_graph({"5.2": ["5.1"], "5.1": []})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.DONE),
+            "5.2": StoryState(
+                status=StoryStatus.IN_FLIGHT,
+                worktree_path=worktree,
+                started_at=_FIXED_NOW,
+            ),
+        }
+        state = _make_state(stories)
+        with patch("bmad_assist_lite.parallel.cli._utc_now", return_value=_FIXED_NOW):
+            table = _format_status_table(state, graph=graph)
+        # Phase column populated
+        assert "implement" in table
+        # Dependency column populated
+        assert "5.1 \u2713" in table
+
+    def test_no_dependencies_shows_empty_depends_column(self) -> None:
+        """Root story with no dependencies shows empty Depends On column."""
+        graph = _make_mock_graph({"5.1": []})
+        stories = {"5.1": StoryState()}
+        state = _make_state(stories)
+        table = _format_status_table(state, graph=graph)
+        # 5.1 should not have any dependency symbols
+        lines = table.split("\n")
+        data_row = lines[2]  # first data row
+        assert "5.1" in data_row
+        # No dependency symbols in this row
+        assert "\u2713" not in data_row
+        assert "\u23f3" not in data_row
+
+
+# ============================================================================
+# TestFormatSummaryWithDependencies — Story 6.2 summary enhancements
+# ============================================================================
+
+
+class TestFormatSummaryWithDependencies:
+    """Test summary formatting with dependency health warnings."""
+
+    def test_summary_warns_on_blocked_dependencies(self) -> None:
+        """Summary shows warning when stories depend on blocked upstream."""
+        graph = _make_mock_graph({
+            "5.1": [],
+            "5.2": ["5.1"],
+            "5.3": ["5.1"],
+        })
+        stories = {
+            "5.1": StoryState(status=StoryStatus.BLOCKED, error="failed"),
+            "5.2": StoryState(status=StoryStatus.BACKLOG),
+            "5.3": StoryState(status=StoryStatus.BACKLOG),
+        }
+        state = _make_state(stories)
+        summary = _format_summary(state, graph=graph)
+        assert "\u26a0 2 stories waiting on blocked dependencies" in summary
+
+    def test_summary_no_warning_when_no_blocked_deps(self) -> None:
+        """Summary omits dependency warning when no stories depend on blocked."""
+        graph = _make_mock_graph({"5.1": [], "5.2": ["5.1"]})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.DONE),
+            "5.2": StoryState(status=StoryStatus.IN_FLIGHT),
+        }
+        state = _make_state(stories)
+        summary = _format_summary(state, graph=graph)
+        assert "waiting on blocked dependencies" not in summary
+
+    def test_summary_no_crash_without_graph(self) -> None:
+        """Summary works without graph (None)."""
+        stories = {
+            "5.1": StoryState(status=StoryStatus.BLOCKED, error="failed"),
+            "5.2": StoryState(),
+        }
+        state = _make_state(stories)
+        summary = _format_summary(state, graph=None)
+        # Should not crash, and should not show dependency health warning
+        assert "waiting on blocked dependencies" not in summary
+
+    def test_summary_singular_blocked_dependency_warning(self) -> None:
+        """Summary uses singular form for one story waiting on blocked deps."""
+        graph = _make_mock_graph({"5.1": [], "5.2": ["5.1"]})
+        stories = {
+            "5.1": StoryState(status=StoryStatus.BLOCKED, error="failed"),
+            "5.2": StoryState(status=StoryStatus.BACKLOG),
+        }
+        state = _make_state(stories)
+        summary = _format_summary(state, graph=graph)
+        assert "\u26a0 1 story waiting on blocked dependencies" in summary
+
+
+# ============================================================================
+# TestParallelStatusWithDependencies — Story 6.2 CLI integration
+# ============================================================================
+
+
+class TestParallelStatusWithDependencies:
+    """Test parallel status CLI command with dependency display integration."""
+
+    def test_status_command_when_epic_file_missing(self, tmp_path: Path) -> None:
+        """Status command works when epic file can't be found."""
+        stories = {
+            "5.1": StoryState(status=StoryStatus.DONE),
+            "5.2": StoryState(status=StoryStatus.IN_FLIGHT, started_at=_FIXED_NOW),
+        }
+        state = _make_state(stories)
+
+        with (
+            patch(_LOAD_STATE_PATCH, return_value=state),
+            patch("bmad_assist_lite.parallel.cli._utc_now", return_value=_FIXED_NOW),
+        ):
+            result = _invoke_status(tmp_path)
+
+        assert result.exit_code == 0
+        assert "5.1" in result.output
+        assert "5.2" in result.output
+
+    def test_status_command_read_only_with_dependencies(
+        self, tmp_path: Path,
+    ) -> None:
+        """Status command with dependencies does not call save_state."""
+        stories = {
+            "5.1": StoryState(status=StoryStatus.DONE),
+            "5.2": StoryState(status=StoryStatus.IN_FLIGHT, started_at=_FIXED_NOW),
+        }
+        state = _make_state(stories)
+
+        with (
+            patch(_LOAD_STATE_PATCH, return_value=state),
+            patch("bmad_assist_lite.parallel.cli._utc_now", return_value=_FIXED_NOW),
+            patch("bmad_assist_lite.parallel.state.save_state") as mock_save,
+        ):
+            result = _invoke_status(tmp_path)
+
+        assert result.exit_code == 0
+        mock_save.assert_not_called()
+
+    def test_nfr10_status_completes_under_2_seconds(self, tmp_path: Path) -> None:
+        """Status command completes in <2 seconds (NFR10 compliance)."""
+        import time
+
+        stories = {
+            f"5.{i}": StoryState(
+                status=StoryStatus.IN_FLIGHT,
+                started_at=_FIXED_NOW - timedelta(minutes=i),
+                worktree_path=Path(f"/nonexistent/wt-{i}"),
+            )
+            for i in range(1, 11)
+        }
+        state = _make_state(stories)
+
+        start = time.monotonic()
+        with (
+            patch(_LOAD_STATE_PATCH, return_value=state),
+            patch("bmad_assist_lite.parallel.cli._utc_now", return_value=_FIXED_NOW),
+        ):
+            result = _invoke_status(tmp_path)
+        elapsed = time.monotonic() - start
+
+        assert result.exit_code == 0
+        assert elapsed < 2.0, f"Status command took {elapsed:.2f}s, exceeds 2s limit"
