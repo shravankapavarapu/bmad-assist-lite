@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from bmad_assist_lite.compiler.context_filter import (
     _build_filename_to_key_map,
     _extract_section_from_content,
@@ -9,6 +11,7 @@ from bmad_assist_lite.compiler.context_filter import (
     parse_context_requirements,
 )
 from bmad_assist_lite.compiler.types import CompilerContext
+from bmad_assist_lite.core.exceptions import CompilerError
 
 # ---------------------------------------------------------------------------
 # parse_context_requirements
@@ -410,7 +413,8 @@ Docker stuff.
         apply_context_filter(ctx)
         assert ctx.file_contents["other"] == "data"
 
-    def test_unmatched_document_warns(self, tmp_path: Path, caplog):
+    def test_skip_directive_missing_document_no_error(self, tmp_path: Path):
+        """Skip directive on a missing document is a silent pass-through (no error)."""
         epic = """\
 # Epic
 
@@ -424,32 +428,8 @@ Docker stuff.
         ctx.file_contents = {"epic_file": epic}
         ctx.discovered_files = {}
 
-        with caplog.at_level("DEBUG"):
-            apply_context_filter(ctx)
-
-        assert "nonexistent.md" in caplog.text
-
-    def test_unmatched_section_warns(self, tmp_path: Path, caplog):
-        epic = """\
-# Epic
-
-### Context Requirements
-
-| Document | Sections | Rationale |
-|----------|----------|-----------|
-| arch.md | Missing Section Name | Oops |
-"""
-        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
-        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
-        ctx.file_contents = {
-            "epic_file": epic,
-            "arch_file": "# Arch\n\n## Real Section\n\nContent.\n",
-        }
-
-        with caplog.at_level("WARNING"):
-            apply_context_filter(ctx)
-
-        assert "Missing Section Name" in caplog.text
+        # Should NOT raise — skip on missing doc is already satisfied
+        apply_context_filter(ctx)
 
     def test_document_not_in_table_unchanged(self, tmp_path: Path):
         """Files not mentioned in the table keep their full content."""
@@ -637,3 +617,276 @@ NFR stuff not needed.
 
         # epic itself — unchanged
         assert ctx.file_contents["epic_file"] == epic
+
+
+# ---------------------------------------------------------------------------
+# Missing Context Requirements error behavior (Story 8.1)
+# ---------------------------------------------------------------------------
+
+
+class TestMissingContextRequirementsError:
+    """Tests for CompilerError raised on missing context references."""
+
+    def test_single_missing_document_raises(self, tmp_path: Path):
+        """Single document not in discovered files triggers CompilerError."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| missing-doc.md | (full) | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.file_contents = {"epic_file": epic}
+        ctx.discovered_files = {}
+
+        with pytest.raises(CompilerError) as exc_info:
+            apply_context_filter(ctx)
+
+        msg = str(exc_info.value)
+        assert "missing-doc.md" in msg
+        assert "missing documents" in msg
+        assert "Discovered files missing" in msg
+
+    def test_single_missing_section_raises(self, tmp_path: Path):
+        """Section not found in existing document raises CompilerError."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Crash Recovery | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        ctx.file_contents = {
+            "epic_file": epic,
+            "arch_file": "# Architecture\n\n## Overview\n\nSome content.\n",
+        }
+
+        with pytest.raises(CompilerError) as exc_info:
+            apply_context_filter(ctx)
+
+        msg = str(exc_info.value)
+        assert "Crash Recovery" in msg
+        assert "arch.md" in msg
+
+    def test_multiple_missing_sections_across_documents(self, tmp_path: Path):
+        """Multiple missing sections across multiple docs in one error."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Crash Recovery; Blocked Story Handling | Core |
+| prd.md | Missing Feature | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {
+            "arch_file": [tmp_path / "arch.md"],
+            "prd_file": [tmp_path / "prd.md"],
+        }
+        ctx.file_contents = {
+            "epic_file": epic,
+            "arch_file": "# Arch\n\n## Overview\n\nContent.\n",
+            "prd_file": "# PRD\n\n## Summary\n\nContent.\n",
+        }
+
+        with pytest.raises(CompilerError) as exc_info:
+            apply_context_filter(ctx)
+
+        msg = str(exc_info.value)
+        assert "Crash Recovery" in msg
+        assert "Blocked Story Handling" in msg
+        assert "Missing Feature" in msg
+        assert "arch.md" in msg
+        assert "prd.md" in msg
+
+    def test_missing_document_and_missing_section_combined(self, tmp_path: Path):
+        """Missing doc + missing section in different doc combined in one error."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| ghost.md | (full) | Needed |
+| arch.md | Nonexistent Section | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        ctx.file_contents = {
+            "epic_file": epic,
+            "arch_file": "# Arch\n\n## Real Section\n\nContent.\n",
+        }
+
+        with pytest.raises(CompilerError) as exc_info:
+            apply_context_filter(ctx)
+
+        msg = str(exc_info.value)
+        assert "ghost.md" in msg
+        assert "Nonexistent Section" in msg
+        assert "Discovered files missing" in msg
+
+    def test_all_references_resolve_no_error(self, tmp_path: Path):
+        """All references resolve — no error, existing filter behavior."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Tech Stack | Core |
+| prd.md | (full) | All |
+| ux.md | (skip) | Not needed |
+"""
+        arch = "# Arch\n\n## Tech Stack\n\nPython.\n\n## Other\n\nStuff.\n"
+        prd = "# PRD\n\nAll content.\n"
+        ux = "# UX\n\nFull UX content.\n"
+
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {
+            "arch_file": [tmp_path / "arch.md"],
+            "prd_file": [tmp_path / "prd.md"],
+            "ux_file": [tmp_path / "ux.md"],
+        }
+        ctx.file_contents = {
+            "epic_file": epic,
+            "arch_file": arch,
+            "prd_file": prd,
+            "ux_file": ux,
+        }
+
+        # Should NOT raise
+        apply_context_filter(ctx)
+
+        # Verify filters applied correctly
+        assert "Tech Stack" in ctx.file_contents["arch_file"]
+        assert "Other" not in ctx.file_contents["arch_file"]
+        assert ctx.file_contents["prd_file"] == prd
+        assert ctx.file_contents["ux_file"] == ""
+
+    def test_document_key_no_content_raises(self, tmp_path: Path):
+        """Document key in discovered_files but not in file_contents raises."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | (full) | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        # Key exists in discovered_files but NOT in file_contents
+        ctx.file_contents = {"epic_file": epic}
+
+        with pytest.raises(CompilerError, match="arch.md"):
+            apply_context_filter(ctx)
+
+    def test_document_key_no_content_sections_directive_raises(self, tmp_path: Path):
+        """Sections directive on discovered but unloaded document raises."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Tech Stack | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        # Key exists in discovered_files but NOT in file_contents
+        ctx.file_contents = {"epic_file": epic}
+
+        with pytest.raises(CompilerError, match="arch.md"):
+            apply_context_filter(ctx)
+
+    def test_error_message_structure(self, tmp_path: Path):
+        """Verify error message contains grouped output and fix instructions."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Missing A; Missing B | Core |
+| ghost.md | (full) | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        ctx.file_contents = {
+            "epic_file": epic,
+            "arch_file": "# Arch\n\n## Real Section\n\nContent.\n",
+        }
+
+        with pytest.raises(CompilerError) as exc_info:
+            apply_context_filter(ctx)
+
+        msg = str(exc_info.value)
+        # Dynamic header for combined missing sections + docs
+        assert "unresolved references" in msg
+        # Sections grouped under document
+        assert "arch.md:" in msg
+        assert "Missing A" in msg
+        assert "Missing B" in msg
+        # Missing docs grouped separately
+        assert "Discovered files missing:" in msg
+        assert "ghost.md" in msg
+        # Fix instructions present
+        assert "Fix:" in msg
+        assert "(optional)" in msg
+
+    def test_mixed_scenario_resolved_refs_applied_before_error(self, tmp_path: Path):
+        """Resolved refs are filtered before error is raised for missing ones."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| arch.md | Tech Stack | Core |
+| ghost.md | (full) | Needed |
+"""
+        arch = "# Arch\n\n## Tech Stack\n\nPython.\n\n## Other\n\nStuff.\n"
+
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
+        ctx.file_contents = {"epic_file": epic, "arch_file": arch}
+
+        with pytest.raises(CompilerError, match="ghost.md"):
+            apply_context_filter(ctx)
+
+        # Even though error was raised, resolved ref should have been applied
+        assert "Tech Stack" in ctx.file_contents["arch_file"]
+        assert "Other" not in ctx.file_contents["arch_file"]
+
+    def test_sections_directive_missing_document_raises(self, tmp_path: Path):
+        """Sections directive on missing document raises CompilerError."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections | Rationale |
+|----------|----------|-----------|
+| ghost.md | Section A; Section B | Needed |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.file_contents = {"epic_file": epic}
+        ctx.discovered_files = {}
+
+        with pytest.raises(CompilerError, match="ghost.md"):
+            apply_context_filter(ctx)

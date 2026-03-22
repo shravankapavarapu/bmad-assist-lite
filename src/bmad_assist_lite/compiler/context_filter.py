@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from bmad_assist_lite.compiler.types import CompilerContext
+from bmad_assist_lite.core.exceptions import CompilerError
 
 logger = logging.getLogger(__name__)
 
@@ -383,6 +384,12 @@ def apply_context_filter(context: CompilerContext) -> None:
     """Filter ``context.file_contents`` based on the epic's Context Requirements table.
 
     No-op if the epic file is not loaded or no table is found.
+
+    Raises:
+        CompilerError: If any referenced documents are missing from discovered
+            files or referenced sections are not found in loaded documents.
+            All missing references are collected and reported in a single error.
+
     """
     # Find the epic content in file_contents
     epic_content: str | None = None
@@ -400,22 +407,20 @@ def apply_context_filter(context: CompilerContext) -> None:
 
     filename_to_key = _build_filename_to_key_map(context.discovered_files)
 
+    missing_docs: list[str] = []
+    missing_sections: dict[str, list[str]] = {}
+
     for req in reqs:
         doc_lower = req.document.lower()
         content_key = filename_to_key.get(doc_lower)
         if content_key is None:
-            logger.warning(
-                "Context Requirements: document '%s' not found in discovered files",
-                req.document,
-            )
+            if req.directive != "skip":
+                missing_docs.append(req.document)
             continue
 
         if content_key not in context.file_contents:
-            logger.warning(
-                "Context Requirements: key '%s' for document '%s' has no loaded content",
-                content_key,
-                req.document,
-            )
+            if req.directive != "skip":
+                missing_docs.append(req.document)
             continue
 
         if req.directive == "skip":
@@ -428,17 +433,42 @@ def apply_context_filter(context: CompilerContext) -> None:
             for section_name in req.sections:
                 section = _extract_section_from_content(original, section_name)
                 if section is None:
-                    logger.warning(
-                        "Context Requirements: section '%s' not found in '%s'",
-                        section_name,
-                        req.document,
+                    missing_sections.setdefault(req.document, []).append(
+                        section_name
                     )
                     continue
                 extracted_parts.append(section)
             if extracted_parts:
                 context.file_contents[content_key] = "\n\n".join(extracted_parts)
-            else:
-                logger.warning(
-                    "Context Requirements: no sections matched for '%s', keeping full content",
-                    req.document,
-                )
+
+    if missing_docs or missing_sections:
+        if missing_sections and missing_docs:
+            header = "Context Requirements have unresolved references:"
+        elif missing_sections:
+            header = "Context Requirements reference missing sections:"
+        else:
+            header = "Context Requirements reference missing documents:"
+        parts: list[str] = [header]
+        for doc, sections in missing_sections.items():
+            parts.append(f"\n  {doc}:")
+            for s in sections:
+                parts.append(f"    - {s}")
+        if missing_docs:
+            parts.append("\n  Discovered files missing:")
+            for doc in missing_docs:
+                parts.append(f"    - {doc}")
+        fix_lines = []
+        if missing_sections:
+            fix_lines.append(
+                "Add missing sections to the referenced documents"
+            )
+        if missing_docs:
+            fix_lines.append(
+                "Ensure missing documents exist in the project"
+            )
+        fix_lines.append(
+            "or mark non-critical references as (optional)"
+            " in the epic file"
+        )
+        parts.append(f"\nFix: {', '.join(fix_lines)}.")
+        raise CompilerError("\n".join(parts))
