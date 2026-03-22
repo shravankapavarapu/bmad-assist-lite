@@ -4,6 +4,12 @@ from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.git_ops import get_current_branch, is_protected_branch
+from bmad_assist_lite.parallel.logging import (
+    log_run_complete,
+    log_run_header,
+    setup_parallel_log,
+    teardown_parallel_log,
+)
 from bmad_assist_lite.parallel.merger import (
     ConflictResolutionResult,
     GateResult,
@@ -59,6 +65,8 @@ __all__ = [
     "is_protected_branch",
     "list_worktrees",
     "load_state",
+    "log_run_complete",
+    "log_run_header",
     "merge_story",
     "prune_worktrees",
     "recover_state",
@@ -66,5 +74,7 @@ __all__ = [
     "run_post_merge_fix",
     "run_post_merge_qg",
     "save_state",
+    "setup_parallel_log",
+    "teardown_parallel_log",
     "update_sprint_status_done",
 ]

@@ -22,6 +22,19 @@ from pathlib import Path
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
+from bmad_assist_lite.parallel.logging import (
+    log_dependency_unlocked,
+    log_merge_queued,
+    log_merge_result,
+    log_qg_result,
+    log_run_complete,
+    log_run_header,
+    log_story_blocked,
+    log_story_completed,
+    log_story_started,
+    setup_parallel_log,
+    teardown_parallel_log,
+)
 from bmad_assist_lite.parallel.merger import MergeQueue
 from bmad_assist_lite.parallel.output import OutputMultiplexer
 from bmad_assist_lite.parallel.recovery import recover_state
@@ -469,6 +482,9 @@ class Orchestrator:
                         start_new_session=True,
                     )
 
+                # Log story started after successful spawn
+                log_story_started(story_id, worktree_path)
+
                 # Start output reader for live prefixed output
                 assert proc.stdout is not None  # guaranteed by PIPE
                 self._output_mux.start_reader(
@@ -553,6 +569,9 @@ class Orchestrator:
         if task is not None:
             self._task_to_story.pop(task, None)
 
+        # Log story completion to parallel-run.log
+        log_story_completed(story_id, exit_code)
+
         if exit_code == 0:
             self._merging_ids.add(story_id)
             self._state = self._state.with_story_status(
@@ -563,7 +582,8 @@ class Orchestrator:
             await self._output_mux.write_orchestrator(
                 f"Story {story_id} completed successfully, status -> merging"
             )
-            # Enqueue for merge processing
+            # Log merge queued and enqueue for merge processing
+            log_merge_queued(story_id)
             await self._merge_queue.enqueue(story_id)
         else:
             self._blocked_ids.add(story_id)
@@ -574,6 +594,7 @@ class Orchestrator:
                 completed_at=_utc_now(),
             )
             save_state(self._state, self._state_path)
+            log_story_blocked(story_id, f"Exit code {exit_code}")
             await self._output_mux.write_orchestrator(
                 f"Story {story_id} failed with exit code {exit_code}, status -> blocked"
             )
@@ -595,6 +616,36 @@ class Orchestrator:
                 finally:
                     # Remove worktree path mapping for blocked stories
                     del self._story_worktrees[story_id]
+
+    # ========================================================================
+    # Dependency unlock logging
+    # ========================================================================
+
+    def _log_unlocked_dependents(self, completed_story_id: str) -> None:
+        """Log stories whose dependencies are now satisfied.
+
+        Called after a story moves to DONE. Checks all dependents of the
+        completed story and logs those that are now fully unblocked.
+
+        Args:
+            completed_story_id: The story that just completed.
+
+        """
+        completed_set = self._done_ids | self._merging_ids
+        try:
+            dependents = self._dependency_graph.dependents_of(completed_story_id)
+        except (KeyError, AttributeError):
+            return
+        for dep_id in dependents:
+            if dep_id in self._done_ids or dep_id in self._blocked_ids:
+                continue
+            try:
+                if self._dependency_graph.are_dependencies_satisfied(
+                    dep_id, completed_set,
+                ):
+                    log_dependency_unlocked(dep_id, completed_story_id)
+            except (KeyError, AttributeError):
+                continue
 
     # ========================================================================
     # Merge queue processing
@@ -623,8 +674,14 @@ class Orchestrator:
 
             story_id = result.story_id
 
+            # Log merge result to parallel-run.log
+            log_merge_result(story_id, result.success, result.error)
+
             if result.success and result.qg_result is not None and result.qg_result.all_passed:
                 # Merge + QG success -> done
+                log_qg_result(
+                    story_id, True, list(result.qg_result.gate_results),
+                )
                 self._done_ids.add(story_id)
                 self._merging_ids.discard(story_id)
                 self._state = self._state.with_story_status(
@@ -635,12 +692,18 @@ class Orchestrator:
                 save_state(self._state, self._state_path)
                 # Clean up worktree mapping (worktree already removed by merge_story)
                 self._story_worktrees.pop(story_id, None)
+                self._log_unlocked_dependents(story_id)
                 await self._output_mux.write_orchestrator(
                     f"Story {story_id} merged and QG passed, status -> done"
                 )
 
             elif result.success and result.qg_result is not None and not result.qg_result.all_passed:
                 # Merge success but QG failure after fix retries -> blocked
+                log_qg_result(
+                    story_id,
+                    False,
+                    list(result.qg_result.gate_results),
+                )
                 self._blocked_ids.add(story_id)
                 self._merging_ids.discard(story_id)
                 # Build descriptive error from failed gate results
@@ -662,6 +725,7 @@ class Orchestrator:
                 save_state(self._state, self._state_path)
                 # Worktree was already cleaned up by merge_story's _cleanup_after_merge
                 self._story_worktrees.pop(story_id, None)
+                log_story_blocked(story_id, qg_error)
                 await self._output_mux.write_orchestrator(
                     f"Story {story_id} merged but post-merge QG failed, status -> blocked"
                 )
@@ -677,6 +741,7 @@ class Orchestrator:
                 )
                 save_state(self._state, self._state_path)
                 self._story_worktrees.pop(story_id, None)
+                self._log_unlocked_dependents(story_id)
                 await self._output_mux.write_orchestrator(
                     f"Story {story_id} merged (no QG configured), status -> done"
                 )
@@ -693,6 +758,7 @@ class Orchestrator:
                     completed_at=_utc_now(),
                 )
                 save_state(self._state, self._state_path)
+                log_story_blocked(story_id, error_msg)
 
                 # Clean up worktree for merge conflict
                 if story_id in self._story_worktrees:
@@ -829,8 +895,15 @@ class Orchestrator:
         removed on exit.
 
         """
-        self._install_signal_handlers()
+        setup_parallel_log(self._project_root)
         try:
+            log_run_header(
+                base_branch=self._state.base_branch,
+                epic=self._epic_num,
+                max_concurrency=self._config.max_concurrency,
+                story_count=self._dependency_graph.story_count,
+            )
+            self._install_signal_handlers()
             await self._output_mux.write_orchestrator(
                 f"Starting orchestration for epic {self._epic_num} "
                 f"({self._dependency_graph.story_count} stories)"
@@ -952,6 +1025,24 @@ class Orchestrator:
             # Print exit summary in all cases (normal, drain, force-exit)
             with contextlib.suppress(Exception):
                 await self._print_exit_summary()
+            # Log run-end footer and tear down the parallel log FileHandler
+            with contextlib.suppress(Exception):
+                all_ids = set(self._dependency_graph.all_story_ids)
+                # Distinguish blocked-by-dependency from directly-failed stories.
+                # A story is "failed" if it's in _blocked_ids (execution/merge/QG
+                # failure). Stories blocked-by-dependency are in remaining (never
+                # scheduled because a dependency failed).
+                completed_set = self._done_ids | self._merging_ids
+                remaining = (
+                    all_ids - completed_set - self._blocked_ids - self._in_flight_ids
+                )
+                log_run_complete(
+                    total_stories=len(all_ids),
+                    completed=len(self._done_ids),
+                    blocked=len(remaining),
+                    failed=len(self._blocked_ids),
+                )
+            teardown_parallel_log()
 
     # ========================================================================
     # Force-exit handling (Task 4)

@@ -4,6 +4,8 @@ Autouse fixtures ensure clean singleton state between tests.
 Markers control which fixtures apply and which tests run.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from bmad_assist_lite.core.config import _reset_config, load_config
@@ -62,3 +64,25 @@ def reset_loop_dispatch():
     reset_handlers()
     yield
     reset_handlers()
+
+
+@pytest.fixture(autouse=True)
+def _mock_parallel_log_setup():
+    """Prevent orchestrator tests from creating real log files.
+
+    Patches ``setup_parallel_log`` and ``teardown_parallel_log`` as imported
+    in the orchestrator module so ``Orchestrator.run()`` never opens a
+    FileHandler on a fake project-root path.  Tests in
+    ``test_parallel_logging.py`` that import the functions directly from
+    ``bmad_assist_lite.parallel.logging`` are unaffected.
+    """
+    with patch(
+        "bmad_assist_lite.parallel.orchestrator.setup_parallel_log",
+    ), patch(
+        "bmad_assist_lite.parallel.orchestrator.teardown_parallel_log",
+    ), patch(
+        "bmad_assist_lite.parallel.orchestrator.log_run_header",
+    ), patch(
+        "bmad_assist_lite.parallel.orchestrator.log_run_complete",
+    ):
+        yield
