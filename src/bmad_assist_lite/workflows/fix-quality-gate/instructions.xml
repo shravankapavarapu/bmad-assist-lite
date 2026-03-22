@@ -26,6 +26,14 @@
       - Identify the root cause (not just the symptom)
       - Check whether failures are related (cascading errors)
 
+      ROOT CAUSE GROUPING — before fixing anything, count unique root causes:
+      - If many test failures share the same stack trace or error message, they
+        have ONE root cause. Fix it once — do not analyze each failure separately.
+      - The failure report groups identical failures automatically. Look for
+        "Root Cause N (X occurrences)" sections and treat each group as a single fix.
+      - If all N failures originate from the same function call site (same file:line),
+        the fix is at that call site or in the test setup that fails to mock it.
+
       PRIORITY ORDER — fix in this order since earlier fixes often resolve later ones:
       1. Build errors (missing imports, syntax errors)
       2. Type errors (wrong types, missing annotations)
@@ -40,6 +48,20 @@
       - **Test failures**: Fix the failing tests or the code they test — check if the test
         expectations match the actual implementation
       - **Build errors**: Resolve missing dependencies, syntax issues
+
+      TEST FAILURE DECISION TREE — when tests fail, determine the right fix strategy:
+      1. Failures reference a fake/non-existent path (e.g. FileNotFoundError on
+         "C:\fake\project\...") → The test uses a mock path. Do NOT create the
+         directory. Instead, mock or patch the function that touches the filesystem.
+      2. Only PRE-EXISTING tests fail (not the new test file for this story) →
+         The story added a new dependency that existing tests don't account for.
+         Fix belongs in test fixtures (add a mock/patch to the existing autouse
+         fixture or add @patch decorators), NOT in the source code.
+      3. The NEW test file fails → The implementation or the test itself has a bug.
+         Read both the source and test to determine which is wrong.
+      4. Many tests fail at the same call site → Add a single autouse fixture or
+         patch that covers all affected tests. Do not add individual patches to
+         each test function.
 
       CRITICAL CONSTRAINTS:
       - Do NOT refactor unrelated code

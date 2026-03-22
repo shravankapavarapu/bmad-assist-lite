@@ -37,6 +37,10 @@ def _mock_state_persistence():
         "bmad_assist_lite.parallel.orchestrator.load_state", return_value=None,
     ), patch(
         "bmad_assist_lite.parallel.orchestrator.save_state",
+    ), patch(
+        "bmad_assist_lite.parallel.orchestrator.setup_parallel_log",
+    ), patch(
+        "bmad_assist_lite.parallel.orchestrator.teardown_parallel_log",
     ):
         yield
 

@@ -1028,12 +1028,16 @@ class TestSpawnStoryResume:
 class TestRunResumeDetection:
     """Test run() detects in-flight stories without running tasks (Task 6.3)."""
 
+    @patch("bmad_assist_lite.parallel.orchestrator.teardown_parallel_log")
+    @patch("bmad_assist_lite.parallel.orchestrator.setup_parallel_log")
     @patch("bmad_assist_lite.parallel.orchestrator.load_state", return_value=None)
     @patch("bmad_assist_lite.parallel.orchestrator.save_state")
     async def test_run_respawns_stale_in_flight_stories(
         self,
         mock_save: MagicMock,
         mock_load: MagicMock,
+        mock_setup_log: MagicMock,
+        mock_teardown_log: MagicMock,
     ) -> None:
         """run() detects in_flight stories with no running task and re-spawns."""
         from unittest.mock import AsyncMock
