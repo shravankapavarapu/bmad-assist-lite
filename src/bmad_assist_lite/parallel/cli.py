@@ -441,3 +441,77 @@ def parallel_status(
     # Display table
     table = _format_status_table(state)
     typer.echo(table)
+
+
+# ============================================================================
+# Parallel unblock command
+# ============================================================================
+
+
+def parallel_unblock(
+    story_id: str = typer.Argument(help="Story ID to unblock (e.g. 3.2)."),
+    project: Path = typer.Option(
+        Path("."),
+        "--project",
+        "-p",
+        help="Path to project directory.",
+        exists=True,
+        dir_okay=True,
+        file_okay=False,
+    ),
+) -> None:
+    """Reset a blocked story to backlog so the orchestrator picks it up on the next run."""
+    from bmad_assist_lite.parallel.exceptions import ParallelError
+    from bmad_assist_lite.parallel.state import (
+        StoryStatus,
+        get_parallel_state_path,
+        load_state,
+        save_state,
+    )
+
+    project = project.resolve()
+
+    # Check for orchestrator lock file
+    lock_path = project / ".bmad-assist-lite" / "running.lock"
+    if lock_path.exists():
+        typer.echo(
+            "Cannot unblock while orchestrator is running (lock file exists). "
+            "Stop the orchestrator first. "
+            "If the orchestrator crashed, run `bmad-assist-lite reset-lock` to remove the stale lock.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    state_path = get_parallel_state_path(project)
+
+    try:
+        state = load_state(state_path)
+    except ParallelError as exc:
+        typer.echo(f"Error reading state file: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+    if state is None:
+        typer.echo("No parallel run state found", err=True)
+        raise typer.Exit(1)
+
+    if story_id not in state.stories:
+        typer.echo(f"Story {story_id} not found in parallel state", err=True)
+        raise typer.Exit(1)
+
+    current_status = state.stories[story_id].status
+    if current_status != StoryStatus.BLOCKED:
+        typer.echo(
+            f"Story {story_id} is not blocked (status: {current_status.value})",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    new_state = state.with_story_status(story_id, StoryStatus.BACKLOG)
+
+    try:
+        save_state(new_state, state_path)
+    except ParallelError as exc:
+        typer.echo(f"Failed to save state: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+    typer.echo(f"Story {story_id} unblocked -- will be picked up on next parallel run")
