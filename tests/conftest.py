@@ -84,5 +84,7 @@ def _mock_parallel_log_setup():
         "bmad_assist_lite.parallel.orchestrator.log_run_header",
     ), patch(
         "bmad_assist_lite.parallel.orchestrator.log_run_complete",
+    ), patch(
+        "bmad_assist_lite.parallel.orchestrator.write_report",
     ):
         yield

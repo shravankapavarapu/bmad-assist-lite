@@ -38,6 +38,12 @@ from bmad_assist_lite.parallel.logging import (
 from bmad_assist_lite.parallel.merger import MergeQueue
 from bmad_assist_lite.parallel.output import OutputMultiplexer
 from bmad_assist_lite.parallel.recovery import recover_state
+from bmad_assist_lite.parallel.report import (
+    MergeOutcome,
+    build_report,
+    render_report,
+    write_report,
+)
 from bmad_assist_lite.parallel.state import (
     ParallelState,
     StoryStatus,
@@ -212,6 +218,11 @@ class Orchestrator:
         self._in_flight_ids: set[str] = set()
         self._blocked_ids: set[str] = set()
         self._merging_ids: set[str] = set()
+
+        # Report data accumulation (Story 6.3)
+        self._merge_outcomes: list[MergeOutcome] = []
+        # Set in run() to capture actual orchestration start, not __init__
+        self._orchestrator_started_at: datetime | None = None
 
         # Shutdown flags (Task 1.1)
         self._draining: bool = False
@@ -668,14 +679,41 @@ class Orchestrator:
         via ``update_sprint_status_done()`` — NOT duplicated here.
         """
         while True:
+            merge_start = _utc_now()
             result = await self._merge_queue.process_merge_with_fix()
             if result is None:
                 break
+            merge_elapsed = (
+                _utc_now() - merge_start
+            ).total_seconds()
 
             story_id = result.story_id
 
             # Log merge result to parallel-run.log
             log_merge_result(story_id, result.success, result.error)
+
+            # Record MergeOutcome for summary report (Story 6.3)
+            had_conflicts = bool(result.conflict_files)
+            conflicts_resolved = had_conflicts and result.success
+            # QG is considered "passed" when it ran and all gates passed,
+            # OR when no QG was configured (qg_result is None) and the
+            # merge itself succeeded — skipping QG is not a failure.
+            qg_passed = result.success and (
+                result.qg_result is None or result.qg_result.all_passed
+            )
+            # qg_fixed is forward-compatible — set False until retry-fix
+            # flow tracks initial QG failure + subsequent fix success
+            self._merge_outcomes.append(
+                MergeOutcome(
+                    story_id=story_id,
+                    merged=result.success,
+                    had_conflicts=had_conflicts,
+                    conflicts_resolved=conflicts_resolved,
+                    qg_passed=qg_passed,
+                    qg_fixed=False,
+                    duration_seconds=merge_elapsed,
+                )
+            )
 
             if result.success and result.qg_result is not None and result.qg_result.all_passed:
                 # Merge + QG success -> done
@@ -895,6 +933,7 @@ class Orchestrator:
         removed on exit.
 
         """
+        self._orchestrator_started_at = _utc_now()
         setup_parallel_log(self._project_root)
         try:
             log_run_header(
@@ -1025,6 +1064,21 @@ class Orchestrator:
             # Print exit summary in all cases (normal, drain, force-exit)
             with contextlib.suppress(Exception):
                 await self._print_exit_summary()
+            # Generate comprehensive summary report (Story 6.3)
+            try:
+                started = self._orchestrator_started_at or _utc_now()
+                report_data = build_report(
+                    self._state,
+                    started,
+                    self._merge_outcomes,
+                )
+                report_text = render_report(report_data)
+                write_report(report_text)
+            except Exception:
+                logger.debug(
+                    "[ORCHESTRATOR] Report generation failed",
+                    exc_info=True,
+                )
             # Log run-end footer and tear down the parallel log FileHandler
             with contextlib.suppress(Exception):
                 all_ids = set(self._dependency_graph.all_story_ids)

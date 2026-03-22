@@ -25,6 +25,13 @@ from bmad_assist_lite.parallel.merger import (
 from bmad_assist_lite.parallel.orchestrator import Orchestrator
 from bmad_assist_lite.parallel.output import OutputMultiplexer
 from bmad_assist_lite.parallel.recovery import recover_state
+from bmad_assist_lite.parallel.report import (
+    MergeOutcome,
+    ReportData,
+    build_report,
+    render_report,
+    write_report,
+)
 from bmad_assist_lite.parallel.state import (
     ParallelState,
     StoryState,
@@ -46,6 +53,7 @@ __all__ = [
     "ConflictResolutionResult",
     "DependencyGraph",
     "GateResult",
+    "MergeOutcome",
     "MergeQueue",
     "MergeResult",
     "Orchestrator",
@@ -54,9 +62,11 @@ __all__ = [
     "ParallelError",
     "ParallelState",
     "PostMergeQGResult",
+    "ReportData",
     "StoryState",
     "StoryStatus",
     "WorktreeInfo",
+    "build_report",
     "cleanup_worktree",
     "create_initial_state",
     "create_worktree",
@@ -70,6 +80,7 @@ __all__ = [
     "merge_story",
     "prune_worktrees",
     "recover_state",
+    "render_report",
     "resolve_conflicts",
     "run_post_merge_fix",
     "run_post_merge_qg",
@@ -77,4 +88,5 @@ __all__ = [
     "setup_parallel_log",
     "teardown_parallel_log",
     "update_sprint_status_done",
+    "write_report",
 ]
