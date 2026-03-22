@@ -87,8 +87,8 @@ development_status:
   epic-6: in-progress
   6-1-orchestrator-log-file: done
   6-2-enhanced-status-display-with-phase-info: done
-  6-3-summary-report-generation: review
-  6-4-epic-teardown-phases: backlog
+  6-3-summary-report-generation: done
+  6-4-epic-teardown-phases: review
   epic-6-retrospective: optional
 
   # Epic 7: Graceful Provider Timeout & Partial Result Recovery

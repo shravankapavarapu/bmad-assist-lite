@@ -32,6 +32,7 @@ from bmad_assist_lite.parallel.logging import (
     log_story_blocked,
     log_story_completed,
     log_story_started,
+    log_teardown_result,
     setup_parallel_log,
     teardown_parallel_log,
 )
@@ -232,6 +233,10 @@ class Orchestrator:
         # avoid deprecated asyncio.get_event_loop() in signal context.
         self._loop: asyncio.AbstractEventLoop | None = None
 
+        # Teardown process tracking — set during _run_epic_teardown()
+        # so _on_sigint() can terminate it on Ctrl+C
+        self._teardown_process: asyncio.subprocess.Process | None = None
+
         # Persistent state — load existing or create fresh
         self._state_path = get_parallel_state_path(project_root)
         existing_state = load_state(self._state_path)
@@ -308,6 +313,12 @@ class Orchestrator:
                     )
                 ),
             )
+            # Terminate teardown subprocess if active
+            if self._teardown_process is not None:
+                td_proc = self._teardown_process
+                loop.call_soon_threadsafe(
+                    lambda: loop.create_task(self._kill_teardown_process(td_proc)),
+                )
         else:
             # First signal: drain mode
             self._draining = True
@@ -318,6 +329,13 @@ class Orchestrator:
                     )
                 ),
             )
+            # Terminate teardown subprocess if active (single signal
+            # during teardown means stop immediately)
+            if self._teardown_process is not None:
+                td_proc = self._teardown_process
+                loop.call_soon_threadsafe(
+                    lambda: loop.create_task(self._kill_teardown_process(td_proc)),
+                )
 
     def _install_signal_handlers(self) -> None:
         """Install SIGINT and SIGTERM handlers for graceful shutdown.
@@ -917,6 +935,249 @@ class Orchestrator:
             )
 
     # ========================================================================
+    # Epic completion detection (Story 6.4 — Task 1)
+    # ========================================================================
+
+    def _all_stories_done(self) -> bool:
+        """Check whether every story has reached ``StoryStatus.DONE``.
+
+        Returns:
+            ``True`` only when ALL stories in the parallel state have
+            ``status == StoryStatus.DONE``. Returns ``False`` if any story
+            is ``BLOCKED``, ``IN_FLIGHT``, ``MERGING``, or ``BACKLOG``.
+
+        """
+        if not self._state.stories:
+            return False
+        return all(
+            story.status == StoryStatus.DONE
+            for story in self._state.stories.values()
+        )
+
+    # ========================================================================
+    # Epic teardown subprocess (Story 6.4 — Task 2)
+    # ========================================================================
+
+    async def _kill_teardown_process(
+        self, proc: asyncio.subprocess.Process,
+    ) -> None:
+        """Terminate the teardown subprocess.
+
+        Delegates to ``_kill_process()`` which uses platform-appropriate
+        termination: ``taskkill /F /T`` on Windows, ``os.killpg()``
+        with ``SIGKILL`` on Unix (immediate kill of the process group).
+
+        Args:
+            proc: The teardown subprocess to terminate.
+
+        """
+        await _kill_process(proc)
+        self._teardown_process = None
+
+    async def _run_epic_teardown(self) -> bool:
+        """Spawn the existing loop as a subprocess for epic teardown.
+
+        Builds the command
+        ``[sys.executable, "-m", "bmad_assist_lite", "run",
+        "--epic", str(N), "--teardown-only"]``
+        and runs it in the project root (not a worktree).
+
+        Returns:
+            ``True`` if teardown succeeded (exit code 0), ``False``
+            on any failure.
+
+        """
+        teardown_start = _utc_now()
+        await self._output_mux.write_orchestrator(
+            f"Starting epic teardown for epic {self._epic_num}..."
+        )
+
+        exec_args: list[str] = [
+            sys.executable,
+            "-m",
+            "bmad_assist_lite",
+            "run",
+            "--epic",
+            str(self._epic_num),
+            "--teardown-only",
+        ]
+
+        env = {**os.environ, "BMAD_PARALLEL_MODE": "1"}
+
+        try:
+            if sys.platform == "win32":
+                proc = await asyncio.create_subprocess_exec(
+                    *exec_args,
+                    cwd=str(self._project_root),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    *exec_args,
+                    cwd=str(self._project_root),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
+                )
+
+            # Track process for signal handler cleanup
+            self._teardown_process = proc
+
+            # Stream output via OutputMultiplexer with "teardown" prefix
+            assert proc.stdout is not None  # guaranteed by PIPE
+            self._output_mux.start_reader("teardown", proc.stdout)
+
+            # Wait for process exit
+            await proc.wait()
+            return_code = proc.returncode
+            if return_code is None:  # pragma: no cover
+                return_code = -1
+
+        except asyncio.CancelledError:
+            logger.warning(
+                "[ORCHESTRATOR] Teardown task cancelled, killing subprocess",
+            )
+            if self._teardown_process is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(
+                        _kill_process(self._teardown_process),
+                    )
+            self._teardown_process = None
+            return False
+
+        except Exception as exc:
+            logger.error(
+                "[ORCHESTRATOR] Teardown subprocess failed to start: %s",
+                exc,
+            )
+            self._teardown_process = None
+            return False
+
+        finally:
+            # Drain and stop reader
+            if not self._force_exit:
+                with contextlib.suppress(Exception):
+                    await self._output_mux.await_reader(
+                        "teardown", timeout=5.0,
+                    )
+            with contextlib.suppress(Exception):
+                await self._output_mux.stop_reader("teardown")
+            self._teardown_process = None
+
+        # Calculate duration
+        duration_s = (_utc_now() - teardown_start).total_seconds()
+
+        if return_code == 0:
+            log_teardown_result(
+                self._epic_num,
+                success=True,
+                exit_code=return_code,
+                duration_s=duration_s,
+            )
+            await self._output_mux.write_orchestrator(
+                f"Epic teardown completed successfully in {duration_s:.1f}s"
+            )
+            return True
+        else:
+            error_msg = (
+                f"Teardown subprocess exited with code {return_code}. "
+                "See [teardown] output above for failure details."
+            )
+            log_teardown_result(
+                self._epic_num,
+                success=False,
+                exit_code=return_code,
+                duration_s=duration_s,
+                error=error_msg,
+            )
+            await self._output_mux.write_orchestrator(
+                f"Epic teardown FAILED (exit_code={return_code}). "
+                "Check [teardown] output above for which tests failed."
+            )
+            return False
+
+    # ========================================================================
+    # Sprint-status epic update (Story 6.4 — Task 4)
+    # ========================================================================
+
+    def _update_epic_sprint_status(self, status: str) -> None:
+        """Update the epic status in ``sprint-status.yaml``.
+
+        Follows the non-fatal pattern from ``update_sprint_status_done()``
+        in ``merger.py``: load → mutate → save, wrap in try/except, log
+        warning on failure, never propagate exceptions.
+
+        Args:
+            status: The new status string (e.g. ``"done"``, ``"blocked"``).
+
+        """
+        tag = f"[SPRINT|epic-{self._epic_num}]"
+        try:
+            from bmad_assist_lite.core.sprint_status import (
+                get_sprint_status_path,
+                load_sprint_status,
+                save_sprint_status,
+            )
+
+            path = get_sprint_status_path(self._project_root)
+            sprint_status = load_sprint_status(path)
+            sprint_status.set_epic_status(self._epic_num, status)
+            save_sprint_status(sprint_status, path)
+            logger.info(
+                "%s Updated sprint-status: epic %d -> %s",
+                tag,
+                self._epic_num,
+                status,
+            )
+        except Exception:
+            logger.warning(
+                "%s Failed to update sprint-status (non-fatal)",
+                tag,
+                exc_info=True,
+            )
+
+    # ========================================================================
+    # Worktree cleanup for epic completion (Story 6.4 — Task 6)
+    # ========================================================================
+
+    async def _cleanup_remaining_worktrees(self) -> None:
+        """Clean up any remaining worktrees as a safety net.
+
+        Iterates ``self._story_worktrees`` and calls
+        ``cleanup_worktree()`` for each remaining entry.
+        ``cleanup_worktree()`` already handles branch deletion as part
+        of its three-step cleanup. Individual failures are non-fatal.
+        """
+        if not self._story_worktrees:
+            return
+
+        worktrees_to_clean = list(self._story_worktrees.items())
+        for story_id, _wt_path in worktrees_to_clean:
+            try:
+                await asyncio.to_thread(
+                    cleanup_worktree,
+                    story_id,
+                    self._project_root,
+                    self._config.worktree_base_dir,
+                )
+                logger.info(
+                    "[ORCHESTRATOR] Cleaned up worktree for story %s",
+                    story_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[ORCHESTRATOR] Worktree cleanup failed for %s: %s (non-fatal)",
+                    story_id,
+                    exc,
+                )
+            finally:
+                self._story_worktrees.pop(story_id, None)
+
+    # ========================================================================
     # Main orchestration loop (Task 3, Task 4)
     # ========================================================================
 
@@ -1058,6 +1319,44 @@ class Orchestrator:
 
             # Save state before exiting (Task 3.4)
             save_state(self._state, self._state_path)
+
+            # ================================================================
+            # Epic teardown (Story 6.4 — Task 5)
+            # ================================================================
+            # Teardown runs ONLY when:
+            #   - All stories are DONE
+            #   - NOT in drain mode (stories may be mid-execution)
+            #   - NOT in force-exit mode
+            teardown_success: bool | None = None
+            if (
+                not self._draining
+                and not self._force_exit
+                and self._all_stories_done()
+            ):
+                teardown_success = await self._run_epic_teardown()
+                if teardown_success:
+                    self._update_epic_sprint_status("done")
+                    # Clean up remaining worktrees (safety net) only
+                    # on success. On failure, preserve worktrees and
+                    # branches for debugging (per Key Decision #4).
+                    await self._cleanup_remaining_worktrees()
+                # On teardown failure, do NOT update epic sprint-status
+                # — epic stays "in-progress". Worktrees preserved for
+                # debugging.
+
+                # Persist final state after teardown
+                save_state(self._state, self._state_path)
+
+            elif not self._draining and not self._force_exit:
+                # Not all stories done — some are blocked, stalled by
+                # dependency cycles, or otherwise incomplete.
+                # Update epic sprint-status to "blocked" and clean up
+                # all worktrees (both completed and blocked — per FR35).
+                # Note: _blocked_ids may be empty in stalemate scenarios
+                # (stories stuck due to unresolvable dependencies), so we
+                # unconditionally update status and clean up.
+                self._update_epic_sprint_status("blocked")
+                await self._cleanup_remaining_worktrees()
 
         finally:
             self._remove_signal_handlers()

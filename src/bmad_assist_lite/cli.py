@@ -161,6 +161,11 @@ def run(
         "-r",
         help="Resume from saved state.",
     ),
+    teardown_only: bool = typer.Option(
+        False,
+        "--teardown-only",
+        help="Skip story discovery and run epic teardown phases directly.",
+    ),
 ) -> None:
     """Run the BMAD development loop.
 
@@ -194,6 +199,58 @@ def run(
 
     paths = init_paths(project)
     file_handler = _add_file_log_handler(paths.logs_dir)
+
+    # --- Teardown-only mode: bypass story discovery, run epic teardown directly ---
+    if teardown_only:
+        if epic is None:
+            typer.echo("--teardown-only requires --epic to be specified.", err=True)
+            raise typer.Exit(1)
+
+        from bmad_assist_lite.core.state import Phase, State
+        from bmad_assist_lite.loop.runner import run_loop
+        from bmad_assist_lite.loop.types import LoopExitReason
+
+        epic_teardown_phases = app_config.loop.epic_teardown
+        if not epic_teardown_phases:
+            typer.echo("No epic teardown phases configured.", err=True)
+            raise typer.Exit(1)
+
+        # Construct a resume state starting at the first teardown phase
+        teardown_state = State(
+            current_epic=epic,
+            current_story=None,
+            current_phase=Phase(epic_teardown_phases[0]),
+        )
+
+        typer.echo(
+            f"Running epic teardown for epic {epic} "
+            f"(phases: {', '.join(epic_teardown_phases)})"
+        )
+
+        exit_reason = run_loop(
+            config=app_config,
+            project_path=project,
+            epics=[epic],
+            stories_for_epic={epic: []},
+            resume_state=teardown_state,
+            single_story=False,
+        )
+
+        # Close file log handler
+        if file_handler is not None:
+            file_handler.flush()
+            file_handler.close()
+            logging.getLogger().removeHandler(file_handler)
+
+        if exit_reason == LoopExitReason.COMPLETED:
+            typer.echo("\nEpic teardown completed successfully!")
+        elif exit_reason == LoopExitReason.INTERRUPTED:
+            typer.echo("\nTeardown interrupted.", err=True)
+            raise typer.Exit(130)
+        elif exit_reason == LoopExitReason.ERROR:
+            typer.echo("\nTeardown failed with errors.", err=True)
+            raise typer.Exit(1)
+        return
 
     # --- Sprint-status-driven story discovery ---
     from bmad_assist_lite.core.sprint_status import load_sprint_status

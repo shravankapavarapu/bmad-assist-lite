@@ -347,3 +347,49 @@ def log_dependency_unlocked(story_id: str, unlocked_by: str) -> None:
         story_id,
         unlocked_by,
     )
+
+
+# ============================================================================
+# Teardown Logging
+# ============================================================================
+
+
+def log_teardown_result(
+    epic_num: int,
+    success: bool,
+    exit_code: int,
+    duration_s: float | None = None,
+    error: str | None = None,
+) -> None:
+    """Log the outcome of an epic teardown subprocess.
+
+    Logs at INFO level on success, ERROR level on failure.  Includes
+    the ``[TEARDOWN|epic-{N}]`` tag prefix for filtering and the
+    optional duration when provided.
+
+    Args:
+        epic_num: The epic number that teardown ran for.
+        success: Whether teardown completed successfully.
+        exit_code: The subprocess exit code.
+        duration_s: Wall-clock duration in seconds, or ``None``.
+        error: Error description on failure, or ``None``.
+
+    """
+    tag = f"[TEARDOWN|epic-{epic_num}]"
+    duration_suffix = f" in {duration_s:.1f}s" if duration_s is not None else ""
+
+    if success:
+        _logger.info(
+            "%s Epic teardown completed successfully (exit_code=%d)%s",
+            tag,
+            exit_code,
+            duration_suffix,
+        )
+    else:
+        _logger.error(
+            "%s Epic teardown failed (exit_code=%d)%s: %s",
+            tag,
+            exit_code,
+            duration_suffix,
+            error or "unknown error",
+        )

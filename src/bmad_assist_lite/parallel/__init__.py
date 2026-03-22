@@ -7,6 +7,7 @@ from bmad_assist_lite.parallel.git_ops import get_current_branch, is_protected_b
 from bmad_assist_lite.parallel.logging import (
     log_run_complete,
     log_run_header,
+    log_teardown_result,
     setup_parallel_log,
     teardown_parallel_log,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "load_state",
     "log_run_complete",
     "log_run_header",
+    "log_teardown_result",
     "merge_story",
     "prune_worktrees",
     "recover_state",
