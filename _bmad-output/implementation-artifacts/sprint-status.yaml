@@ -103,6 +103,6 @@ development_status:
   # Epic 8: Context Requirements Validation & Compiler Hardening
   epic-8: in-progress
   8-1-context-filter-error-on-missing-sections: done
-  8-2-optional-reference-convention: review
-  8-3-epic-documentation-sync: backlog
+  8-2-optional-reference-convention: done
+  8-3-epic-documentation-sync: review
   epic-8-retrospective: optional
