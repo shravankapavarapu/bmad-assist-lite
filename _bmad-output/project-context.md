@@ -53,7 +53,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Two-tier config merge** — Global (`~/.bmad-assist-lite/config.yaml`) merges under project (`bmad-assist-lite.yaml`). Project values always win via `_deep_merge()`. Never read config files directly — use `load_config_with_project()` or `get_config()` singleton
 - **State machine** — 10 phases in `Phase` enum. Story loop is configurable via `loop.story` list. `fix_quality_gate` is NOT in the story phase list — only reached via `next_phase` override in quality_gate handler. Epic teardown phases run after all stories complete
 - **Sprint-status as source of truth** — Story discovery reads `sprint-status.yaml`, not filesystem. One-way sync: `state.yaml` → `sprint-status.yaml` (never reverse). Sprint sync is non-fatal — errors logged as warnings, never propagated
-- **Windows-native process management** — Use `taskkill /F /T /PID` on Windows, `os.killpg()` on Unix. All process cleanup in `providers/_windows.py`. Never use `SIGKILL`/`SIGTERM` on Windows
+- **Windows-native process management** — Use `taskkill /F /T /PID` on Windows, `os.killpg()` on Unix. Core process cleanup in `providers/_windows.py`; bootstrap-specific process tree cleanup in `parallel/bootstrap.py` (`_kill_process_tree()`). Never use `SIGKILL`/`SIGTERM` on Windows
 
 ### Testing Rules
 
@@ -70,10 +70,10 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 - **Line length 100** — Enforced by ruff. Applies to all Python source in `src/`
 - **Docstring style** — Module-level docstrings required (except `__init__.py` and `__main__.py` — D100/D104 ignored). First line is imperative summary. Multi-line uses Google style. D213 (multi-line-summary-second-line) and D203 (one-blank-line-before-class) are ignored in favor of D212/D211
-- **File organization** — Source in `src/bmad_assist_lite/` with subsystem directories (`core/`, `providers/`, `compiler/`, `loop/`, `plugins/`, `context_docs/`, `validation/`, `bmad/`, `workflows/`). Each directory has `__init__.py`. Tests flat in `tests/`
+- **File organization** — Source in `src/bmad_assist_lite/` with subsystem directories (`core/`, `providers/`, `compiler/`, `loop/`, `plugins/`, `context_docs/`, `parallel/`, `validation/`, `bmad/`, `workflows/`). Each directory has `__init__.py`. Tests flat in `tests/`
 - **Naming conventions** — Modules: `snake_case.py`. Classes: `PascalCase`. Functions/methods: `snake_case`. Constants: `UPPER_SNAKE_CASE`. Private/reset functions: `_prefixed` (e.g., `_reset_config()`, `_deep_merge()`, `_utc_now()`)
 - **Section separators in modules** — Use `# ============================================================================` comment blocks to separate logical sections within files (see `config.py`, `conftest.py`)
-- **No `__all__` except exceptions** — Only `exceptions.py` defines `__all__`. Other modules rely on import-what-you-need pattern
+- **No `__all__` except exceptions and `parallel/__init__.py`** — Only `exceptions.py` and `parallel/__init__.py` define `__all__`. Other modules rely on import-what-you-need pattern
 - **Ruff lint rules** — E (pycodestyle errors), F (pyflakes), W (warnings), I (isort), N (naming), D (docstrings), UP (pyupgrade), B (bugbear), C4 (comprehensions), SIM (simplify). B008 ignored (function call in default arg — needed for Typer). SIM108 ignored (no ternary enforcement)
 - **Enum values match config keys** — `Phase` enum values are snake_case strings that match config keys exactly (e.g., `Phase.CREATE_STORY = "create_story"`). Workflow names use kebab-case (e.g., `create-story`). Conversion: `phase_name.replace("_", "-")`
 
@@ -119,4 +119,4 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Review quarterly for outdated rules
 - Remove rules that become obvious over time
 
-Last Updated: 2026-03-22
+Last Updated: 2026-03-23

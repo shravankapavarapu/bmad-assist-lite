@@ -34,6 +34,8 @@ Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 5 comman
 - **`loop/`** — Main BMAD loop orchestration with 10 phase handlers (7 LLM + 3 non-LLM quality gate), crash recovery cleanup, sprint sync, Windows-safe signals/locking
 - **`plugins/`** — Plugin architecture: ProviderPlugin, PhasePlugin, WorkflowPlugin protocols with entry point + local directory discovery
 - **`context_docs/`** — Context7 library documentation: `detector.py` (dependency parsing + doc scanning), `cache.py` (flat file cache + epic tracking with story-level filtering), `resolver.py` (orchestrator + compiler injection), `epic_table.py` (parses `### Context7 Library Documentation` markdown tables from epic files for explicit library-to-story mapping, skipping auto-detection and `_resolve_library_id()` calls). Opt-in via `context_docs` config
+- **`parallel/`** — Parallel story execution via git worktrees. `cli.py` (Typer subcommand), `config.py` (`ParallelConfig` frozen model with concurrency, stagger, and bootstrap fields), `orchestrator.py` (async orchestrator with canary bootstrap, semaphore-based concurrency, drain mode), `bootstrap.py` (worktree bootstrap pipeline: copy files → run setup commands → run validation; returns `BootstrapResult` frozen model — not exceptions — as the primary error communication mechanism), `state.py` (`ParallelState`/`StoryState` frozen models with YAML persistence), `git_ops.py` (branch operations), `worktree_manager.py` (create/cleanup worktrees), `dependency_graph.py` (story dependency resolution), `merger.py` (merge queue with post-merge quality gates), `output.py` (`OutputMultiplexer` for concurrent console output), `report.py` (run summary generation), `recovery.py` (crash recovery), `logging.py` (parallel-specific log setup), `exceptions.py` (`ParallelError`)
+  - **Canary bootstrap pattern** — When bootstrap config is set, the first worktree acts as a canary: runs full bootstrap with validation (`bootstrap_worktree(validate=True)`). If the canary fails, the entire run aborts immediately (no other worktrees created). If the canary passes, remaining worktrees run copy + setup only (`validate=False`), skipping the redundant validation. Resume (`--resume`) skips canary entirely (worktrees already bootstrapped). `[BOOTSTRAP]` log prefix for all bootstrap messages.
 - **`validation/`** — Evidence Score system: deterministic scoring, parsing from LLM output, multi-validator aggregation, synthesis prompt injection
 - **`bmad/`** — Epic/story markdown parser
 - **`workflows/`** — Bundled workflow templates (package data). Includes battle-hardened patterns: quality gates, toolchain auto-detection, review continuation, runtime verification
@@ -186,6 +188,19 @@ quality_gate:
   typecheck: "mypy src/"
   test: "pytest -q --tb=short --no-header"
   command_timeout: 120  # per-command timeout in seconds
+
+# Parallel story execution via git worktrees
+parallel:
+  max_concurrency: 3          # max concurrent stories (1-5)
+  stagger_delay: 10.0         # seconds between spawns
+  post_merge_fix_retries: 1   # retry attempts for post-merge quality gate fixes
+  conflict_resolution_timeout: 120  # seconds for Claude CLI conflict resolution
+  worktree_base_dir: null      # custom base dir for worktrees (null = auto)
+  copy_to_worktree: []        # files/dirs to copy (e.g., [".env", "secrets/"])
+  setup_commands: []           # sequential shell commands (e.g., ["pip install -e ."])
+  validation_command: null     # smoke test command (e.g., "pytest -q -x")
+  copy_strict: false           # true = error on missing copy source, false = warn
+  bootstrap_timeout: 120       # per-command timeout in seconds for setup/validation
 
 # Auto-commit story changes after quality gate pass/fail
 auto_commit:
