@@ -1,5 +1,6 @@
 """Parallel story execution module for bmad-assist-lite."""
 
+from bmad_assist_lite.parallel.bootstrap import BootstrapResult, bootstrap_worktree
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
@@ -51,6 +52,7 @@ from bmad_assist_lite.parallel.worktree_manager import (
 )
 
 __all__ = [
+    "BootstrapResult",
     "ConflictResolutionResult",
     "DependencyGraph",
     "GateResult",
@@ -67,6 +69,7 @@ __all__ = [
     "StoryState",
     "StoryStatus",
     "WorktreeInfo",
+    "bootstrap_worktree",
     "build_report",
     "cleanup_worktree",
     "create_initial_state",

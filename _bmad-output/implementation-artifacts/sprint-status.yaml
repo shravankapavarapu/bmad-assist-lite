@@ -34,7 +34,7 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-22
+generated: 2026-03-23
 last_updated: 2026-03-18
 project: bmad-assist-lite-parallel-stories
 project_key: NOKEY
@@ -101,8 +101,15 @@ development_status:
   epic-7-retrospective: done
 
   # Epic 8: Context Requirements Validation & Compiler Hardening
-  epic-8: in-progress
+  epic-8: done
   8-1-context-filter-error-on-missing-sections: done
   8-2-optional-reference-convention: done
-  8-3-epic-documentation-sync: review
-  epic-8-retrospective: optional
+  8-3-epic-documentation-sync: done
+  epic-8-retrospective: done
+
+  # Epic 9: Worktree Bootstrap & Validation
+  epic-9: in-progress
+  9-1-bootstrap-module-and-config: review
+  9-2-canary-bootstrap-integration: backlog
+  9-3-epic-documentation-sync: backlog
+  epic-9-retrospective: optional
