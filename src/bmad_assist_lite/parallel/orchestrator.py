@@ -19,6 +19,7 @@ import types
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bmad_assist_lite.parallel.bootstrap import BootstrapResult, bootstrap_worktree
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
@@ -225,6 +226,10 @@ class Orchestrator:
         # Set in run() to capture actual orchestration start, not __init__
         self._orchestrator_started_at: datetime | None = None
 
+        # Canary bootstrap tracking (Story 9.2 — Task 2)
+        self._canary_passed: bool = False
+        self._canary_story_id: str | None = None
+
         # Shutdown flags (Task 1.1)
         self._draining: bool = False
         self._force_exit: bool = False
@@ -276,6 +281,24 @@ class Orchestrator:
                 "[ORCHESTRATOR] Created fresh parallel state with %d stories",
                 len(self._state.stories),
             )
+
+    # ========================================================================
+    # Bootstrap config detection (Story 9.2 — Task 1)
+    # ========================================================================
+
+    def _has_bootstrap_config(self) -> bool:
+        """Check whether any bootstrap fields are non-default.
+
+        Returns ``True`` if ``copy_to_worktree`` is non-empty,
+        ``setup_commands`` is non-empty, or ``validation_command``
+        is not ``None``.  Used to short-circuit all bootstrap logic
+        for zero-overhead when unconfigured.
+        """
+        return bool(
+            self._config.copy_to_worktree
+            or self._config.setup_commands
+            or (self._config.validation_command is not None)
+        )
 
     # ========================================================================
     # Signal handling (Task 1, Task 2)
@@ -416,9 +439,16 @@ class Orchestrator:
 
         async with self._semaphore:
             try:
-                # Apply stagger delay inside semaphore to avoid blocking
-                # the main loop dispatcher during delay
-                if self._config.stagger_delay > 0:
+                # Apply stagger delay inside semaphore — skip for canary
+                # story (Story 9.2 — Task 5). The canary is the first
+                # story to spawn and should not be artificially delayed.
+                is_canary_story = (
+                    story_id == self._canary_story_id
+                )
+                if (
+                    self._config.stagger_delay > 0
+                    and not is_canary_story
+                ):
                     await asyncio.sleep(self._config.stagger_delay)
 
                 # Check drain flag after stagger sleep to avoid spawning
@@ -448,6 +478,12 @@ class Orchestrator:
                         story_id,
                         worktree_path,
                     )
+                elif story_id in self._story_worktrees:
+                    # Worktree already created (e.g. canary story whose
+                    # bootstrap was handled in run()) — reuse it and
+                    # skip both worktree creation and bootstrap.
+                    worktree_path = self._story_worktrees[story_id]
+
                 else:
                     # Create worktree (sync function, bridge via to_thread)
                     worktree_path = await asyncio.to_thread(
@@ -465,6 +501,58 @@ class Orchestrator:
                         worktree_path=worktree_path,
                     )
                     save_state(self._state, self._state_path)
+
+                    # Non-canary bootstrap (Story 9.2 — Task 3b)
+                    if (
+                        self._has_bootstrap_config()
+                        and self._canary_passed
+                    ):
+                        bootstrap_res: BootstrapResult = (
+                            await asyncio.to_thread(
+                                bootstrap_worktree,
+                                self._project_root,
+                                worktree_path,
+                                self._config,
+                                validate=False,
+                            )
+                        )
+                        if not bootstrap_res.success:
+                            error_msg = (
+                                f"Bootstrap setup failed: "
+                                f"{bootstrap_res.error_message}"
+                            )
+                            logger.warning(
+                                "[BOOTSTRAP] Non-canary story %s "
+                                "bootstrap failed: %s",
+                                story_id,
+                                bootstrap_res.error_message,
+                            )
+                            await self._output_mux.write_orchestrator(
+                                f"[BOOTSTRAP] Story {story_id} "
+                                f"bootstrap setup failed — "
+                                f"marking blocked"
+                            )
+                            # Clean up worktree
+                            await asyncio.to_thread(
+                                cleanup_worktree,
+                                story_id,
+                                self._project_root,
+                                self._config.worktree_base_dir,
+                            )
+                            self._story_worktrees.pop(story_id, None)
+                            # Mark story as BLOCKED
+                            self._blocked_ids.add(story_id)
+                            self._in_flight_ids.discard(story_id)
+                            self._state = (
+                                self._state.with_story_status(
+                                    story_id,
+                                    StoryStatus.BLOCKED,
+                                    error=error_msg,
+                                )
+                            )
+                            save_state(self._state, self._state_path)
+                            log_story_blocked(story_id, error_msg)
+                            return -2
 
                 # Extract story number for CLI flag
                 story_num = _extract_story_num(story_id)
@@ -614,6 +702,11 @@ class Orchestrator:
             # Log merge queued and enqueue for merge processing
             log_merge_queued(story_id)
             await self._merge_queue.enqueue(story_id)
+        elif story_id in self._blocked_ids:
+            # Story already blocked (e.g. non-canary bootstrap failure
+            # in _spawn_story returned -2) — skip redundant processing
+            # to preserve the original descriptive block reason.
+            pass
         else:
             self._blocked_ids.add(story_id)
             self._state = self._state.with_story_status(
@@ -1213,6 +1306,12 @@ class Orchestrator:
             # have no running task (Task 6.3). These were preserved as
             # in_flight by recover_state() because their worktrees exist.
             stale_in_flight = self._in_flight_ids - set(self._running_tasks.keys())
+            is_resume = bool(stale_in_flight)
+
+            # Skip canary on resume (Story 9.2 — Task 4b, AC #8)
+            if is_resume:
+                self._canary_passed = True
+
             for story_id in sorted(stale_in_flight):
                 task = asyncio.create_task(
                     self._spawn_story(story_id, resume=True),
@@ -1220,6 +1319,145 @@ class Orchestrator:
                 )
                 self._running_tasks[story_id] = task
                 self._task_to_story[task] = story_id
+
+            # ============================================================
+            # Canary bootstrap (Story 9.2 — Task 3, Task 4)
+            # ============================================================
+            # If bootstrap is configured and this is NOT a resume, run
+            # canary validation on the first ready story before batch
+            # spawn.  Canary runs synchronously (before other stories)
+            # to detect a broken base branch early.
+            if (
+                not is_resume
+                and not self._canary_passed
+                and self._has_bootstrap_config()
+            ):
+                # Pick the first ready story as canary
+                canary_ready = self._dependency_graph.get_ready_stories(
+                    self._done_ids | self._merging_ids,
+                    self._in_flight_ids,
+                    self._blocked_ids,
+                )
+                if canary_ready:
+                    canary_id = canary_ready[0]
+                    try:
+                        # Create the canary worktree
+                        canary_wt = await asyncio.to_thread(
+                            create_worktree,
+                            canary_id,
+                            self._project_root,
+                            self._config.worktree_base_dir,
+                        )
+                        self._story_worktrees[canary_id] = canary_wt
+
+                        # Run full bootstrap with validation
+                        canary_result: BootstrapResult = (
+                            await asyncio.to_thread(
+                                bootstrap_worktree,
+                                self._project_root,
+                                canary_wt,
+                                self._config,
+                                validate=True,
+                            )
+                        )
+
+                        if canary_result.success:
+                            # Canary passed — proceed with batch spawn
+                            self._canary_passed = True
+                            self._canary_story_id = canary_id
+                            await self._output_mux.write_orchestrator(
+                                f"[BOOTSTRAP] Canary story {canary_id}"
+                                f" bootstrap passed"
+                                f" — proceeding with batch"
+                            )
+                            logger.info(
+                                "[BOOTSTRAP] Canary story %s bootstrap"
+                                " passed — proceeding with batch",
+                                canary_id,
+                            )
+
+                            # Transition canary to IN_FLIGHT and spawn
+                            self._in_flight_ids.add(canary_id)
+                            self._state = (
+                                self._state.with_story_status(
+                                    canary_id,
+                                    StoryStatus.IN_FLIGHT,
+                                    started_at=_utc_now(),
+                                    worktree_path=canary_wt,
+                                )
+                            )
+                            save_state(self._state, self._state_path)
+                            canary_task = asyncio.create_task(
+                                self._spawn_story(canary_id),
+                                name=f"story-{canary_id}",
+                            )
+                            self._running_tasks[canary_id] = canary_task
+                            self._task_to_story[canary_task] = canary_id
+                        else:
+                            # Canary FAILED — abort the entire run
+                            diag = canary_result.output or ""
+                            err_msg = (
+                                canary_result.error_message
+                                or "Bootstrap failed"
+                            )
+                            await self._output_mux.write_orchestrator(
+                                f"[BOOTSTRAP] Canary story {canary_id}"
+                                f" bootstrap FAILED"
+                                f" — aborting parallel run"
+                            )
+                            if diag:
+                                await (
+                                    self._output_mux.write_orchestrator(
+                                        f"[BOOTSTRAP] Output: {diag}"
+                                    )
+                                )
+                            logger.error(
+                                "[BOOTSTRAP] Canary story %s bootstrap"
+                                " FAILED — aborting parallel run: %s",
+                                canary_id,
+                                err_msg,
+                            )
+                            # Clean up canary worktree
+                            with contextlib.suppress(Exception):
+                                await asyncio.to_thread(
+                                    cleanup_worktree,
+                                    canary_id,
+                                    self._project_root,
+                                    self._config.worktree_base_dir,
+                                )
+                            self._story_worktrees.pop(
+                                canary_id, None,
+                            )
+                            raise ParallelError(
+                                f"Canary bootstrap failed for "
+                                f"story {canary_id}: {err_msg}"
+                            )
+                    except ParallelError:
+                        raise
+                    except Exception as exc:
+                        # Unexpected error during canary bootstrap
+                        logger.error(
+                            "[BOOTSTRAP] Canary story %s bootstrap"
+                            " error: %s",
+                            canary_id,
+                            exc,
+                        )
+                        # Clean up worktree if it was created
+                        if canary_id in self._story_worktrees:
+                            with contextlib.suppress(Exception):
+                                await asyncio.to_thread(
+                                    cleanup_worktree,
+                                    canary_id,
+                                    self._project_root,
+                                    self._config.worktree_base_dir,
+                                )
+                            self._story_worktrees.pop(
+                                canary_id, None,
+                            )
+                        raise ParallelError(
+                            f"Canary bootstrap error for "
+                            f"story {canary_id}: {exc}"
+                        ) from exc
 
             while True:
                 # Check if draining and no tasks remain — break to exit

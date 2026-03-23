@@ -109,7 +109,7 @@ development_status:
 
   # Epic 9: Worktree Bootstrap & Validation
   epic-9: in-progress
-  9-1-bootstrap-module-and-config: review
-  9-2-canary-bootstrap-integration: backlog
+  9-1-bootstrap-module-and-config: done
+  9-2-canary-bootstrap-integration: review
   9-3-epic-documentation-sync: backlog
   epic-9-retrospective: optional
