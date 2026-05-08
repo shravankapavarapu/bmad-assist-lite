@@ -367,9 +367,10 @@ providers:
   master:
     provider: claude
     model: opus
+    effort: max          # Opus 4.7 thinking effort: low|medium|high|xhigh|max. Omit to use Claude Code's default (xhigh).
   multi:
     - provider: gemini
-      model: gemini-2.5-flash
+      model: gemini-3.1-pro-preview
     - provider: claude
       model: sonnet
 

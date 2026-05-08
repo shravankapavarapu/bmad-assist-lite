@@ -54,13 +54,19 @@ class ClaudeSDKProvider(BaseProvider):
         settings: Path | None,
         cwd: Path | None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
     ) -> str:
+        extra_args: dict[str, str | None] = {}
+        if effort:
+            extra_args["effort"] = effort
+
         options = ClaudeAgentOptions(
             model=model,
             permission_mode="acceptEdits",
             settings=str(settings) if settings is not None else None,
             cwd=cwd,
             tools=allowed_tools if allowed_tools is not None else None,
+            extra_args=extra_args,
         )
 
         response_parts: list[str] = []
@@ -88,6 +94,7 @@ class ClaudeSDKProvider(BaseProvider):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Execute Claude SDK with the given prompt and return the result."""
@@ -127,7 +134,7 @@ class ClaudeSDKProvider(BaseProvider):
             response_text = run_async_in_thread(
                 asyncio.wait_for(
                     self._invoke_async(
-                        prompt, effective_model, validated_settings, cwd, allowed_tools
+                        prompt, effective_model, validated_settings, cwd, allowed_tools, effort
                     ),
                     timeout=effective_timeout,
                 )

@@ -119,6 +119,7 @@ class BaseHandler(ABC):
             model=model,
             timeout=timeout,
             cwd=self.project_path,
+            effort=self.config.providers.master.effort,
         )
 
     def execute(self, state: State) -> PhaseResult:

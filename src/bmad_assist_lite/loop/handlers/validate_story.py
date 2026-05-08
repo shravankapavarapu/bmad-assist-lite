@@ -122,9 +122,11 @@ class ValidateStoryHandler(BaseHandler):
                 timeout = get_phase_timeout(self.config, self.phase_name)
 
                 def _make_invoker(
-                    p: Any, m: str, t: int
+                    p: Any, m: str, t: int, e: str | None
                 ) -> Any:
-                    return lambda: p.invoke(prompt, model=m, timeout=t, cwd=self.project_path)
+                    return lambda: p.invoke(
+                        prompt, model=m, timeout=t, cwd=self.project_path, effort=e
+                    )
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(multi_configs)
@@ -135,7 +137,7 @@ class ValidateStoryHandler(BaseHandler):
                         futures.append(
                             loop.run_in_executor(
                                 executor,
-                                _make_invoker(provider, mc.model, timeout),
+                                _make_invoker(provider, mc.model, timeout, mc.effort),
                             )
                         )
 

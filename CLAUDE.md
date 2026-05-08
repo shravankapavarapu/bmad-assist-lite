@@ -100,6 +100,7 @@ providers:
   master:
     provider: claude    # or: gemini
     model: opus         # Claude: opus, sonnet, haiku (or full ID like claude-sonnet-4-5-20250929)
+    effort: max         # Opus 4.7 thinking effort: low|medium|high|xhigh|max. Omit to use Claude Code's default (xhigh).
   multi:
     - provider: gemini
       model: gemini-2.5-flash  # Any Gemini model string (validated by Gemini CLI)
@@ -111,7 +112,9 @@ providers:
 - **Claude** (`providers/claude_sdk.py`): `opus`, `sonnet`, `haiku`, or any `claude-*` full model ID. Default: `opus`
 - **Gemini** (`providers/gemini.py`): Any model string (e.g., `gemini-2.5-flash`, `gemini-2.5-pro`). Validated by Gemini CLI at runtime. Default: `gemini-2.5-flash`
 
-**Config model definitions** are in `core/config.py`: `MasterProviderConfig` and `MultiProviderConfig` Pydantic models define the `provider` and `model` fields.
+**Valid effort values (Claude Opus 4.7 only):** `low`, `medium`, `high`, `xhigh`, `max`. Forwarded to the CLI as `--effort <value>` via the SDK's `extra_args`. Ignored by Gemini and pre-Opus-4.7 Claude models. Default for this project: `max`.
+
+**Config model definitions** are in `core/config.py`: `MasterProviderConfig` and `MultiProviderConfig` Pydantic models define the `provider`, `model`, and `effort` fields.
 
 ## Code Style
 
@@ -143,6 +146,7 @@ providers:
   master:
     provider: claude
     model: opus
+    effort: max          # Opus 4.7 thinking effort: low|medium|high|xhigh|max
   multi:
     - provider: gemini
       model: gemini-2.5-flash

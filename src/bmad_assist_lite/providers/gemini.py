@@ -77,11 +77,15 @@ class GeminiProvider(BaseProvider):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Execute Gemini CLI with the given prompt and return the result."""
         if timeout is not None and timeout <= 0:
             raise ValueError(f"timeout must be positive, got {timeout}")
+
+        if effort:
+            logger.debug("Gemini ignores effort=%s (Claude-only feature)", effort)
 
         effective_model = model or self.default_model or "gemini-2.5-flash"
         effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT
