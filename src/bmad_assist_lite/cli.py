@@ -366,8 +366,7 @@ def init(
 providers:
   master:
     provider: claude
-    model: opus
-    effort: max          # Opus 4.7 thinking effort: low|medium|high|xhigh|max. Omit to use Claude Code's default (xhigh).
+    model: claude-opus-4-6   # Pin Opus 4.6. To use 4.7, set `model: claude-opus-4-7` and add `effort: max` (4.7-only thinking effort: low|medium|high|xhigh|max).
   multi:
     - provider: gemini
       model: gemini-3.1-pro-preview
