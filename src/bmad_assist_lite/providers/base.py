@@ -45,6 +45,11 @@ PROVIDER_COLORS: tuple[str, ...] = (
 )
 RESET_COLOR = "\033[0m"
 
+# Common tool names shared by providers for allowed_tools restriction prompts
+COMMON_TOOL_NAMES: frozenset[str] = frozenset(
+    {"Edit", "Write", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Read"}
+)
+
 # Grace period polling interval in seconds
 _GRACE_POLL_INTERVAL: float = 2.0
 

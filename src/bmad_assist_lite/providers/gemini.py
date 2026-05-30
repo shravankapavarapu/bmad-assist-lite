@@ -22,6 +22,7 @@ from bmad_assist_lite.core.exceptions import (
 )
 from bmad_assist_lite.providers._windows import get_subprocess_kwargs, kill_process
 from bmad_assist_lite.providers.base import (
+    COMMON_TOOL_NAMES,
     BaseProvider,
     ExitStatus,
     ProviderResult,
@@ -51,9 +52,6 @@ _GEMINI_TOOL_NAME_MAP: dict[str, str] = {
     "search_file_content": "Grep",
 }
 
-_COMMON_TOOL_NAMES: frozenset[str] = frozenset(
-    {"Edit", "Write", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Read"}
-)
 
 
 class GeminiProvider(BaseProvider):
@@ -139,7 +137,7 @@ class GeminiProvider(BaseProvider):
         final_prompt = prompt
         if allowed_tools is not None:
             allowed_set = set(allowed_tools)
-            restricted_tools = sorted(_COMMON_TOOL_NAMES - allowed_set)
+            restricted_tools = sorted(COMMON_TOOL_NAMES - allowed_set)
             if restricted_tools:
                 allowed_str = ", ".join(allowed_tools)
                 restricted_str = ", ".join(restricted_tools)
@@ -335,8 +333,8 @@ class GeminiProvider(BaseProvider):
                         f"Gemini CLI timeout after {timeout}s"
                     ) from None
 
-                stdout_thread.join()
-                stderr_thread.join()
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
 
             except FileNotFoundError as e:
                 # Task 1.9: Wrap FileNotFoundError in ProviderError
