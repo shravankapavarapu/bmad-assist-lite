@@ -130,8 +130,10 @@ class ValidateStoryHandler(BaseHandler):
                     max_workers=len(multi_configs)
                 ) as executor:
                     futures = []
+                    providers: list[Any] = []
                     for mc in multi_configs:
                         provider = get_provider(mc.provider)
+                        providers.append(provider)
                         futures.append(
                             loop.run_in_executor(
                                 executor,
@@ -150,10 +152,11 @@ class ValidateStoryHandler(BaseHandler):
                             {"validator": label, "error": str(raw), "exit_code": 1}
                         )
                     else:
+                        response = providers[i].parse_output(raw)
                         results.append(
                             {
                                 "validator": label,
-                                "response": raw.stdout,
+                                "response": response,
                                 "exit_code": raw.exit_code,
                             }
                         )

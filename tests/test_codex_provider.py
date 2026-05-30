@@ -153,7 +153,7 @@ class TestInvocation:
         mock_popen.return_value = process
 
         provider = CodexProvider()
-        provider.invoke("test prompt", model="codex-mini-latest", timeout=300)
+        provider.invoke("test prompt", model="gpt-5.3-codex", timeout=300)
 
         call_args = mock_popen.call_args
         command = call_args[0][0]
@@ -162,7 +162,7 @@ class TestInvocation:
         assert "--json" in command
         assert "--model" in command
         model_idx = command.index("--model")
-        assert command[model_idx + 1] == "codex-mini-latest"
+        assert command[model_idx + 1] == "gpt-5.3-codex"
         assert "test prompt" not in command
         process.stdin.write.assert_called_once_with("test prompt")
 
@@ -201,7 +201,7 @@ class TestInvocation:
         mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
-        """When model=None, uses 'codex-mini-latest' default (Task 2.3)."""
+        """When model=None, uses 'gpt-5.3-codex' default (Task 2.3)."""
         mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
@@ -213,8 +213,8 @@ class TestInvocation:
         call_args = mock_popen.call_args
         command = call_args[0][0]
         model_idx = command.index("--model")
-        assert command[model_idx + 1] == "codex-mini-latest"
-        assert result.model == "codex-mini-latest"
+        assert command[model_idx + 1] == "gpt-5.3-codex"
+        assert result.model == "gpt-5.3-codex"
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
@@ -967,7 +967,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex", "exec"),
         )
 
@@ -990,7 +990,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1011,7 +1011,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1032,7 +1032,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1053,7 +1053,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1075,7 +1075,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1093,7 +1093,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1111,7 +1111,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1136,7 +1136,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1157,7 +1157,7 @@ class TestParseOutput:
             stderr="",
             exit_code=0,
             duration_ms=100,
-            model="codex-mini-latest",
+            model="gpt-5.3-codex",
             command=("codex",),
         )
 
@@ -1175,9 +1175,9 @@ class TestSupportsModel:
     """Test supports_model() acceptance and rejection."""
 
     def test_accepts_codex_mini_latest(self) -> None:
-        """supports_model('codex-mini-latest') returns True (Task 7.1)."""
+        """supports_model('gpt-5.3-codex') returns True (Task 7.1)."""
         provider = CodexProvider()
-        assert provider.supports_model("codex-mini-latest") is True
+        assert provider.supports_model("gpt-5.3-codex") is True
 
     def test_accepts_gpt_prefix(self) -> None:
         """supports_model('gpt-5.3-codex') returns True (Task 7.2)."""
@@ -1198,6 +1198,13 @@ class TestSupportsModel:
         """supports_model('codex-anything') returns True (Task 7.5)."""
         provider = CodexProvider()
         assert provider.supports_model("codex-anything") is True
+
+    def test_accepts_o_series_models(self) -> None:
+        """supports_model accepts o1/o3/o4 series models."""
+        provider = CodexProvider()
+        assert provider.supports_model("gpt-5.3-codex") is True
+        assert provider.supports_model("o3-mini") is True
+        assert provider.supports_model("o1-mini") is True
 
     def test_rejects_claude_model(self) -> None:
         """supports_model('claude-sonnet-4-5-20250929') returns False (Task 7.6)."""
@@ -1404,9 +1411,9 @@ class TestProviderProperties:
         assert provider.provider_name == "codex"
 
     def test_default_model(self) -> None:
-        """default_model returns 'codex-mini-latest' (Task 9.2)."""
+        """default_model returns 'gpt-5.3-codex' (Task 9.2)."""
         provider = CodexProvider()
-        assert provider.default_model == "codex-mini-latest"
+        assert provider.default_model == "gpt-5.3-codex"
 
     def test_is_base_provider_subclass(self) -> None:
         """isinstance(provider, BaseProvider) is True (Task 9.3)."""

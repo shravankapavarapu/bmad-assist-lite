@@ -202,15 +202,11 @@ class CodexProvider(BaseProvider):
     @property
     def default_model(self) -> str | None:
         """Return the default model identifier."""
-        return "codex-mini-latest"
+        return "gpt-5.3-codex"
 
     def supports_model(self, model: str) -> bool:
-        """Return True if the model is a known Codex/GPT model.
-
-        Accepts any model string starting with ``gpt-`` or ``codex-`` prefix
-        (case-sensitive, matching OpenAI naming convention).
-        """
-        return model.startswith("gpt-") or model.startswith("codex-")
+        """Return True if the model is a known Codex/OpenAI model."""
+        return model.startswith(("gpt-", "codex-", "o1-", "o3-", "o4-"))
 
     def parse_output(self, result: ProviderResult) -> str:
         """Extract response text from provider result.
