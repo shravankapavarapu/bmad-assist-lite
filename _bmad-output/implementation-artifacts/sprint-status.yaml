@@ -113,3 +113,13 @@ development_status:
   9-2-canary-bootstrap-integration: done
   9-3-epic-documentation-sync: done
   epic-9-retrospective: done
+
+  # Epic 10: Codex CLI Provider (Replace Gemini)
+  epic-10: in-progress
+  10-1-codex-provider-core: ready-for-dev
+  10-2-provider-registry: backlog
+  10-3-structured-output: backlog
+  10-4-evidence-score-integration: backlog
+  10-5-configuration-and-docs: backlog
+  10-6-e2e-testing-and-hardening: backlog
+  10-7-epic-documentation-sync: backlog
