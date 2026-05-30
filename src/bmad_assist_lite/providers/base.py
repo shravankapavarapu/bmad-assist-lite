@@ -57,7 +57,10 @@ COMMON_TOOL_NAMES: frozenset[str] = frozenset(
 # Keyed by CLI name; values are lists of candidate paths per platform.
 _KNOWN_CLI_PATHS: dict[str, list[Path]] = {
     "codex": (
-        [Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "OpenAI" / "Codex" / "bin"]
+        [
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "OpenAI" / "Codex" / "bin",
+            Path(os.environ.get("APPDATA", "")) / "npm",
+        ]
         if sys.platform == "win32"
         else [
             Path.home() / ".local" / "bin",
@@ -67,7 +70,9 @@ _KNOWN_CLI_PATHS: dict[str, list[Path]] = {
         ]
     ),
     "gemini": (
-        [Path(os.environ.get("LOCALAPPDATA", ""), "Google")]
+        [
+            Path(os.environ.get("APPDATA", "")) / "npm",
+        ]
         if sys.platform == "win32"
         else [
             Path.home() / ".local" / "bin",
@@ -105,12 +110,13 @@ def resolve_cli_path(cli_name: str) -> str:
     if found:
         return found
 
-    exe_suffix = ".exe" if sys.platform == "win32" else ""
+    suffixes = [".cmd", ".exe", ""] if sys.platform == "win32" else [""]
     for directory in _KNOWN_CLI_PATHS.get(cli_name, []):
-        candidate = directory / f"{cli_name}{exe_suffix}"
-        if candidate.is_file():
-            logger.info("Found %s at known path: %s", cli_name, candidate)
-            return str(candidate)
+        for suffix in suffixes:
+            candidate = directory / f"{cli_name}{suffix}"
+            if candidate.is_file():
+                logger.info("Found %s at known path: %s", cli_name, candidate)
+                return str(candidate)
 
     from bmad_assist_lite.core.exceptions import ProviderError
 
