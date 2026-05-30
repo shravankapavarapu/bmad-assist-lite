@@ -13,12 +13,12 @@
 | 10.3 | Structured Output via --output-schema | done | 2 | 6 |
 | 10.4 | Evidence Score Integration | done | 2 | 6 |
 | 10.5 | Configuration & Documentation | done | 1 | 8 |
-| 10.6 | E2E Testing & Hardening | pending | - | - |
+| 10.6 | E2E Testing & Hardening | done | 1 | 6 |
 | 10.7 | Epic Documentation Sync | pending | - | - |
 
 ## Current Activity
 
-**Story:** 10.6 — E2E Testing & Hardening
+**Story:** 10.7 — Epic Documentation Sync
 **Step:** qa
 **Detail:** Verifying acceptance criteria
 
@@ -26,7 +26,7 @@
 
 | Metric | Value |
 |---|---|
-| Completed | 5 / 7 |
+| Completed | 6 / 7 |
 | Failed | 0 |
 | Decisions made | 0 |
 | Total elapsed | 0m |

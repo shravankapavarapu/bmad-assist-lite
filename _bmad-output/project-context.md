@@ -73,7 +73,6 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **File organization** — Source in `src/bmad_assist_lite/` with subsystem directories (`core/`, `providers/`, `compiler/`, `loop/`, `plugins/`, `context_docs/`, `parallel/`, `validation/`, `bmad/`, `workflows/`). Each directory has `__init__.py`. Tests flat in `tests/`
 - **Naming conventions** — Modules: `snake_case.py`. Classes: `PascalCase`. Functions/methods: `snake_case`. Constants: `UPPER_SNAKE_CASE`. Private/reset functions: `_prefixed` (e.g., `_reset_config()`, `_deep_merge()`, `_utc_now()`)
 - **Section separators in modules** — Use `# ============================================================================` comment blocks to separate logical sections within files (see `config.py`, `conftest.py`)
-- **No `__all__` except exceptions and `parallel/__init__.py`** — Only `exceptions.py` and `parallel/__init__.py` define `__all__`. Other modules rely on import-what-you-need pattern
 - **Ruff lint rules** — E (pycodestyle errors), F (pyflakes), W (warnings), I (isort), N (naming), D (docstrings), UP (pyupgrade), B (bugbear), C4 (comprehensions), SIM (simplify). B008 ignored (function call in default arg — needed for Typer). SIM108 ignored (no ternary enforcement)
 - **Enum values match config keys** — `Phase` enum values are snake_case strings that match config keys exactly (e.g., `Phase.CREATE_STORY = "create_story"`). Workflow names use kebab-case (e.g., `create-story`). Conversion: `phase_name.replace("_", "-")`
 
@@ -119,4 +118,4 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Review quarterly for outdated rules
 - Remove rules that become obvious over time
 
-Last Updated: 2026-03-23
+Last Updated: 2026-05-30
