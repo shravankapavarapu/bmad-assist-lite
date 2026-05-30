@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**bmad-assist-lite** is a lightweight, Windows-native Python CLI tool that automates the BMAD (Breakthrough Method of Agile AI Driven Development) methodology with Multi-LLM orchestration. It coordinates Claude Code CLI + Gemini CLI to run a 10-phase development loop: create story → validate → synthesize → implement → code-review → synthesize-review → quality-gate → (fix-quality-gate) → epic-quality-gate → retrospective.
+**bmad-assist-lite** is a lightweight, Windows-native Python CLI tool that automates the BMAD (Breakthrough Method of Agile AI Driven Development) methodology with Multi-LLM orchestration. It coordinates Claude Code CLI + Gemini CLI + Codex CLI to run a 10-phase development loop: create story → validate → synthesize → implement → code-review → synthesize-review → quality-gate → (fix-quality-gate) → epic-quality-gate → retrospective.
 
 Derived from bmad-assist, with ~60 source files, 13 test files, and 16 workflow templates. Plugin architecture for extensibility.
 
@@ -27,7 +27,7 @@ Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 5 comman
 ### Core Subsystems
 
 - **`core/`** — Config (2-tier YAML: global + project), paths singleton, state machine (10 phases), sprint status tracking, resume validation, toolchain detection (`toolchain.py`), quality gates parser (`quality_gates.py`), command runner (`command_runner.py`), exceptions, async utilities
-- **`providers/`** — BaseProvider ABC (Template Method pattern) with Claude SDK + Gemini implementations. `base.py` defines concrete `invoke()` that creates `ResultCollector`, delegates to `_do_invoke()`, catches `TimeoutError` → `_handle_timeout()` with grace period, and calls `_cleanup()` in `finally`. `result_collector.py` provides thread-safe `ResultCollector` for streaming chunk accumulation and activity tracking. Windows-safe process management in `_windows.py`
+- **`providers/`** — BaseProvider ABC (Template Method pattern) with Claude SDK, Gemini, and Codex implementations. `base.py` defines concrete `invoke()` that creates `ResultCollector`, delegates to `_do_invoke()`, catches `TimeoutError` → `_handle_timeout()` with grace period, and calls `_cleanup()` in `finally`. `result_collector.py` provides thread-safe `ResultCollector` for streaming chunk accumulation and activity tracking. Windows-safe process management in `_windows.py`. `codex.py` implements `CodexProvider` using subprocess + NDJSON stream parsing (following the GeminiProvider subprocess pattern), with structured output via `--output-schema` and `--output-last-message` file output for Evidence Score integration
 - **`compiler/`** — Workflow compilation: parse workflow.yaml → resolve variables → discover files → generate XML prompt.
   - **Context Requirements validation** — `context_filter.py` validates epic Context Requirements references at compilation time. Missing non-optional documents or sections raise `CompilerError` (all missing items collected and reported in a single error with actionable fix instructions). Documents referenced with a `(skip)` directive (exclude from context) that are missing are silently ignored.
   - **`(optional)` convention** — Epic Context Requirements entries can include an `(optional)` marker (document-level: `(full) (optional)`; per-section: `Section Name (optional)`) so missing optional refs produce warnings instead of errors.
@@ -93,7 +93,7 @@ New providers must extend `BaseProvider` and implement:
 - **`_cleanup()`** — Kill process / close connection. Called in `finally` by the base class, guaranteed to run on success, timeout, and exceptions
 - **`parse_output(result)`** — Extract response text from `ProviderResult`
 - **`supports_model(model)`** — Return `True` if the provider supports the given model string
-- **`provider_name`** property — Return the provider identifier string (e.g., `"claude"`, `"gemini"`)
+- **`provider_name`** property — Return the provider identifier string (e.g., `"claude"`, `"gemini"`, `"codex"`)
 
 ### Init Command
 
@@ -113,11 +113,13 @@ To change which LLM models are used, edit `bmad-assist-lite.yaml` in your projec
 ```yaml
 providers:
   master:
-    provider: claude    # or: gemini
+    provider: claude    # or: gemini, codex
     model: opus         # Claude: opus, sonnet, haiku (or full ID like claude-sonnet-4-5-20250929)
   multi:
     - provider: gemini
       model: gemini-2.5-flash  # Any Gemini model string (validated by Gemini CLI)
+    - provider: codex
+      model: gpt-5.3-codex    # Any gpt-*/codex-* model
     - provider: claude
       model: haiku
 ```
@@ -125,6 +127,7 @@ providers:
 **Valid model values:**
 - **Claude** (`providers/claude_sdk.py`): `opus`, `sonnet`, `haiku`, or any `claude-*` full model ID. Default: `opus`
 - **Gemini** (`providers/gemini.py`): Any model string (e.g., `gemini-2.5-flash`, `gemini-2.5-pro`). Validated by Gemini CLI at runtime. Default: `gemini-2.5-flash`
+- **Codex** (`providers/codex.py`): `codex-mini-latest`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, or any `gpt-`/`codex-` prefixed model. Default: `codex-mini-latest`
 
 **Config model definitions** are in `core/config.py`: `MasterProviderConfig` and `MultiProviderConfig` Pydantic models define the `provider` and `model` fields.
 
@@ -161,6 +164,8 @@ providers:
   multi:
     - provider: gemini
       model: gemini-2.5-flash
+    - provider: codex
+      model: gpt-5.3-codex
     - provider: claude
       model: sonnet
 
