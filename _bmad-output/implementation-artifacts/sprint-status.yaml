@@ -115,11 +115,11 @@ development_status:
   epic-9-retrospective: done
 
   # Epic 10: Codex CLI Provider (Replace Gemini)
-  epic-10: in-progress
+  epic-10: done
   10-1-codex-provider-core: done
   10-2-provider-registry: done
   10-3-structured-output: done
   10-4-evidence-score-integration: done
   10-5-configuration-and-docs: done
   10-6-e2e-testing-and-hardening: done
-  10-7-epic-documentation-sync: ready-for-dev
+  10-7-epic-documentation-sync: done
