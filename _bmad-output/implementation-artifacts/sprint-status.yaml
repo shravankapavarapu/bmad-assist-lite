@@ -116,8 +116,8 @@ development_status:
 
   # Epic 10: Codex CLI Provider (Replace Gemini)
   epic-10: in-progress
-  10-1-codex-provider-core: ready-for-dev
-  10-2-provider-registry: backlog
+  10-1-codex-provider-core: done
+  10-2-provider-registry: ready-for-dev
   10-3-structured-output: backlog
   10-4-evidence-score-integration: backlog
   10-5-configuration-and-docs: backlog

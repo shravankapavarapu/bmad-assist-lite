@@ -8,7 +8,7 @@
 
 | # | Story | Status | Review Cycles | Decisions |
 |---|---|---|---|---|
-| 10.1 | Codex Provider Core | pending | - | - |
+| 10.1 | Codex Provider Core | done | 2 | 4 |
 | 10.2 | Provider Registry Integration | pending | - | - |
 | 10.3 | Structured Output via --output-schema | pending | - | - |
 | 10.4 | Evidence Score Integration | pending | - | - |
@@ -18,7 +18,7 @@
 
 ## Current Activity
 
-**Story:** 10.1 — Codex Provider Core
+**Story:** 10.2 — Provider Registry Integration
 **Step:** qa
 **Detail:** Verifying acceptance criteria
 
@@ -26,7 +26,7 @@
 
 | Metric | Value |
 |---|---|
-| Completed | 0 / 7 |
+| Completed | 1 / 7 |
 | Failed | 0 |
 | Decisions made | 0 |
 | Total elapsed | 0m |

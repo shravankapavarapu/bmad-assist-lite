@@ -2,6 +2,7 @@
 
 Provider Registry:
     - ClaudeSDKProvider: Claude integration using claude-agent-sdk
+    - CodexProvider: Codex CLI subprocess provider
     - GeminiProvider: Gemini CLI subprocess provider
 
 Registry Functions:
@@ -28,11 +29,13 @@ from .base import (
 
 if TYPE_CHECKING:
     from .claude_sdk import ClaudeSDKProvider as ClaudeSDKProvider
+    from .codex import CodexProvider as CodexProvider
     from .gemini import GeminiProvider as GeminiProvider
 
 __all__ = [
     "BaseProvider",
     "ClaudeSDKProvider",
+    "CodexProvider",
     "ExitStatus",
     "GeminiProvider",
     "ProviderResult",
@@ -50,6 +53,7 @@ __all__ = [
 # Lazy loading for heavy provider imports
 _lazy_imports = {
     "ClaudeSDKProvider": ".claude_sdk",
+    "CodexProvider": ".codex",
     "GeminiProvider": ".gemini",
 }
 
@@ -71,11 +75,13 @@ _REGISTRY: dict[str, type[BaseProvider]] = {}
 
 def _init_default_providers() -> None:
     from .claude_sdk import ClaudeSDKProvider
+    from .codex import CodexProvider
     from .gemini import GeminiProvider
 
     _REGISTRY.update(
         {
             "claude": ClaudeSDKProvider,
+            "codex": CodexProvider,
             "gemini": GeminiProvider,
         }
     )
