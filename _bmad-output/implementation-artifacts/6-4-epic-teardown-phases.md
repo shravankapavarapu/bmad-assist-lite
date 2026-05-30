@@ -1,6 +1,6 @@
 # Story 6.4: Epic Teardown Phases
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -224,10 +224,10 @@ tests/test_parallel_teardown.py
 
 | Gate | Command | Status |
 |------|---------|--------|
-| Lint | `ruff check src/bmad_assist_lite/parallel/orchestrator.py src/bmad_assist_lite/parallel/logging.py src/bmad_assist_lite/cli.py tests/test_parallel_teardown.py` | **PENDING** |
-| Typecheck | `mypy src/bmad_assist_lite/parallel/orchestrator.py src/bmad_assist_lite/parallel/logging.py src/bmad_assist_lite/cli.py` | **PENDING** |
-| Build | `python -m py_compile src/bmad_assist_lite/parallel/orchestrator.py && python -m py_compile src/bmad_assist_lite/cli.py` | **PENDING** |
-| Tests | `pytest tests/test_parallel_teardown.py -v --tb=short` | **PENDING** |
+| Lint | `ruff check src/bmad_assist_lite/parallel/orchestrator.py src/bmad_assist_lite/parallel/logging.py src/bmad_assist_lite/cli.py tests/test_parallel_teardown.py` | **PASS** |
+| Typecheck | `mypy src/bmad_assist_lite/parallel/orchestrator.py src/bmad_assist_lite/parallel/logging.py src/bmad_assist_lite/cli.py` | **PASS** |
+| Build | `python -m py_compile src/bmad_assist_lite/parallel/orchestrator.py && python -m py_compile src/bmad_assist_lite/cli.py` | **PASS** |
+| Tests | `pytest tests/test_parallel_teardown.py -v --tb=short` | **PASS** |
 
 ## Senior Developer Review (AI)
 

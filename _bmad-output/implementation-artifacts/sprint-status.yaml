@@ -47,14 +47,14 @@ development_status:
   1-1-parallel-module-structure-and-configuration-model: done
   1-2-git-operations-wrapper: done
   1-3-existing-code-integration: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   # Epic 2: Dependency Resolution
   epic-2: done
   2-1-epic-dependency-parsing-and-dag-construction: done
   2-2-circular-dependency-detection-and-scheduling-scores: done
   2-3-ready-story-discovery-and-re-evaluation: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   # Epic 3: Parallel Execution Core
   epic-3: done
@@ -84,12 +84,12 @@ development_status:
   epic-5-retrospective: done
 
   # Epic 6: Observability & Epic Teardown
-  epic-6: in-progress
+  epic-6: done
   6-1-orchestrator-log-file: done
   6-2-enhanced-status-display-with-phase-info: done
   6-3-summary-report-generation: done
-  6-4-epic-teardown-phases: review
-  epic-6-retrospective: optional
+  6-4-epic-teardown-phases: done
+  epic-6-retrospective: done
 
   # Epic 7: Graceful Provider Timeout & Partial Result Recovery
   epic-7: done
@@ -108,8 +108,8 @@ development_status:
   epic-8-retrospective: done
 
   # Epic 9: Worktree Bootstrap & Validation
-  epic-9: in-progress
+  epic-9: done
   9-1-bootstrap-module-and-config: done
   9-2-canary-bootstrap-integration: done
   9-3-epic-documentation-sync: done
-  epic-9-retrospective: optional
+  epic-9-retrospective: done

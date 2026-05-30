@@ -237,7 +237,7 @@ class ClaudeSDKProvider(BaseProvider):
         self._current_pid = None
 
         if pid is None:
-            logger.warning(
+            logger.debug(
                 "No PID tracked for cleanup — claude process may be orphaned. "
                 "The SDK does not expose subprocess PIDs directly."
             )

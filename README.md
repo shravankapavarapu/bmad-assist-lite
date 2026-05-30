@@ -104,7 +104,7 @@ bmad-assist-lite run --epic 1
 #or 
 python -m bmad_assist_lite run --epic 1
 
-# Run starting from a specific story
+# Run only a specific story
 bmad-assist-lite run --epic 1 --story 2
 
 # Resume after interrupt (Ctrl+C saves state)

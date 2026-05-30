@@ -283,20 +283,19 @@ class TestCleanup:
     def test_cleanup_logs_warning_when_no_pid(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """_cleanup() logs WARNING when PID is None (AC #4, Task 6.7)."""
+        """_cleanup() logs DEBUG when PID is None (AC #4, Task 6.7)."""
         provider = ClaudeSDKProvider()
         provider._current_pid = None
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG):
             provider._cleanup()
 
         assert "No PID tracked" in caplog.text
-        # Verify it's logged at WARNING level, not DEBUG
-        warning_records = [
+        debug_records = [
             r for r in caplog.records
-            if r.levelno == logging.WARNING and "No PID tracked" in r.message
+            if r.levelno == logging.DEBUG and "No PID tracked" in r.message
         ]
-        assert len(warning_records) == 1
+        assert len(debug_records) == 1
 
     def test_cleanup_handles_terminate_failure(self) -> None:
         """_cleanup() does not raise when terminate_process() returns False (Task 6.8)."""

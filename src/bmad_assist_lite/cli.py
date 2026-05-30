@@ -141,7 +141,7 @@ def run(
         None,
         "--story",
         "-s",
-        help="Specific story number to start from.",
+        help="Run only this story number (implies --single-story).",
     ),
     verbose: int = typer.Option(
         0,
@@ -288,15 +288,11 @@ def run(
         typer.echo("No backlog stories match the specified filters.", err=True)
         raise typer.Exit(1)
 
-    # Filter by --story option
+    # Filter by --story option — specifying a story implies single-story mode
     if story:
+        single_story = True
         for e_num, story_list in list(epic_stories.items()):
-            if single_story:
-                # Exact match: only the specific story
-                filtered = [(en, sn, fk) for en, sn, fk in story_list if sn == story]
-            else:
-                # Start from specific story number (existing behavior)
-                filtered = [(en, sn, fk) for en, sn, fk in story_list if sn >= story]
+            filtered = [(en, sn, fk) for en, sn, fk in story_list if sn == story]
             if filtered:
                 epic_stories[e_num] = filtered
             else:
