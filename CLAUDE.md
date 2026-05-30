@@ -27,7 +27,7 @@ Source in `src/bmad_assist_lite/` with entry point `cli.py` (Typer app, 5 comman
 ### Core Subsystems
 
 - **`core/`** — Config (2-tier YAML: global + project), paths singleton, state machine (10 phases), sprint status tracking, resume validation, toolchain detection (`toolchain.py`), quality gates parser (`quality_gates.py`), command runner (`command_runner.py`), exceptions, async utilities
-- **`providers/`** — BaseProvider ABC (Template Method pattern) with Claude SDK, Gemini, and Codex implementations. `base.py` defines concrete `invoke()` that creates `ResultCollector`, delegates to `_do_invoke()`, catches `TimeoutError` → `_handle_timeout()` with grace period, and calls `_cleanup()` in `finally`. `result_collector.py` provides thread-safe `ResultCollector` for streaming chunk accumulation and activity tracking. Windows-safe process management in `_windows.py`. `codex.py` implements `CodexProvider` using subprocess + NDJSON stream parsing (following the GeminiProvider subprocess pattern), with structured output via `--output-schema` and `--output-last-message` file output for Evidence Score integration
+- **`providers/`** — BaseProvider ABC (Template Method pattern) with Claude SDK, Gemini, and Codex implementations. `base.py` defines concrete `invoke()` that creates `ResultCollector`, delegates to `_do_invoke()`, catches `TimeoutError` → `_handle_timeout()` with grace period, and calls `_cleanup()` in `finally`. Shared constants: `COMMON_TOOL_NAMES` (tool restriction prompts), `resolve_cli_path()` (3-tier CLI binary resolution: config override → PATH → known platform install locations). `result_collector.py` provides thread-safe `ResultCollector` for streaming chunk accumulation and activity tracking. Windows-safe process management in `_windows.py`. `codex.py` implements `CodexProvider` using subprocess + NDJSON stream parsing with prompt via stdin (avoids Windows 32K command line limit), structured output via `--output-schema` and `--output-last-message` file output, and `parse_output()` conversion to Evidence Score format. `gemini.py` uses `-p "." --yolo` flags for headless non-interactive mode
 - **`compiler/`** — Workflow compilation: parse workflow.yaml → resolve variables → discover files → generate XML prompt.
   - **Context Requirements validation** — `context_filter.py` validates epic Context Requirements references at compilation time. Missing non-optional documents or sections raise `CompilerError` (all missing items collected and reported in a single error with actionable fix instructions). Documents referenced with a `(skip)` directive (exclude from context) that are missing are silently ignored.
   - **`(optional)` convention** — Epic Context Requirements entries can include an `(optional)` marker (document-level: `(full) (optional)`; per-section: `Section Name (optional)`) so missing optional refs produce warnings instead of errors.
@@ -80,6 +80,7 @@ Deterministic, non-LLM quality gate enforcement after code review synthesis:
 
 - **Plugin-first** — Providers, phases, and workflows are all pluggable. Built-ins register first, plugins override
 - **Windows-native** — All process management uses `taskkill` on Windows, `killpg` on Unix. No SIGKILL/SIGTERM on Windows
+- **CLI binary resolution** — `resolve_cli_path()` in `base.py` resolves CLI binaries in order: config `providers.cli_paths.<name>` → `shutil.which()` → known platform install paths (Windows: `%LOCALAPPDATA%`, `%APPDATA%\npm`; Linux: `~/.local/bin`, `/usr/local/bin`, `~/.npm-global/bin`). Checks `.cmd`, `.exe`, and bare names on Windows
 - **2-tier config** — `~/.bmad-assist-lite/config.yaml` (global) + `bmad-assist-lite.yaml` (project)
 - **Singleton configs** — `get_config()`, `get_paths()` with `_reset_*()` for testing
 - **Atomic writes** — State and sprint-status files use temp + `os.replace` pattern to prevent corruption
@@ -91,7 +92,7 @@ New providers must extend `BaseProvider` and implement:
 
 - **`_do_invoke()`** — Provider-specific invocation. Feed `collector.add(chunk)` as streaming text arrives. Raise `TimeoutError` when the provider's internal timeout fires. The base class `invoke()` catches it and handles grace period logic
 - **`_cleanup()`** — Kill process / close connection. Called in `finally` by the base class, guaranteed to run on success, timeout, and exceptions
-- **`parse_output(result)`** — Extract response text from `ProviderResult`
+- **`parse_output(result)`** — Extract response text from `ProviderResult`. Multi-LLM handlers (`validate_story`, `code_review`) call this to get the scored text, so providers with structured output (e.g., Codex JSON) must convert to evidence score format here
 - **`supports_model(model)`** — Return `True` if the provider supports the given model string
 - **`provider_name`** property — Return the provider identifier string (e.g., `"claude"`, `"gemini"`, `"codex"`)
 
@@ -127,7 +128,7 @@ providers:
 **Valid model values:**
 - **Claude** (`providers/claude_sdk.py`): `opus`, `sonnet`, `haiku`, or any `claude-*` full model ID. Default: `opus`
 - **Gemini** (`providers/gemini.py`): Any model string (e.g., `gemini-2.5-flash`, `gemini-2.5-pro`). Validated by Gemini CLI at runtime. Default: `gemini-2.5-flash`
-- **Codex** (`providers/codex.py`): `codex-mini-latest`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, or any `gpt-`/`codex-` prefixed model. Default: `codex-mini-latest`
+- **Codex** (`providers/codex.py`): `gpt-5.3-codex`, `gpt-5.1-codex-mini`, `o4-mini`, or any `gpt-`/`codex-`/`o1-`/`o3-`/`o4-` prefixed model. Default: `gpt-5.3-codex`. Requires OpenAI API key auth (`codex login --with-api-key`); ChatGPT auth does not support model selection
 
 **Config model definitions** are in `core/config.py`: `MasterProviderConfig` and `MultiProviderConfig` Pydantic models define the `provider` and `model` fields.
 
@@ -168,6 +169,9 @@ providers:
       model: gpt-5.3-codex
     - provider: claude
       model: sonnet
+  cli_paths:  # Override CLI binary paths (useful when venv strips PATH)
+    codex: "C:/path/to/codex.exe"
+    gemini: "C:/path/to/gemini.cmd"
 
 loop:
   story: [create_story, validate_story, validate_story_synthesis,
