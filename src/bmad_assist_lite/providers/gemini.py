@@ -151,6 +151,7 @@ class GeminiProvider(BaseProvider):
                 final_prompt = prompt + restriction_warning
 
         gemini_bin = resolve_cli_path("gemini")
+        logger.debug("Gemini CLI resolved to: %s", gemini_bin)
 
         command: list[str] = [
             gemini_bin,
@@ -335,7 +336,7 @@ class GeminiProvider(BaseProvider):
 
             except FileNotFoundError as e:
                 raise ProviderError(
-                    "Gemini CLI binary not found at resolved path. "
+                    f"Gemini CLI binary not found at resolved path: {gemini_bin}. "
                     "Set providers.cli_paths.gemini in config to specify explicitly."
                 ) from e
 

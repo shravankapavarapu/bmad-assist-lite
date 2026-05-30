@@ -92,12 +92,14 @@ def create_mock_process(
     returncode: int = 0,
     wait_side_effect: object = None,
 ) -> MagicMock:
-    """Create a mock subprocess.Popen with configurable behavior.
-
-    Unlike the Gemini mock, Codex uses stdin=DEVNULL so no stdin mock is needed.
-    """
+    """Create a mock subprocess.Popen with configurable behavior."""
     process = MagicMock()
     process.pid = 12345
+
+    # stdin mock (Codex now uses stdin=PIPE to avoid Windows command line length limits)
+    process.stdin = MagicMock()
+    process.stdin.write = MagicMock()
+    process.stdin.close = MagicMock()
 
     # Create line-by-line iterators for stdout/stderr
     stdout_lines = stdout_content.split("\n") if stdout_content else []
@@ -161,7 +163,8 @@ class TestInvocation:
         assert "--model" in command
         model_idx = command.index("--model")
         assert command[model_idx + 1] == "codex-mini-latest"
-        assert command[-1] == "test prompt"
+        assert "test prompt" not in command
+        process.stdin.write.assert_called_once_with("test prompt")
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
@@ -217,13 +220,13 @@ class TestInvocation:
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
     @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
-    def test_stdin_is_devnull(
+    def test_stdin_pipe_prompt(
         self,
         mock_popen: MagicMock,
         mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
-        """Verify Popen is called with stdin=subprocess.DEVNULL (Task 2.4)."""
+        """Verify prompt is written to stdin=PIPE (avoids Windows cmd length limits)."""
         import subprocess
 
         mock_resolve_cli.return_value = "/usr/bin/codex"
@@ -232,10 +235,12 @@ class TestInvocation:
         mock_popen.return_value = process
 
         provider = CodexProvider()
-        provider.invoke("test", timeout=300)
+        provider.invoke("test prompt", timeout=300)
 
         call_kwargs = mock_popen.call_args[1]
-        assert call_kwargs["stdin"] == subprocess.DEVNULL
+        assert call_kwargs["stdin"] == subprocess.PIPE
+        process.stdin.write.assert_called_once_with("test prompt")
+        process.stdin.close.assert_called_once()
 
     @patch("bmad_assist_lite.providers.codex.uuid")
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
@@ -388,13 +393,11 @@ class TestInvocation:
         provider = CodexProvider()
         provider.invoke("test prompt", allowed_tools=["Read", "Glob", "Grep"], timeout=300)
 
-        call_args = mock_popen.call_args
-        command = call_args[0][0]
-        # The prompt is the last element and should contain restriction text
-        prompt_arg = command[-1]
-        assert "TOOL ACCESS RESTRICTIONS" in prompt_arg
-        assert "FORBIDDEN" in prompt_arg
-        assert "Read" in prompt_arg
+        # Prompt with restriction text is written to stdin, not command args
+        written_prompt = process.stdin.write.call_args[0][0]
+        assert "TOOL ACCESS RESTRICTIONS" in written_prompt
+        assert "FORBIDDEN" in written_prompt
+        assert "Read" in written_prompt
 
     def test_invoke_is_base_class_method(self) -> None:
         """CodexProvider.invoke is BaseProvider.invoke (not overridden) (Task 2.11)."""

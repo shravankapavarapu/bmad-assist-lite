@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from subprocess import DEVNULL, PIPE, Popen, TimeoutExpired
+from subprocess import PIPE, Popen, TimeoutExpired
 from typing import Any
 
 from bmad_assist_lite.core.exceptions import (
@@ -306,6 +306,7 @@ class CodexProvider(BaseProvider):
                 final_prompt = prompt + restriction_warning
 
         codex_bin = resolve_cli_path("codex")
+        logger.debug("Codex CLI resolved to: %s", codex_bin)
 
         command: list[str] = [
             codex_bin,
@@ -343,8 +344,6 @@ class CodexProvider(BaseProvider):
                 _REVIEW_SCHEMA_PATH,
             )
 
-        command.append(final_prompt)
-
         response_text_parts: list[str] = []
         stderr_chunks: list[str] = []
         start_time = time.monotonic()
@@ -359,7 +358,7 @@ class CodexProvider(BaseProvider):
             popen_kwargs = get_subprocess_kwargs()
             process = Popen(
                 command,
-                stdin=DEVNULL,
+                stdin=PIPE,
                 stdout=PIPE,
                 stderr=PIPE,
                 text=True,
@@ -369,9 +368,12 @@ class CodexProvider(BaseProvider):
                 env=env,
                 **popen_kwargs,
             )
+            if process.stdin:
+                process.stdin.write(final_prompt)
+                process.stdin.close()
         except FileNotFoundError as e:
             raise ProviderError(
-                "Codex CLI binary not found at resolved path. "
+                f"Codex CLI binary not found at resolved path: {codex_bin}. "
                 "Set providers.cli_paths.codex in config to specify explicitly."
             ) from e
 

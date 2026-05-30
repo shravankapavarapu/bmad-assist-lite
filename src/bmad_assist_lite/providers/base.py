@@ -95,19 +95,27 @@ def resolve_cli_path(cli_name: str) -> str:
     2. ``shutil.which()`` (PATH lookup)
     3. Known platform-specific install locations
     """
-    from bmad_assist_lite.core.config import get_config
+    from bmad_assist_lite.core.exceptions import ProviderError
 
-    config = get_config()
-    if config and config.providers.cli_paths:
+    try:
+        from bmad_assist_lite.core.config import get_config
+
+        config = get_config()
+    except Exception:
+        config = None
+
+    if config and hasattr(config.providers, "cli_paths") and config.providers.cli_paths:
         override: str | None = getattr(config.providers.cli_paths, cli_name, None)
         if override:
             p = Path(override)
             if p.is_file():
+                logger.debug("Resolved %s via config cli_paths: %s", cli_name, p)
                 return str(p)
             logger.warning("Configured cli_paths.%s=%s not found, falling back", cli_name, override)
 
     found = shutil.which(cli_name)
     if found:
+        logger.debug("Resolved %s via PATH: %s", cli_name, found)
         return found
 
     suffixes = [".cmd", ".exe", ""] if sys.platform == "win32" else [""]
@@ -117,8 +125,6 @@ def resolve_cli_path(cli_name: str) -> str:
             if candidate.is_file():
                 logger.info("Found %s at known path: %s", cli_name, candidate)
                 return str(candidate)
-
-    from bmad_assist_lite.core.exceptions import ProviderError
 
     raise ProviderError(
         f"{cli_name} CLI not found. Checked PATH and known install locations. "
