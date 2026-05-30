@@ -160,6 +160,7 @@ class GeminiProvider(BaseProvider):
             "--output-format",
             "stream-json",
             "--yolo",
+            "-p", ".",
         ]
 
         returncode = 1
