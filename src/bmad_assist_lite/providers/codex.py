@@ -13,6 +13,7 @@ import os
 import shutil
 import threading
 import time
+import uuid
 from pathlib import Path
 from subprocess import DEVNULL, PIPE, Popen, TimeoutExpired
 from typing import Any
@@ -34,6 +35,14 @@ from bmad_assist_lite.providers.result_collector import ResultCollector
 logger = logging.getLogger(__name__)
 
 STDERR_TRUNCATE_LENGTH: int = 200
+
+# Path to the bundled JSON Schema for structured review output
+_REVIEW_SCHEMA_PATH: Path = (
+    Path(__file__).resolve().parent.parent
+    / "workflows"
+    / "schemas"
+    / "codex-review-schema.json"
+)
 
 # Common tool names for allowed_tools restriction prompt
 _COMMON_TOOL_NAMES: frozenset[str] = frozenset(
@@ -85,6 +94,8 @@ class CodexProvider(BaseProvider):
         self._current_process: Popen[str] | None = None
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
+        self._temp_output_path: Path | None = None
+        self._structured_output: str | None = None
 
     @property
     def provider_name(self) -> str:
@@ -105,7 +116,18 @@ class CodexProvider(BaseProvider):
         return model.startswith("gpt-") or model.startswith("codex-")
 
     def parse_output(self, result: ProviderResult) -> str:
-        """Extract response text from provider result."""
+        """Extract response text from provider result.
+
+        Uses cached structured JSON read during ``_do_invoke()`` (stored in
+        ``self._structured_output``).  Falls back to ``result.stdout.strip()``
+        if no structured output was captured (graceful degradation for older
+        Codex versions or when ``--output-schema`` was not applied).
+        """
+        if self._structured_output is not None:
+            logger.debug("parse_output: using cached structured JSON output")
+            return self._structured_output
+
+        logger.debug("parse_output: using stdout text fallback")
         return result.stdout.strip()
 
     def _do_invoke(
@@ -182,8 +204,37 @@ class CodexProvider(BaseProvider):
             "--json",
             "--model",
             effective_model,
-            final_prompt,
         ]
+
+        # Add --output-schema and --output-last-message for structured output
+        if _REVIEW_SCHEMA_PATH.is_file():
+            temp_dir = (
+                (cwd or Path.cwd()) / ".bmad-assist-lite" / "cache"
+            )
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_output = (
+                temp_dir / f"codex-review-{uuid.uuid4().hex[:8]}.json"
+            )
+            self._temp_output_path = temp_output
+            command.extend([
+                "--output-schema",
+                str(_REVIEW_SCHEMA_PATH),
+                "--output-last-message",
+                str(temp_output),
+            ])
+            logger.debug(
+                "Structured output: schema=%s, output=%s",
+                _REVIEW_SCHEMA_PATH,
+                temp_output,
+            )
+        else:
+            logger.warning(
+                "Review schema not found at %s, proceeding without "
+                "--output-schema (structured output disabled)",
+                _REVIEW_SCHEMA_PATH,
+            )
+
+        command.append(final_prompt)
 
         response_text_parts: list[str] = []
         stderr_chunks: list[str] = []
@@ -319,6 +370,30 @@ class CodexProvider(BaseProvider):
 
         response_text = "".join(response_text_parts)
 
+        # Read structured output file before _cleanup() deletes it
+        if self._temp_output_path is not None:
+            try:
+                content = self._temp_output_path.read_text(encoding="utf-8")
+                if content.strip():
+                    # Validate it is parseable JSON before caching
+                    json.loads(content)
+                    self._structured_output = content.strip()
+                    logger.debug(
+                        "Cached structured JSON output from %s",
+                        self._temp_output_path,
+                    )
+                else:
+                    logger.debug(
+                        "Structured output file is empty, will use stdout fallback",
+                    )
+            except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+                logger.warning(
+                    "Failed to read structured output from %s (%s), "
+                    "will use stdout fallback",
+                    self._temp_output_path,
+                    exc,
+                )
+
         logger.info(
             "Codex CLI completed: duration=%dms, exit_code=%d, text_len=%d",
             duration_ms,
@@ -336,23 +411,28 @@ class CodexProvider(BaseProvider):
         )
 
     def _cleanup(self) -> None:
-        """Terminate subprocess and join reader threads.
+        """Terminate subprocess, join reader threads, and remove temp files.
 
         Called by the base class invoke() in a finally block -- guaranteed to run
         on success, timeout, and unexpected exceptions.
 
         If the subprocess is still running (poll() returns None), calls
         kill_process() for platform-safe termination. Joins reader threads
-        with a short timeout to prevent thread leaks.
+        with a short timeout to prevent thread leaks. Removes the temp output
+        file created for ``--output-last-message`` if it exists.
         """
         process = self._current_process
         stdout_thread = self._stdout_thread
         stderr_thread = self._stderr_thread
+        temp_output = self._temp_output_path
 
         # Reset state first to prevent re-entry
         self._current_process = None
         self._stdout_thread = None
         self._stderr_thread = None
+        self._temp_output_path = None
+        # Note: _structured_output is intentionally NOT reset here.
+        # It must survive _cleanup() so parse_output() can read it afterward.
 
         # Kill process if still running
         if process is not None and process.poll() is None:
@@ -368,3 +448,8 @@ class CodexProvider(BaseProvider):
             stdout_thread.join(timeout=1)
         if stderr_thread is not None:
             stderr_thread.join(timeout=1)
+
+        # Clean up temp output file (may be locked by antivirus on Windows)
+        if temp_output is not None:
+            with contextlib.suppress(OSError):
+                temp_output.unlink(missing_ok=True)
