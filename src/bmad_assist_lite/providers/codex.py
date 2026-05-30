@@ -36,6 +36,19 @@ logger = logging.getLogger(__name__)
 
 STDERR_TRUNCATE_LENGTH: int = 200
 
+# Priority-to-severity mapping for Evidence Score integration (Story 10.4)
+# Maps Codex structured JSON priority strings to (severity_label, emoji, score) tuples.
+_PRIORITY_TO_SEVERITY: dict[str, tuple[str, str, float]] = {
+    "P0": ("CRITICAL", "\U0001f534", 3.0),
+    "P1": ("IMPORTANT", "\U0001f7e0", 1.0),
+    "P2": ("MINOR", "\U0001f7e1", 0.3),
+    "P3": ("MINOR", "\U0001f7e1", 0.3),
+}
+
+# Default number of clean review categories for clean pass formatting.
+# Represents: architecture, correctness, testing, performance, security.
+_DEFAULT_CLEAN_PASS_COUNT: int = 5
+
 # Path to the bundled JSON Schema for structured review output
 _REVIEW_SCHEMA_PATH: Path = (
     Path(__file__).resolve().parent.parent
@@ -48,6 +61,93 @@ _REVIEW_SCHEMA_PATH: Path = (
 _COMMON_TOOL_NAMES: frozenset[str] = frozenset(
     {"Edit", "Write", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Read"}
 )
+
+
+def _format_codex_json_as_evidence_text(json_str: str) -> str | None:
+    """Convert Codex structured JSON output to evidence score text format.
+
+    Attempts to parse *json_str* as JSON matching the Codex review schema
+    (``findings``, ``overall_verdict``, ``summary`` top-level keys).  If the
+    JSON is valid and matches the schema, returns a formatted text string
+    containing an Evidence Score Summary table that the existing evidence
+    score parser can recognise.
+
+    Args:
+        json_str: Raw JSON string (potentially from ``--output-last-message``).
+
+    Returns:
+        Formatted evidence text if *json_str* is valid Codex review JSON,
+        or ``None`` if it is not valid JSON or does not match the schema.
+
+    """
+    try:
+        data = json.loads(json_str)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    # Validate expected top-level keys
+    if not isinstance(data, dict):
+        return None
+    if not all(k in data for k in ("findings", "overall_verdict", "summary")):
+        return None
+
+    findings = data.get("findings", [])
+    if not isinstance(findings, list):
+        return None
+
+    overall_verdict: str = data.get("overall_verdict", "")
+    summary: str = data.get("summary", "")
+
+    lines: list[str] = [
+        "## Evidence Score Summary",
+        "",
+        "| Severity | Description | Source | Score |",
+        "|----------|-------------|--------|-------|",
+    ]
+
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        title = finding.get("title", "").replace("|", "/").replace("\n", " ")
+        body = finding.get("body", "").replace("|", "/").replace("\n", " ")
+        priority = finding.get("priority", "")
+
+        severity_info = _PRIORITY_TO_SEVERITY.get(priority)
+        if severity_info is None:
+            logger.warning(
+                "Unknown Codex priority %r, defaulting to MINOR",
+                priority,
+            )
+            severity_info = ("MINOR", "\U0001f7e1", 0.3)
+
+        severity_label, emoji, score = severity_info
+
+        # Extract source from code_location.file_path (optional)
+        code_location = finding.get("code_location")
+        source = "—"  # em-dash default
+        if isinstance(code_location, dict):
+            file_path = code_location.get("file_path")
+            if file_path:
+                source = str(file_path).replace("|", "/")
+
+        description = f"{title}: {body}" if title and body else (title or body or "")
+        lines.append(
+            f"| {emoji} {severity_label} | {description} | {source} | +{score} |"
+        )
+
+    # Clean pass: empty findings + PASS verdict
+    if not findings and overall_verdict == "PASS":
+        lines.append(
+            f"| \U0001f7e2 CLEAN PASS | {_DEFAULT_CLEAN_PASS_COUNT} |"
+        )
+
+    # Append verdict and summary
+    lines.append("")
+    lines.append(f"**Overall Verdict:** {overall_verdict}")
+    lines.append("")
+    lines.append(f"**Summary:** {summary}")
+
+    return "\n".join(lines)
 
 
 def _extract_agent_message_text(item: dict[str, Any]) -> str:
@@ -118,13 +218,28 @@ class CodexProvider(BaseProvider):
     def parse_output(self, result: ProviderResult) -> str:
         """Extract response text from provider result.
 
-        Uses cached structured JSON read during ``_do_invoke()`` (stored in
-        ``self._structured_output``).  Falls back to ``result.stdout.strip()``
-        if no structured output was captured (graceful degradation for older
-        Codex versions or when ``--output-schema`` was not applied).
+        When cached structured JSON is available (from ``_do_invoke()``),
+        attempts to convert Codex review JSON into evidence score text
+        format via ``_format_codex_json_as_evidence_text()``.  If the JSON
+        matches the review schema, returns the formatted evidence text.
+        If conversion returns ``None`` (not review JSON), falls back to the
+        raw cached JSON string.  Falls back to ``result.stdout.strip()``
+        if no structured output was captured at all.
         """
         if self._structured_output is not None:
-            logger.debug("parse_output: using cached structured JSON output")
+            formatted = _format_codex_json_as_evidence_text(
+                self._structured_output,
+            )
+            if formatted is not None:
+                logger.debug(
+                    "parse_output: converted structured JSON to "
+                    "evidence text format",
+                )
+                return formatted
+            logger.debug(
+                "parse_output: structured JSON is not review schema, "
+                "returning raw JSON",
+            )
             return self._structured_output
 
         logger.debug("parse_output: using stdout text fallback")

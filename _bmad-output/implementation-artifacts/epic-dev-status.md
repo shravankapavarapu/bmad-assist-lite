@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | 10.1 | Codex Provider Core | done | 2 | 4 |
 | 10.2 | Provider Registry Integration | done | 1 | 3 |
-| 10.3 | Structured Output via --output-schema | pending | - | - |
+| 10.3 | Structured Output via --output-schema | done | 2 | 6 |
 | 10.4 | Evidence Score Integration | pending | - | - |
 | 10.5 | Configuration & Documentation | pending | - | - |
 | 10.6 | E2E Testing & Hardening | pending | - | - |
@@ -18,7 +18,7 @@
 
 ## Current Activity
 
-**Story:** 10.3 — Structured Output via --output-schema
+**Story:** 10.4 — Evidence Score Integration
 **Step:** qa
 **Detail:** Verifying acceptance criteria
 
@@ -26,7 +26,7 @@
 
 | Metric | Value |
 |---|---|
-| Completed | 2 / 7 |
+| Completed | 3 / 7 |
 | Failed | 0 |
 | Decisions made | 0 |
 | Total elapsed | 0m |
