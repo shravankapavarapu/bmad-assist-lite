@@ -12,13 +12,13 @@
 | 10.2 | Provider Registry Integration | done | 1 | 3 |
 | 10.3 | Structured Output via --output-schema | done | 2 | 6 |
 | 10.4 | Evidence Score Integration | done | 2 | 6 |
-| 10.5 | Configuration & Documentation | pending | - | - |
+| 10.5 | Configuration & Documentation | done | 1 | 8 |
 | 10.6 | E2E Testing & Hardening | pending | - | - |
 | 10.7 | Epic Documentation Sync | pending | - | - |
 
 ## Current Activity
 
-**Story:** 10.5 — Configuration & Documentation
+**Story:** 10.6 — E2E Testing & Hardening
 **Step:** qa
 **Detail:** Verifying acceptance criteria
 
@@ -26,7 +26,7 @@
 
 | Metric | Value |
 |---|---|
-| Completed | 4 / 7 |
+| Completed | 5 / 7 |
 | Failed | 0 |
 | Decisions made | 0 |
 | Total elapsed | 0m |
