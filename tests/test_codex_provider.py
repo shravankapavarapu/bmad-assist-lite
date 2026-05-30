@@ -136,16 +136,16 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_command_includes_exec_json_model(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Verify command includes codex exec --json --model <model> <prompt> (Task 2.1)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("Hello"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -165,16 +165,16 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_model_flag_uses_explicit_model(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """When model='gpt-5.3-codex', command uses that model (Task 2.2)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -190,16 +190,16 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_model_flag_uses_default_when_none(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """When model=None, uses 'codex-mini-latest' default (Task 2.3)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -215,18 +215,18 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_stdin_is_devnull(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Verify Popen is called with stdin=subprocess.DEVNULL (Task 2.4)."""
         import subprocess
 
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -239,17 +239,17 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex.uuid")
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_output_schema_flag_added(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
         mock_uuid: MagicMock,
     ) -> None:
         """When schema file exists, command includes --output-schema (Task 2.5)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         mock_uuid.uuid4.return_value = MagicMock(hex="abcdef1234567890")
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
@@ -271,17 +271,17 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex.uuid")
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_output_last_message_flag_added(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
         mock_uuid: MagicMock,
     ) -> None:
         """Verify --output-last-message points to cache dir (Task 2.6)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         mock_uuid.uuid4.return_value = MagicMock(hex="abcdef1234567890")
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
@@ -306,16 +306,16 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_normal_completion_returns_result(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Full NDJSON stream -> ProviderResult with timed_out=False (Task 2.7)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("Hello World"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -329,16 +329,16 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_cleanup_called_on_success(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """_cleanup() is called even on successful completion (Task 2.8)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("response"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -350,16 +350,16 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_duration_ms_is_non_negative(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Duration is measured and non-negative (Task 2.9)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -371,16 +371,16 @@ class TestInvocation:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_tool_restriction_prompt(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """allowed_tools parameter produces TOOL ACCESS RESTRICTIONS text (Task 2.10)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -412,16 +412,16 @@ class TestNDJSONParsing:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_agent_message_text_extracted(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Single item.completed with agent_message -> text in result.stdout (Task 3.1)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(
             make_item_completed_agent_message("Hello from Codex")
         )
@@ -435,16 +435,16 @@ class TestNDJSONParsing:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_multiple_agent_messages_captured(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Multiple item.completed events -> all text captured (Task 3.2)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(
             make_item_completed_agent_message("chunk1"),
             make_item_completed_agent_message("chunk2"),
@@ -462,16 +462,16 @@ class TestNDJSONParsing:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_command_execution_events_ignored_in_text(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """item.completed with command_execution does NOT appear in text (Task 3.3)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(
             make_item_completed_agent_message("real content"),
             make_item_completed_command_execution("ls -la"),
@@ -487,16 +487,16 @@ class TestNDJSONParsing:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_malformed_ndjson_skipped(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Invalid JSON lines are silently skipped without error (Task 3.4)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = "not valid json\n{also broken\n"
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -509,16 +509,16 @@ class TestNDJSONParsing:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_mixed_valid_and_invalid_lines(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Mix of valid NDJSON and garbage -> only valid text captured (Task 3.5)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = (
             "garbage line\n"
             + make_item_completed_agent_message("valid content")
@@ -534,16 +534,16 @@ class TestNDJSONParsing:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_empty_ndjson_stream(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Empty stdout -> empty response text, no errors (Task 3.6)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         process = create_mock_process(stdout_content="", returncode=0)
         mock_popen.return_value = process
 
@@ -555,16 +555,16 @@ class TestNDJSONParsing:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_agent_message_with_empty_content(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """agent_message with empty content array -> no text added (Task 3.7)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         empty_content_event = make_ndjson_line({
             "type": "item.completed",
             "item": {
@@ -583,16 +583,16 @@ class TestNDJSONParsing:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_collector_receives_all_chunks(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Verify ResultCollector.add() is called for each agent_message chunk (Task 3.8)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(
             make_item_completed_agent_message("A"),
             make_item_completed_agent_message("B"),
@@ -741,16 +741,16 @@ class TestCleanup:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_cleanup_exception_caught_by_base_class(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """_cleanup() raising OSError does not mask the provider result (Task 4.8)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -777,16 +777,16 @@ class TestTimeout:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_timeout_expired_becomes_timeout_error(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """TimeoutExpired from process.wait() -> ProviderTimeoutError (Task 5.1)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         process = create_mock_process(
             stdout_content="",
             wait_side_effect=TimeoutExpired(cmd="codex", timeout=10),
@@ -799,16 +799,16 @@ class TestTimeout:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_timeout_with_enough_text_returns_partial(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Timeout with >= 200 chars -> partial result (Task 5.2)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         large_text = "x" * 300
         stream = build_ndjson_stream(make_item_completed_agent_message(large_text))
         process = create_mock_process(
@@ -826,16 +826,16 @@ class TestTimeout:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_timeout_with_no_response_raises_error(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Timeout with no streamed text -> ProviderTimeoutError (Task 5.3)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         process = create_mock_process(
             stdout_content="",
             wait_side_effect=TimeoutExpired(cmd="codex", timeout=10),
@@ -848,16 +848,16 @@ class TestTimeout:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_timeout_collector_has_partial_content(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Collector accumulates text from chunks delivered before timeout (Task 5.4)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(
             make_item_completed_agent_message("partial1"),
             make_item_completed_agent_message("partial2"),
@@ -879,16 +879,16 @@ class TestTimeout:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_cleanup_called_on_timeout_path(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """_cleanup() called on timeout path via base class finally block (Task 5.5)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         process = create_mock_process(
             stdout_content="",
             wait_side_effect=TimeoutExpired(cmd="codex", timeout=10),
@@ -1225,45 +1225,45 @@ class TestSupportsModel:
 class TestErrors:
     """Test error conditions: CLI not found, exit codes, empty response."""
 
-    @patch("bmad_assist_lite.providers.codex.shutil")
-    def test_cli_not_found_via_shutil_which(self, mock_shutil: MagicMock) -> None:
-        """shutil.which('codex') returns None -> ProviderError (Task 8.1)."""
-        mock_shutil.which.return_value = None
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    def test_cli_not_found(self, mock_resolve_cli: MagicMock) -> None:
+        """resolve_cli_path raises ProviderError when codex not found (Task 8.1)."""
+        mock_resolve_cli.side_effect = ProviderError("codex CLI not found")
 
         provider = CodexProvider()
-        with pytest.raises(ProviderError, match="Codex CLI not found"):
+        with pytest.raises(ProviderError, match="codex CLI not found"):
             provider.invoke("test", timeout=300)
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_file_not_found_error_wrapped(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Popen raises FileNotFoundError -> ProviderError (Task 8.2)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         mock_popen.side_effect = FileNotFoundError("No such file")
 
         provider = CodexProvider()
-        with pytest.raises(ProviderError, match="Codex CLI not found"):
+        with pytest.raises(ProviderError, match="Codex CLI binary not found"):
             provider.invoke("test", timeout=300)
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_auth_error_exit_code(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Non-zero exit with auth error in stderr -> ProviderExitCodeError (Task 8.3)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         process = create_mock_process(
             stdout_content="",
             stderr_content="Error: authentication failed - please run codex auth",
@@ -1281,16 +1281,16 @@ class TestErrors:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_rate_limit_exit_code(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Non-zero exit with rate limit in stderr -> ProviderExitCodeError (Task 8.4)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         process = create_mock_process(
             stdout_content="",
             stderr_content="Error: rate limit exceeded, please try again later",
@@ -1308,16 +1308,16 @@ class TestErrors:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_network_failure_exit_code(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Non-zero exit with network error -> ProviderExitCodeError (Task 8.5)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         process = create_mock_process(
             stdout_content="",
             stderr_content="Error: network connection failed, unable to reach API",
@@ -1335,16 +1335,16 @@ class TestErrors:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_empty_response_returns_empty_string(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Zero exit code but empty stdout -> ProviderResult with empty stdout (Task 8.6)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         process = create_mock_process(stdout_content="", returncode=0)
         mock_popen.return_value = process
 
@@ -1356,16 +1356,16 @@ class TestErrors:
 
     @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.codex.shutil")
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
     def test_stderr_truncated_in_error_message(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Long stderr (> 200 chars) is truncated in error message (Task 8.7)."""
-        mock_shutil.which.return_value = "/usr/bin/codex"
+        mock_resolve_cli.return_value = "/usr/bin/codex"
         long_stderr = "x" * 500
         process = create_mock_process(
             stdout_content="",

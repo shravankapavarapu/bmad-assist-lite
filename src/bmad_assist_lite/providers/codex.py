@@ -10,7 +10,6 @@ import contextlib
 import json
 import logging
 import os
-import shutil
 import threading
 import time
 import uuid
@@ -29,6 +28,7 @@ from bmad_assist_lite.providers.base import (
     ExitStatus,
     ProviderResult,
     format_tag,
+    resolve_cli_path,
     write_progress,
 )
 from bmad_assist_lite.providers.result_collector import ResultCollector
@@ -305,10 +305,7 @@ class CodexProvider(BaseProvider):
                 )
                 final_prompt = prompt + restriction_warning
 
-        # Resolve full path to codex CLI
-        codex_bin = shutil.which("codex")
-        if codex_bin is None:
-            raise ProviderError("Codex CLI not found. Is 'codex' in PATH?")
+        codex_bin = resolve_cli_path("codex")
 
         command: list[str] = [
             codex_bin,
@@ -374,7 +371,8 @@ class CodexProvider(BaseProvider):
             )
         except FileNotFoundError as e:
             raise ProviderError(
-                "Codex CLI not found. Is 'codex' in PATH?"
+                "Codex CLI binary not found at resolved path. "
+                "Set providers.cli_paths.codex in config to specify explicitly."
             ) from e
 
         self._current_process = process

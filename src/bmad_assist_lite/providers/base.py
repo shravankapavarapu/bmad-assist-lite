@@ -1,6 +1,9 @@
 """Abstract base class and data structures for CLI provider implementations."""
 
 import logging
+import os
+import shutil
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -50,8 +53,71 @@ COMMON_TOOL_NAMES: frozenset[str] = frozenset(
     {"Edit", "Write", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Read"}
 )
 
+# Known install locations per platform, checked when shutil.which() fails.
+# Keyed by CLI name; values are lists of candidate paths per platform.
+_KNOWN_CLI_PATHS: dict[str, list[Path]] = {
+    "codex": (
+        [Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "OpenAI" / "Codex" / "bin"]
+        if sys.platform == "win32"
+        else [
+            Path.home() / ".local" / "bin",
+            Path("/usr/local/bin"),
+            Path.home() / ".npm-global" / "bin",
+            Path.home() / ".npm" / "bin",
+        ]
+    ),
+    "gemini": (
+        [Path(os.environ.get("LOCALAPPDATA", ""), "Google")]
+        if sys.platform == "win32"
+        else [
+            Path.home() / ".local" / "bin",
+            Path("/usr/local/bin"),
+            Path.home() / ".npm-global" / "bin",
+            Path.home() / ".npm" / "bin",
+        ]
+    ),
+}
+
 # Grace period polling interval in seconds
 _GRACE_POLL_INTERVAL: float = 2.0
+
+
+def resolve_cli_path(cli_name: str) -> str:
+    """Resolve the full path to a CLI binary.
+
+    Resolution order:
+    1. Config override (``providers.cli_paths.<cli_name>``)
+    2. ``shutil.which()`` (PATH lookup)
+    3. Known platform-specific install locations
+    """
+    from bmad_assist_lite.core.config import get_config
+
+    config = get_config()
+    if config and config.providers.cli_paths:
+        override: str | None = getattr(config.providers.cli_paths, cli_name, None)
+        if override:
+            p = Path(override)
+            if p.is_file():
+                return str(p)
+            logger.warning("Configured cli_paths.%s=%s not found, falling back", cli_name, override)
+
+    found = shutil.which(cli_name)
+    if found:
+        return found
+
+    exe_suffix = ".exe" if sys.platform == "win32" else ""
+    for directory in _KNOWN_CLI_PATHS.get(cli_name, []):
+        candidate = directory / f"{cli_name}{exe_suffix}"
+        if candidate.is_file():
+            logger.info("Found %s at known path: %s", cli_name, candidate)
+            return str(candidate)
+
+    from bmad_assist_lite.core.exceptions import ProviderError
+
+    raise ProviderError(
+        f"{cli_name} CLI not found. Checked PATH and known install locations. "
+        f"Set providers.cli_paths.{cli_name} in config to specify the path explicitly."
+    )
 
 
 def format_tag(tag: str, color_index: int | None) -> str:

@@ -121,13 +121,13 @@ class TestNormalInvocation:
     """Test normal invocation path through the Template Method."""
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_normal_completion_returns_result(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Full response → ProviderResult with timed_out=False (AC #1)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
 
         stream = build_full_stream(
             make_init_message("sess-1"),
@@ -146,13 +146,13 @@ class TestNormalInvocation:
         assert result.exit_code == 0
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_cleanup_called_on_success(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """_cleanup() is called even on successful completion (AC #1)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(make_assistant_message("response"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -163,13 +163,13 @@ class TestNormalInvocation:
             mock_cleanup.assert_called_once()
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_duration_ms_is_non_negative(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Duration is measured and non-negative."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(make_assistant_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -180,13 +180,13 @@ class TestNormalInvocation:
         assert result.duration_ms >= 0
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_session_id_captured(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Session ID from init message is captured in ProviderResult."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(
             make_init_message("my-session-42"),
             make_assistant_message("hello"),
@@ -200,13 +200,13 @@ class TestNormalInvocation:
         assert result.provider_session_id == "my-session-42"
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_command_tuple_is_cli_command(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Command tuple on success path uses actual CLI command list (Task 4.1)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(make_assistant_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -220,13 +220,13 @@ class TestNormalInvocation:
         assert "gemini-2.5-pro" in result.command
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_explicit_model_used(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Explicit model parameter is used."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(make_assistant_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -246,13 +246,13 @@ class TestCollectorFeeding:
     """Test that all assistant content chunks are fed to the collector."""
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_multiple_assistant_messages_captured(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Multiple assistant messages → all content captured (Test 7.2)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(
             make_assistant_message("chunk1"),
             make_assistant_message("chunk2"),
@@ -269,13 +269,13 @@ class TestCollectorFeeding:
         assert "chunk3" in result.stdout
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_collector_receives_all_chunks(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Verify the collector accumulates all text chunks from JSON stream."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(
             make_assistant_message("A"),
             make_assistant_message("B"),
@@ -310,13 +310,13 @@ class TestCollectorFeeding:
         assert "C" in captured_collector[0].text
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_non_assistant_messages_not_in_text(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Non-assistant messages (tool_use, result) don't appear in response text."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(
             make_init_message(),
             make_assistant_message("real content"),
@@ -341,13 +341,13 @@ class TestTimeoutPropagation:
     """Test that timeout propagates to base class for grace period handling."""
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_timeout_with_enough_text_returns_partial(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Timeout with >= 200 chars → partial result via base class (AC #3)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         large_text = "x" * 300
         stream = build_full_stream(make_assistant_message(large_text))
         process = create_mock_process(
@@ -365,13 +365,13 @@ class TestTimeoutPropagation:
         assert len(result.stdout) >= 200
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_timeout_with_no_response_raises_error(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Timeout with no response → ProviderTimeoutError."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         process = create_mock_process(
             stdout_content="",
             wait_side_effect=TimeoutExpired(cmd="gemini", timeout=10),
@@ -383,13 +383,13 @@ class TestTimeoutPropagation:
             provider.invoke("test", timeout=10)
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_timeout_expired_becomes_timeout_error(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """TimeoutExpired from process.wait() → TimeoutError for base class (Test 7.3)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         process = create_mock_process(
             stdout_content="",
             wait_side_effect=TimeoutExpired(cmd="gemini", timeout=10),
@@ -403,13 +403,13 @@ class TestTimeoutPropagation:
             provider.invoke("test", timeout=10)
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_timeout_collector_has_partial_content(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Collector has partial content from chunks delivered before timeout."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(
             make_assistant_message("partial1"),
             make_assistant_message("partial2"),
@@ -436,13 +436,13 @@ class TestTimeoutPropagation:
         assert "partial2" in exc_info.value.partial_result.stdout
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_cleanup_called_on_timeout_path(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """_cleanup() is called on timeout path via base class finally (AC #4)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         process = create_mock_process(
             stdout_content="",
             wait_side_effect=TimeoutExpired(cmd="gemini", timeout=10),
@@ -549,13 +549,13 @@ class TestCleanup:
         assert provider._stderr_thread is None
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_cleanup_called_after_invoke(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """_cleanup() is called in finally block after invoke completes."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(make_assistant_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -574,13 +574,13 @@ class TestCleanup:
         assert len(cleanup_calls) == 1
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_cleanup_exception_caught_by_base_class(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Base class wraps _cleanup() in try/except — exceptions don't mask results."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(make_assistant_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -607,17 +607,17 @@ class TestRetryLogic:
 
     @patch("bmad_assist_lite.providers.gemini.time.sleep")
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_retry_on_transient_error(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
         mock_sleep: MagicMock,
     ) -> None:
         """Transient error (exit_code!=0, empty stderr) → retry, then succeed (Test 7.7)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
 
         # First attempt: fail with exit_code=1, empty stderr (transient)
         fail_process = create_mock_process(
@@ -640,17 +640,17 @@ class TestRetryLogic:
 
     @patch("bmad_assist_lite.providers.gemini.time.sleep")
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_retry_collector_not_contaminated(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
         mock_sleep: MagicMock,
     ) -> None:
         """Collector only contains data from successful attempt, not failed retries."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
 
         # First attempt: streams "garbage_from_attempt_0" then fails
         fail_stream = build_full_stream(
@@ -680,16 +680,16 @@ class TestRetryLogic:
         assert "garbage_from_attempt_0" not in result.stdout
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_no_retry_on_non_transient_error(
         self,
         mock_popen: MagicMock,
-        mock_shutil: MagicMock,
+        mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
         """Non-transient error (exit_code!=0, has stderr) → no retry, raises."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
 
         process = create_mock_process(
             stdout_content="", stderr_content="real error output", returncode=1
@@ -734,13 +734,13 @@ class TestEdgeCases:
         assert "invoke" not in GeminiProvider.__dict__
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_tool_restriction_prompt(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """allowed_tools parameter produces restriction warning (Test 7.10)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(make_assistant_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -756,26 +756,26 @@ class TestEdgeCases:
         assert "Read" in written_prompt
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_file_not_found_wrapped_in_provider_error(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """FileNotFoundError from Popen → ProviderError (Test 7.11)."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         mock_popen.side_effect = FileNotFoundError("No such file")
 
         provider = GeminiProvider()
-        with pytest.raises(ProviderError, match="Gemini CLI not found"):
+        with pytest.raises(ProviderError, match="Gemini CLI binary not found"):
             provider.invoke("test")
 
-    @patch("bmad_assist_lite.providers.gemini.shutil")
-    def test_gemini_not_in_path_raises_error(self, mock_shutil: MagicMock) -> None:
-        """Gemini CLI not found in PATH → ProviderError."""
-        mock_shutil.which.return_value = None
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
+    def test_gemini_not_in_path_raises_error(self, mock_resolve_cli: MagicMock) -> None:
+        """resolve_cli_path raises ProviderError when gemini not found."""
+        mock_resolve_cli.side_effect = ProviderError("gemini CLI not found")
 
         provider = GeminiProvider()
-        with pytest.raises(ProviderError, match="Gemini CLI not found"):
+        with pytest.raises(ProviderError, match="gemini CLI not found"):
             provider.invoke("test")
 
 
@@ -842,13 +842,13 @@ class TestEmptyAndMalformedJSON:
     """Test behavior with empty or malformed JSON streams."""
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_empty_json_stream_returns_empty_result(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Empty JSON stream → empty stdout in result."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         process = create_mock_process(stdout_content="", returncode=0)
         mock_popen.return_value = process
 
@@ -859,13 +859,13 @@ class TestEmptyAndMalformedJSON:
         assert result.timed_out is False
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_malformed_json_lines_skipped(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """Malformed JSON lines are skipped without error."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = "not valid json\n" + make_assistant_message("valid content")
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process
@@ -876,13 +876,13 @@ class TestEmptyAndMalformedJSON:
         assert "valid content" in result.stdout
 
     @patch("bmad_assist_lite.providers.gemini.get_subprocess_kwargs", return_value={})
-    @patch("bmad_assist_lite.providers.gemini.shutil")
+    @patch("bmad_assist_lite.providers.gemini.resolve_cli_path")
     @patch("bmad_assist_lite.providers.gemini.Popen")
     def test_model_none_resolves_to_default(
-        self, mock_popen: MagicMock, mock_shutil: MagicMock, mock_kwargs: MagicMock
+        self, mock_popen: MagicMock, mock_resolve_cli: MagicMock, mock_kwargs: MagicMock
     ) -> None:
         """model=None resolves to default 'gemini-2.5-flash'."""
-        mock_shutil.which.return_value = "/usr/bin/gemini"
+        mock_resolve_cli.return_value = "/usr/bin/gemini"
         stream = build_full_stream(make_assistant_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
         mock_popen.return_value = process

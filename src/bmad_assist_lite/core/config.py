@@ -74,6 +74,15 @@ class MultiProviderConfig(BaseModel):
         return Path(self.settings).expanduser()
 
 
+class CliPathsConfig(BaseModel):
+    """Override paths for CLI-based provider binaries."""
+
+    model_config = ConfigDict(frozen=True)
+
+    codex: str | None = Field(None, description="Absolute path to codex binary")
+    gemini: str | None = Field(None, description="Absolute path to gemini binary")
+
+
 class ProviderConfig(BaseModel):
     """Provider configuration section."""
 
@@ -81,6 +90,7 @@ class ProviderConfig(BaseModel):
 
     master: MasterProviderConfig
     multi: list[MultiProviderConfig] = Field(default_factory=list)
+    cli_paths: CliPathsConfig = Field(default_factory=CliPathsConfig)
 
 
 class TimeoutsConfig(BaseModel):

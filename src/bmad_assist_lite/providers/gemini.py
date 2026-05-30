@@ -9,7 +9,6 @@ Implements the BaseProvider Template Method contract (Story 7.3):
 import json
 import logging
 import os
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -28,6 +27,7 @@ from bmad_assist_lite.providers.base import (
     ProviderResult,
     extract_tool_details,
     format_tag,
+    resolve_cli_path,
     validate_settings_file,
     write_progress,
 )
@@ -150,10 +150,7 @@ class GeminiProvider(BaseProvider):
                 )
                 final_prompt = prompt + restriction_warning
 
-        # Resolve full path to gemini CLI (needed on Windows for .cmd scripts)
-        gemini_bin = shutil.which("gemini")
-        if gemini_bin is None:
-            raise ProviderError("Gemini CLI not found. Is 'gemini' in PATH?")
+        gemini_bin = resolve_cli_path("gemini")
 
         command: list[str] = [
             gemini_bin,
@@ -337,9 +334,9 @@ class GeminiProvider(BaseProvider):
                 stderr_thread.join(timeout=5)
 
             except FileNotFoundError as e:
-                # Task 1.9: Wrap FileNotFoundError in ProviderError
                 raise ProviderError(
-                    "Gemini CLI not found. Is 'gemini' in PATH?"
+                    "Gemini CLI binary not found at resolved path. "
+                    "Set providers.cli_paths.gemini in config to specify explicitly."
                 ) from e
 
             duration_ms = int((time.monotonic() - start_time) * 1000)
