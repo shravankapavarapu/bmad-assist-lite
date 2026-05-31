@@ -43,6 +43,12 @@
       3. Track which review items are addressed during implementation
 
       If no review section exists, proceed directly to step 5.
+
+      IMPORTANT — Prior run artifacts:
+      If source files already exist from a prior failed run, do NOT assume they are
+      correct or complete. Treat them as a starting point that likely has issues.
+      You must still verify every task, fix problems, and run quality gates.
+      Never skip implementation just because files exist.
     </step>
 
     <step id="5" name="Implement Tasks">
@@ -55,8 +61,13 @@
       2. Implement the minimum code to pass (green)
       3. Refactor for quality (refactor)
       4. Verify tests actually exist and pass for this task
-      5. Mark task checkbox complete [x]
+      5. Immediately update the story file:
+         - Mark task checkbox complete [x]
+         - Mark every Acceptance Criteria satisfied by this task as [x]
       6. If addressing a review item, cross-reference the original finding
+
+      IMPORTANT: Update checkboxes after EACH task, not at the end. If you skip
+      this, the story will fail code review for incomplete artifact tracking.
 
       For each task, ensure:
       - Test file exists with real assertions (not placeholders)
@@ -79,10 +90,15 @@
       Do NOT proceed to completion with failing quality gates.
     </step>
 
-    <step id="7" name="Story Completion">
+    <step id="7" name="Verify Implementation and Complete Story">
+      BEFORE marking the story complete, verify actual work was done:
+      1. Run git diff --stat to confirm source files were created or modified
+      2. If no source files were changed, you have NOT completed implementation —
+         go back to step 5
+
       Definition of done:
-      - All acceptance criteria met and verified
-      - All task checkboxes checked [x]
+      - All acceptance criteria checkboxes marked [x] in the story file
+      - All task checkboxes checked [x] in the story file
       - All BLOCKING quality gates passing
       - Testing Requirements checkboxes updated
       - Quality Gates table updated with Pass/Fail status

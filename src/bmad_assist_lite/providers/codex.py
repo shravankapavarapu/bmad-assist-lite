@@ -93,7 +93,6 @@ def _format_codex_json_as_evidence_text(json_str: str) -> str | None:
         return None
 
     overall_verdict: str = data.get("overall_verdict", "")
-    summary: str = data.get("summary", "")
 
     lines: list[str] = [
         "## Evidence Score Summary",
@@ -101,6 +100,8 @@ def _format_codex_json_as_evidence_text(json_str: str) -> str | None:
         "| Severity | Description | Source | Score |",
         "|----------|-------------|--------|-------|",
     ]
+
+    total_score: float = 0.0
 
     for finding in findings:
         if not isinstance(finding, dict):
@@ -118,6 +119,7 @@ def _format_codex_json_as_evidence_text(json_str: str) -> str | None:
             severity_info = ("MINOR", "\U0001f7e1", 0.3)
 
         severity_label, emoji, score = severity_info
+        total_score += score
 
         # Extract source from code_location.file_path (optional)
         code_location = finding.get("code_location")
@@ -132,17 +134,41 @@ def _format_codex_json_as_evidence_text(json_str: str) -> str | None:
             f"| {emoji} {severity_label} | {description} | {source} | +{score} |"
         )
 
-    # Clean pass: empty findings + PASS verdict
+    # Clean pass deductions based on finding count and verdict
     if not findings and overall_verdict == "PASS":
+        clean_score = _DEFAULT_CLEAN_PASS_COUNT * -0.5
+        total_score += clean_score
         lines.append(
-            f"| \U0001f7e2 CLEAN PASS | {_DEFAULT_CLEAN_PASS_COUNT} |"
+            f"| \U0001f7e2 CLEAN PASS "
+            f"| {_DEFAULT_CLEAN_PASS_COUNT} categories | — | {clean_score} |"
         )
+    elif findings:
+        # Partial clean pass: deduct for categories not flagged
+        flagged = len(findings)
+        clean_categories = max(0, _DEFAULT_CLEAN_PASS_COUNT - flagged)
+        if clean_categories > 0:
+            clean_score = clean_categories * -0.5
+            total_score += clean_score
+            lines.append(
+                f"| \U0001f7e2 CLEAN PASS "
+                f"| {clean_categories} categories | — | {clean_score} |"
+            )
 
-    # Append verdict and summary
+    # Compute verdict from total score
+    total_score = max(total_score, 0.0)
+    if total_score <= 2.0:
+        verdict_label = "PASS"
+    elif total_score <= 5.0:
+        verdict_label = "MAJOR_REWORK"
+    else:
+        verdict_label = "REJECT"
+
     lines.append("")
-    lines.append(f"**Overall Verdict:** {overall_verdict}")
+    lines.append(f"### Evidence Score: {total_score:.1f}")
     lines.append("")
-    lines.append(f"**Summary:** {summary}")
+    lines.append("| Score | Verdict |")
+    lines.append("|-------|---------|")
+    lines.append(f"| **{total_score:.1f}** | **{verdict_label}** |")
 
     return "\n".join(lines)
 

@@ -1143,8 +1143,8 @@ class TestParseOutput:
         output = provider.parse_output(result)
         assert "src/core/config.py" in output
 
-    def test_verdict_and_summary_appended(self) -> None:
-        """overall_verdict and summary appended at end of formatted text (Task 6.10)."""
+    def test_verdict_and_score_appended(self) -> None:
+        """Evidence score and verdict appended at end of formatted text."""
         provider = CodexProvider()
         provider._structured_output = self._make_review_json(
             findings=[],
@@ -1162,8 +1162,10 @@ class TestParseOutput:
         )
 
         output = provider.parse_output(result)
-        assert "**Overall Verdict:** PASS" in output
-        assert "**Summary:** Everything looks great" in output
+        assert "### Evidence Score:" in output
+        assert "**PASS**" in output
+        # Summary field is intentionally excluded to prevent double-counting
+        assert "**Summary:**" not in output
 
 
 # ============================================================================
