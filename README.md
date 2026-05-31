@@ -129,6 +129,56 @@ bmad-assist-lite run --resume
 bmad-assist-lite run -vv
 ```
 
+### Run Stories in Parallel (Git Worktrees)
+
+Run multiple stories from an epic concurrently using git worktrees. Each story gets its own isolated worktree and branch, with results merged back sequentially.
+
+```bash
+# Run all stories from epic 1 in parallel (max 3 concurrent by default)
+bmad-assist-lite parallel run --epic 1
+
+# Run from a specific project directory
+bmad-assist-lite parallel run --epic 1 --project /path/to/project
+
+# Verbose output
+bmad-assist-lite parallel run --epic 1 -vv
+
+# Check status of a running parallel execution (safe from another terminal)
+bmad-assist-lite parallel status
+
+# Unblock a story that failed (resets to backlog for retry)
+bmad-assist-lite parallel unblock 3.2
+```
+
+**Requirements:**
+- Must be on a feature branch (not `main`/`master` or detached HEAD)
+- Epic must have a dedicated epic file (e.g., `epic-1.md`) in `planning-artifacts/`
+
+**How it works:**
+1. Parses the epic file and builds a dependency graph
+2. Creates git worktrees for each story (with optional bootstrap: file copy, setup commands, validation)
+3. Runs stories concurrently up to `max_concurrency`, respecting dependency ordering
+4. Merges completed stories back to the base branch sequentially
+5. Runs post-merge quality gates to catch integration issues
+
+**Configuration** (in `bmad-assist-lite.yaml`):
+
+```yaml
+parallel:
+  max_concurrency: 3          # max concurrent stories (1-5)
+  stagger_delay: 10.0         # seconds between story spawns
+  post_merge_fix_retries: 1   # retry attempts for post-merge quality gate fixes
+  conflict_resolution_timeout: 120  # seconds for Claude CLI conflict resolution
+  worktree_base_dir: null     # custom base dir for worktrees (null = auto)
+  copy_to_worktree: []        # files/dirs to copy to worktrees (e.g., [".env", "secrets/"])
+  setup_commands: []           # commands to run in each worktree (e.g., ["pip install -e ."])
+  validation_command: null     # smoke test after bootstrap (e.g., "pytest -q -x")
+  copy_strict: false           # true = error on missing copy source, false = warn
+  bootstrap_timeout: 120       # per-command timeout for setup/validation
+```
+
+The first worktree acts as a **canary** — it runs the full bootstrap with validation. If the canary fails, the entire run aborts immediately. If it passes, remaining worktrees skip the redundant validation step.
+
 ### Other Commands
 
 ```bash
@@ -449,6 +499,15 @@ src/bmad_assist_lite/
   loop/                     # Main loop, dispatch, transitions, signals, locking
     handlers/               # 10 phase handler implementations (7 LLM + 3 non-LLM)
     cleanup.py              # Crash recovery (temp file cleanup)
+  parallel/                 # Parallel story execution via git worktrees
+    orchestrator.py         # Async orchestrator with semaphore-based concurrency
+    worktree_manager.py     # Create/cleanup worktrees
+    bootstrap.py            # Worktree bootstrap pipeline (copy, setup, validate)
+    dependency_graph.py     # Story dependency DAG resolution
+    merger.py               # Sequential merge queue with post-merge quality gates
+    git_ops.py              # Branch operations
+    state.py                # ParallelState/StoryState frozen models with YAML persistence
+    cli.py                  # parallel run/status/unblock subcommands
   context_docs/             # Context7 library doc fetching, caching, injection
   validation/               # Evidence Score system (scoring, parsing, aggregation)
   plugins/                  # Plugin protocols, registry, loader
