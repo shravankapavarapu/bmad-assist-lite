@@ -1122,8 +1122,17 @@ class MergeQueue:
 
             logger.info("[MERGE|%s] Processing merge", story_id)
             try:
+                cr_timeout = (
+                    self._parallel_config.conflict_resolution_timeout
+                    if self._parallel_config is not None
+                    else 120
+                )
                 result = await asyncio.to_thread(
-                    merge_story, story_id, self._project_root
+                    merge_story,
+                    story_id,
+                    self._project_root,
+                    resolve=True,
+                    conflict_resolution_timeout=cr_timeout,
                 )
 
                 # Run post-merge QG only on successful merge

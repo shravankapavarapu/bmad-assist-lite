@@ -729,7 +729,9 @@ class TestMergeQueueProcessNext:
         assert result is not None
         assert result.success is True
         assert result.story_id == "3.1"
-        mock_merge.assert_called_once_with("3.1", Path("/repo"))
+        mock_merge.assert_called_once_with(
+            "3.1", Path("/repo"), resolve=True, conflict_resolution_timeout=120,
+        )
 
     async def test_process_next_returns_none_on_empty_queue(self) -> None:
         """Verify process_next returns None when queue is empty."""
@@ -782,7 +784,7 @@ class TestMergeQueueSequentialExecution:
 
         execution_log: list[str] = []
 
-        def slow_merge(story_id: str, project_root: Path) -> MergeResult:
+        def slow_merge(story_id: str, project_root: Path, **kwargs: object) -> MergeResult:
             execution_log.append(f"start-{story_id}")
             time.sleep(0.05)
             execution_log.append(f"end-{story_id}")
@@ -833,7 +835,7 @@ class TestMergeQueueSequentialExecution:
 
         merged_order: list[str] = []
 
-        def record_merge(story_id: str, project_root: Path) -> MergeResult:
+        def record_merge(story_id: str, project_root: Path, **kwargs: object) -> MergeResult:
             merged_order.append(story_id)
             return MergeResult(success=True, story_id=story_id)
 
