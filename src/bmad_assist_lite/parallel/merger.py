@@ -1009,11 +1009,15 @@ def run_post_merge_fix(
 
 
 def update_sprint_status_done(story_id: str, project_root: Path) -> None:
-    """Mark a story as ``done`` in ``sprint-status.yaml``.
+    """Mark a story as ``done`` in ``sprint-status.yaml`` and commit.
 
     Uses the existing :func:`~bmad_assist_lite.core.sprint_status.load_sprint_status`
     and :func:`~bmad_assist_lite.core.sprint_status.save_sprint_status` functions
     for atomic persistence.
+
+    After writing, commits ``sprint-status.yaml`` so the working tree is
+    clean before the next story merge.  Without this commit, the next
+    ``git merge`` would fail with "local changes would be overwritten".
 
     Sprint-status update failures are **non-fatal**: any exception is caught,
     logged as a warning, and not re-raised.
@@ -1036,6 +1040,13 @@ def update_sprint_status_done(story_id: str, project_root: Path) -> None:
         sprint_status.set_story_status(story_id, "done")
         save_sprint_status(sprint_status, path)
         logger.info("%s Updated sprint-status: story %s → done", tag, story_id)
+
+        _run_git(["add", str(path)], cwd=project_root, check=False)
+        _run_git(
+            ["commit", "-m", f"chore: mark story {story_id} done in sprint-status"],
+            cwd=project_root,
+            check=False,
+        )
     except Exception:
         logger.warning(
             "%s Failed to update sprint-status (non-fatal)",
