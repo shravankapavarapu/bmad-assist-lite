@@ -8,7 +8,6 @@ import pytest
 
 from bmad_assist_lite.parallel.logging import (
     _LOGGER_NAME,
-    _LOG_FILENAME,
     _TRUNCATION_LIMIT,
     _TRUNCATION_MARKER,
     _truncate_output,
@@ -47,10 +46,19 @@ def setup_log(log_dir: Path):
     # teardown handled by log_dir fixture
 
 
+def _find_log_file(project_root: Path) -> Path | None:
+    """Find the most recent parallel-*.log file."""
+    logs_dir = project_root / ".bmad-assist-lite" / "logs"
+    if not logs_dir.exists():
+        return None
+    log_files = sorted(logs_dir.glob("parallel-*.log"))
+    return log_files[-1] if log_files else None
+
+
 def _read_log(project_root: Path) -> str:
-    """Read the parallel-run.log file content."""
-    log_path = project_root / _LOG_FILENAME
-    if log_path.exists():
+    """Read the parallel log file content."""
+    log_path = _find_log_file(project_root)
+    if log_path and log_path.exists():
         return log_path.read_text(encoding="utf-8")
     return ""
 
@@ -83,7 +91,7 @@ class TestStdlibShadow:
 
 class TestSetupTeardown:
     def test_setup_creates_file_handler(self, log_dir: Path) -> None:
-        """Task 5.1: setup_parallel_log creates FileHandler writing to parallel-run.log."""
+        """Task 5.1: setup_parallel_log creates FileHandler in .bmad-assist-lite/logs/."""
         setup_parallel_log(log_dir)
 
         logger = logging.getLogger(_LOGGER_NAME)
@@ -93,8 +101,10 @@ class TestSetupTeardown:
         assert len(file_handlers) == 1
 
         fh = file_handlers[0]
-        assert Path(fh.baseFilename) == log_dir / _LOG_FILENAME
-        assert fh.mode == "a"
+        log_path = Path(fh.baseFilename)
+        assert log_path.parent == log_dir / ".bmad-assist-lite" / "logs"
+        assert log_path.name.startswith("parallel-")
+        assert log_path.suffix == ".log"
         assert fh.encoding == "utf-8"
 
     def test_setup_idempotent(self, log_dir: Path) -> None:
@@ -153,18 +163,16 @@ class TestSetupTeardown:
         ]
         assert len(file_handlers) == 1
 
-    def test_log_file_is_append_mode(self, log_dir: Path) -> None:
-        """Log file uses append mode so consecutive runs build a continuous log."""
-        # Write initial content
-        log_path = log_dir / _LOG_FILENAME
-        log_path.write_text("EXISTING CONTENT\n", encoding="utf-8")
-
+    def test_log_file_created_in_logs_dir(self, log_dir: Path) -> None:
+        """Log file is created under .bmad-assist-lite/logs/ with timestamp."""
         setup_parallel_log(log_dir)
         log_run_header("main", 6, 3, 5)
         teardown_parallel_log()
 
+        log_path = _find_log_file(log_dir)
+        assert log_path is not None
+        assert log_path.parent == log_dir / ".bmad-assist-lite" / "logs"
         content = log_path.read_text(encoding="utf-8")
-        assert content.startswith("EXISTING CONTENT\n")
         assert "[ORCHESTRATOR]" in content
 
 

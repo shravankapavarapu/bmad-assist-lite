@@ -52,19 +52,22 @@ def _normalize_story_id(story_id: str) -> str:
     return story_id.replace(".", "-")
 
 
-def _worktree_path(story_id: str, base_dir: Path) -> Path:
+def _worktree_path(story_id: str, base_dir: Path, repo_name: str) -> Path:
     """Compute the worktree directory path for a story.
 
     Args:
         story_id: Raw story identifier.
         base_dir: Parent directory under which the worktree is created.
+        repo_name: Name of the repository (used as prefix for uniqueness
+            when multiple repos share the same parent directory).
 
     Returns:
-        Resolved ``Path`` of the form ``base_dir / "parallel-{normalized}"``.
+        Resolved ``Path`` of the form
+        ``base_dir / "{repo_name}-parallel-{normalized}"``.
 
     """
     normalized = _normalize_story_id(story_id)
-    return (base_dir / f"parallel-{normalized}").resolve()
+    return (base_dir / f"{repo_name}-parallel-{normalized}").resolve()
 
 
 def _branch_name(story_id: str) -> str:
@@ -112,7 +115,8 @@ def create_worktree(
     if base_dir is None:
         base_dir = project_root.parent
 
-    wt_path = _worktree_path(story_id, base_dir)
+    repo_name = project_root.resolve().name
+    wt_path = _worktree_path(story_id, base_dir, repo_name)
     branch = _branch_name(story_id)
 
     _run_git(
@@ -151,7 +155,8 @@ def cleanup_worktree(
     if base_dir is None:
         base_dir = project_root.parent
 
-    wt_path = _worktree_path(story_id, base_dir)
+    repo_name = project_root.resolve().name
+    wt_path = _worktree_path(story_id, base_dir, repo_name)
     branch = _branch_name(story_id)
 
     # Step 1: Remove worktree — use check=False so branch deletion and

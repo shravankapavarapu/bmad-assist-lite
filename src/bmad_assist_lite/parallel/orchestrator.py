@@ -557,8 +557,14 @@ class Orchestrator:
                 # Extract story number for CLI flag
                 story_num = _extract_story_num(story_id)
 
-                # Build environment
-                env = {**os.environ, "BMAD_PARALLEL_MODE": "1"}
+                # Build environment — force UTF-8 output encoding so
+                # Unicode characters (box drawing, check marks) don't
+                # crash on Windows cp1252 console codepage
+                env = {
+                    **os.environ,
+                    "BMAD_PARALLEL_MODE": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                }
 
                 # Spawn subprocess
                 await self._output_mux.write_orchestrator(
@@ -1095,7 +1101,11 @@ class Orchestrator:
             "--teardown-only",
         ]
 
-        env = {**os.environ, "BMAD_PARALLEL_MODE": "1"}
+        env = {
+            **os.environ,
+            "BMAD_PARALLEL_MODE": "1",
+            "PYTHONIOENCODING": "utf-8",
+        }
 
         try:
             if sys.platform == "win32":

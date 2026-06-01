@@ -103,6 +103,19 @@ inputDocuments: []
 
 ---
 
+<!-- DEPENDENCY FORMAT (required for parallel story execution):
+     Use ONLY "Story N.M" or bare "N.M" format, comma-separated.
+     Examples:  []  |  Story 2.1  |  Story 2.1, Story 2.3  |  2.1, 2.3
+     DO NOT USE: slug names ([2-1-some-slug]), prose ([All prior stories]),
+     epic refs ([Epic 1]), or bracket-wrapped IDs ([2.1]).
+     Unparseable dependencies are silently dropped — stories run as if they
+     have no dependencies, breaking parallel execution order.
+
+     CROSS-EPIC DEPENDENCIES: Epics are always run sequentially — prior epics
+     are fully complete before the next begins. Do NOT list previous epics or
+     their stories as dependencies. Use [] (none) for stories whose only
+     prerequisite is prior epic completion. -->
+
 ### Story {{N}}.1: {{story_title}}
 
 **Story ID:** {{N}}-1-{{kebab-title}}
@@ -220,7 +233,7 @@ So that {{value_benefit}}.
 **Estimate:** Small
 **Points:** 1
 **Priority:** High
-**Dependencies:** [All prior stories in this epic]
+**Dependencies:** Story {{N}}.1, Story {{N}}.2, Story {{N}}.3
 
 #### User Story
 

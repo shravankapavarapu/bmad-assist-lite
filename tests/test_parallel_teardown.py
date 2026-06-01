@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from bmad_assist_lite.parallel.logging import (
-    _LOG_FILENAME,
     log_teardown_result,
     setup_parallel_log,
     teardown_parallel_log,
@@ -49,10 +48,19 @@ def setup_log(log_dir: Path):
     yield log_dir
 
 
+def _find_log_file(project_root: Path) -> Path | None:
+    """Find the most recent parallel-*.log file."""
+    logs_dir = project_root / ".bmad-assist-lite" / "logs"
+    if not logs_dir.exists():
+        return None
+    log_files = sorted(logs_dir.glob("parallel-*.log"))
+    return log_files[-1] if log_files else None
+
+
 def _read_log(project_root: Path) -> str:
-    """Read the parallel-run.log file content."""
-    log_path = project_root / _LOG_FILENAME
-    if log_path.exists():
+    """Read the parallel log file content."""
+    log_path = _find_log_file(project_root)
+    if log_path and log_path.exists():
         return log_path.read_text(encoding="utf-8")
     return ""
 

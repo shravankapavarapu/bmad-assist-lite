@@ -49,7 +49,7 @@ def _print_phase_banner(phase_name: str, epic: int | str | None, story: str | No
     if story is not None:
         banner += f" Story {story}"
 
-    separator = "\u2501" * 45
+    separator = "━" * 45
     write_progress(f"\n{separator}")
     write_progress(banner)
     write_progress(separator)

@@ -1,12 +1,9 @@
 """Orchestrator log file for parallel story execution.
 
-Provides structured logging to ``parallel-run.log`` in the project root.
+Provides structured logging to ``.bmad-assist-lite/logs/parallel-{timestamp}.log``.
 Events are written with ``[ORCHESTRATOR]``, ``[MERGE|{story}]``, and
 ``[QG|post-merge|{story}]`` prefixes at appropriate severity levels
 (INFO, WARNING, ERROR).
-
-Uses append mode so consecutive runs build a continuous log with
-run-start headers and run-end delimiters for readability.
 
 .. warning::
 
@@ -18,6 +15,7 @@ run-start headers and run-end delimiters for readability.
 from __future__ import annotations
 
 import logging as _logging
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,7 +27,6 @@ if TYPE_CHECKING:
 # ============================================================================
 
 _LOGGER_NAME = "bmad_assist_lite.parallel"
-_LOG_FILENAME = "parallel-run.log"
 _LOG_FORMAT = "[%(asctime)s] [%(levelname)s] %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 _TRUNCATION_LIMIT = 2000
@@ -53,7 +50,8 @@ _original_logger_level: int | None = None
 def setup_parallel_log(project_root: Path) -> None:
     """Configure a dedicated FileHandler for orchestrator logging.
 
-    Creates (or appends to) ``parallel-run.log`` in the project root.
+    Creates ``parallel-{timestamp}.log`` in ``.bmad-assist-lite/logs/``,
+    matching the convention used by the main CLI runner.
     Uses UTF-8 encoding and a ``[%(asctime)s] [%(levelname)s] %(message)s``
     format.  The handler is attached to the ``bmad_assist_lite.parallel``
     logger namespace so only parallel-module events flow to the file.
@@ -70,9 +68,12 @@ def setup_parallel_log(project_root: Path) -> None:
         # Already set up — idempotent
         return
 
-    log_path = project_root / _LOG_FILENAME
+    logs_dir = project_root / ".bmad-assist-lite" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = logs_dir / f"parallel-{ts}.log"
 
-    fh = _logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    fh = _logging.FileHandler(log_path, encoding="utf-8")
     fh.setLevel(_logging.DEBUG)
     fh.setFormatter(_logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
 

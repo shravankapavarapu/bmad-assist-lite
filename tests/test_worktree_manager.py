@@ -52,24 +52,24 @@ class TestWorktreePath:
     """Test _worktree_path helper."""
 
     def test_returns_correct_path(self, tmp_path: Path) -> None:
-        """Verify worktree path follows the parallel-{id} convention."""
-        result = _worktree_path("3.1", tmp_path)
-        expected = (tmp_path / "parallel-3-1").resolve()
+        """Verify worktree path follows the {repo}-parallel-{id} convention."""
+        result = _worktree_path("3.1", tmp_path, "myrepo")
+        expected = (tmp_path / "myrepo-parallel-3-1").resolve()
         assert result == expected
 
     def test_uses_normalized_story_id(self, tmp_path: Path) -> None:
         """Verify dots in story ID are normalized in the path."""
-        result = _worktree_path("3.1.1", tmp_path)
-        assert "parallel-3-1-1" in str(result)
+        result = _worktree_path("3.1.1", tmp_path, "myrepo")
+        assert "myrepo-parallel-3-1-1" in str(result)
 
     def test_returns_resolved_path(self, tmp_path: Path) -> None:
         """Verify the returned path is resolved (absolute)."""
-        result = _worktree_path("3.1", tmp_path)
+        result = _worktree_path("3.1", tmp_path, "myrepo")
         assert result.is_absolute()
 
     def test_uses_pathlib_path(self, tmp_path: Path) -> None:
         """Verify the return type is pathlib.Path."""
-        result = _worktree_path("3.1", tmp_path)
+        result = _worktree_path("3.1", tmp_path, "myrepo")
         assert isinstance(result, Path)
 
 
@@ -121,7 +121,7 @@ class TestCreateWorktree:
 
         create_worktree("3.1", project_root, base_dir)
 
-        expected_path = (base_dir / "parallel-3-1").resolve()
+        expected_path = (base_dir / "repo-parallel-3-1").resolve()
         mock_run_git.assert_called_once_with(
             ["worktree", "add", "-b", "parallel/3-1", str(expected_path)],
             cwd=project_root,
@@ -147,7 +147,7 @@ class TestCreateWorktree:
 
         result = create_worktree("3.1", project_root, base_dir)
 
-        expected = (base_dir / "parallel-3-1").resolve()
+        expected = (base_dir / "repo-parallel-3-1").resolve()
         assert result == expected
         assert isinstance(result, Path)
 
@@ -170,7 +170,7 @@ class TestCreateWorktree:
 
         result = create_worktree("3.1", project_root)
 
-        expected = (project_root.parent / "parallel-3-1").resolve()
+        expected = (project_root.parent / "repo-parallel-3-1").resolve()
         assert result == expected
 
     @patch("bmad_assist_lite.parallel.worktree_manager._run_git")
@@ -242,7 +242,7 @@ class TestCleanupWorktree:
 
         cleanup_worktree("3.1", project_root, base_dir)
 
-        expected_path = (base_dir / "parallel-3-1").resolve()
+        expected_path = (base_dir / "repo-parallel-3-1").resolve()
         assert mock_run_git.call_count == 2
         mock_run_git.assert_has_calls([
             call(
@@ -276,7 +276,7 @@ class TestCleanupWorktree:
 
         cleanup_worktree("3.1", project_root)
 
-        expected_path = (project_root.parent / "parallel-3-1").resolve()
+        expected_path = (project_root.parent / "repo-parallel-3-1").resolve()
         first_call_args = mock_run_git.call_args_list[0][0][0]
         assert str(expected_path) in first_call_args
 
@@ -331,7 +331,7 @@ class TestCleanupWorktree:
         project_root.mkdir()
 
         # Create the worktree directory so .exists() returns True
-        wt_path = (project_root.parent / "parallel-3-1").resolve()
+        wt_path = (project_root.parent / "repo-parallel-3-1").resolve()
         wt_path.mkdir(parents=True, exist_ok=True)
 
         mock_run_git.return_value = subprocess.CompletedProcess(
@@ -358,7 +358,7 @@ class TestCleanupWorktree:
         project_root.mkdir()
 
         # Create the worktree directory so .exists() returns True
-        wt_path = (project_root.parent / "parallel-3-1").resolve()
+        wt_path = (project_root.parent / "repo-parallel-3-1").resolve()
         wt_path.mkdir(parents=True, exist_ok=True)
 
         def side_effect(
