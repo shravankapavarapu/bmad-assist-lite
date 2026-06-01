@@ -59,12 +59,18 @@ def _setup_logging(verbosity: int) -> None:
             h.setLevel(level)
 
 
-def _add_file_log_handler(logs_dir: Path) -> logging.FileHandler | None:
+def _add_file_log_handler(
+    logs_dir: Path, *, label: str = "run",
+) -> logging.FileHandler | None:
     """Attach a FileHandler to the root logger that captures all messages.
 
-    Writes to ``logs_dir/run-{local_timestamp}.log``.  Always logs at
+    Writes to ``logs_dir/{label}-{local_timestamp}.log``.  Always logs at
     DEBUG level regardless of console verbosity so the file captures
     everything.
+
+    Args:
+        logs_dir: Directory to write the log file in.
+        label: Prefix for the log filename (e.g. ``"run"`` or ``"story-2.1"``).
 
     Returns the handler (for teardown) or None on failure.
     """
@@ -72,7 +78,7 @@ def _add_file_log_handler(logs_dir: Path) -> logging.FileHandler | None:
 
     logs_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = logs_dir / f"run-{ts}.log"
+    log_path = logs_dir / f"{label}-{ts}.log"
 
     try:
         fh = logging.FileHandler(log_path, encoding="utf-8")
@@ -198,7 +204,12 @@ def run(
     from bmad_assist_lite.core.paths import init_paths
 
     paths = init_paths(project)
-    file_handler = _add_file_log_handler(paths.logs_dir)
+    parallel_logs_dir = os.environ.get("BMAD_PARALLEL_LOGS_DIR")
+    logs_dir = Path(parallel_logs_dir) if parallel_logs_dir else paths.logs_dir
+    log_label = "run"
+    if parallel_logs_dir and epic is not None and story is not None:
+        log_label = f"story-{epic}.{story}"
+    file_handler = _add_file_log_handler(logs_dir, label=log_label)
 
     # --- Teardown-only mode: bypass story discovery, run epic teardown directly ---
     if teardown_only:

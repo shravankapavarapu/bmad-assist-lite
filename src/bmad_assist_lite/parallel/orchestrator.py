@@ -559,10 +559,15 @@ class Orchestrator:
 
                 # Build environment — force UTF-8 output encoding so
                 # Unicode characters (box drawing, check marks) don't
-                # crash on Windows cp1252 console codepage
+                # crash on Windows cp1252 console codepage.
+                # BMAD_PARALLEL_LOGS_DIR tells the subprocess to write
+                # run logs to the parent project's logs dir (not the
+                # worktree's) so they persist after worktree cleanup.
+                logs_dir = self._project_root / ".bmad-assist-lite" / "logs"
                 env = {
                     **os.environ,
                     "BMAD_PARALLEL_MODE": "1",
+                    "BMAD_PARALLEL_LOGS_DIR": str(logs_dir),
                     "PYTHONIOENCODING": "utf-8",
                 }
 
