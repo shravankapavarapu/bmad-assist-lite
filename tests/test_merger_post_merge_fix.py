@@ -403,7 +403,8 @@ class TestProcessMergeWithFix:
         assert result.qg_result.all_passed is True
         mock_fix.assert_not_called()
         # Sprint status should be updated on success
-        mock_sprint.assert_called_once_with("3.1", Path("/repo"))
+        mock_sprint.assert_called_once()
+        assert mock_sprint.call_args[0][:2] == ("3.1", Path("/repo"))
 
     @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
@@ -436,7 +437,8 @@ class TestProcessMergeWithFix:
         assert result.qg_result is not None
         assert result.qg_result.all_passed is True
         mock_fix.assert_called_once()
-        mock_sprint.assert_called_once_with("3.1", Path("/repo"))
+        mock_sprint.assert_called_once()
+        assert mock_sprint.call_args[0][:2] == ("3.1", Path("/repo"))
 
     @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
@@ -635,7 +637,8 @@ class TestProcessMergeWithFix:
         assert result.qg_result is not None
         assert result.qg_result.all_passed is True
         assert mock_fix.call_count == 2  # Stopped after success
-        mock_sprint.assert_called_once_with("3.1", Path("/repo"))
+        mock_sprint.assert_called_once()
+        assert mock_sprint.call_args[0][:2] == ("3.1", Path("/repo"))
 
 
 # ============================================================================

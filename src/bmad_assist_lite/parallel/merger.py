@@ -1008,23 +1008,31 @@ def run_post_merge_fix(
 # ============================================================================
 
 
-def update_sprint_status_done(story_id: str, project_root: Path) -> None:
-    """Mark a story as ``done`` in ``sprint-status.yaml`` and commit.
+def update_sprint_status_done(
+    story_id: str,
+    project_root: Path,
+    all_done_ids: set[str] | None = None,
+) -> None:
+    """Mark stories as ``done`` in ``sprint-status.yaml`` and commit.
 
-    Uses the existing :func:`~bmad_assist_lite.core.sprint_status.load_sprint_status`
-    and :func:`~bmad_assist_lite.core.sprint_status.save_sprint_status` functions
-    for atomic persistence.
+    Marks ``story_id`` plus any previously completed stories in
+    ``all_done_ids`` as done.  This prevents a merge from overwriting
+    earlier stories' statuses back to ``backlog`` — each story branch
+    carries a stale snapshot of sprint-status.yaml from when it was
+    created, and merging it can revert other stories' progress.
 
     After writing, commits ``sprint-status.yaml`` so the working tree is
-    clean before the next story merge.  Without this commit, the next
-    ``git merge`` would fail with "local changes would be overwritten".
+    clean before the next story merge.
 
     Sprint-status update failures are **non-fatal**: any exception is caught,
     logged as a warning, and not re-raised.
 
     Args:
-        story_id: Story identifier (e.g. ``"4.4"``).
+        story_id: Story identifier being marked done (e.g. ``"4.4"``).
         project_root: Path to the project root directory.
+        all_done_ids: Set of all story IDs that have completed so far.
+            Each is re-marked ``done`` to repair any stale status
+            introduced by the merge.
 
     """
     tag = f"[SPRINT|{story_id}]"
@@ -1037,9 +1045,16 @@ def update_sprint_status_done(story_id: str, project_root: Path) -> None:
 
         path = get_sprint_status_path(project_root)
         sprint_status = load_sprint_status(path)
-        sprint_status.set_story_status(story_id, "done")
+
+        ids_to_mark = {story_id}
+        if all_done_ids:
+            ids_to_mark |= all_done_ids
+
+        for sid in ids_to_mark:
+            sprint_status.set_story_status(sid, "done")
+
         save_sprint_status(sprint_status, path)
-        logger.info("%s Updated sprint-status: story %s → done", tag, story_id)
+        logger.info("%s Updated sprint-status: %s → done", tag, sorted(ids_to_mark))
 
         _run_git(["add", str(path)], cwd=project_root, check=False)
         _run_git(
@@ -1087,6 +1102,7 @@ class MergeQueue:
         self._parallel_config = parallel_config
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._lock = asyncio.Lock()
+        self._done_ids: set[str] = set()
 
     async def enqueue(self, story_id: str) -> None:
         """Add a story to the merge queue.
@@ -1185,7 +1201,10 @@ class MergeQueue:
         # If QG passed (or was not run), no fix needed
         if result.qg_result is None or result.qg_result.all_passed:
             if result.qg_result is not None and result.qg_result.all_passed:
-                update_sprint_status_done(result.story_id, self._project_root)
+                update_sprint_status_done(
+                    result.story_id, self._project_root, self._done_ids,
+                )
+                self._done_ids.add(result.story_id)
             return result
 
         # Determine max retries
@@ -1239,6 +1258,9 @@ class MergeQueue:
         result = result.model_copy(update={"qg_result": latest_qg})
 
         if latest_qg.all_passed:
-            update_sprint_status_done(story_id, self._project_root)
+            update_sprint_status_done(
+                story_id, self._project_root, self._done_ids,
+            )
+            self._done_ids.add(story_id)
 
         return result
