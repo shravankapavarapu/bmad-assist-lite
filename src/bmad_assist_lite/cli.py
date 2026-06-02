@@ -72,7 +72,9 @@ def _add_file_log_handler(
         logs_dir: Directory to write the log file in.
         label: Prefix for the log filename (e.g. ``"run"`` or ``"story-2.1"``).
 
-    Returns the handler (for teardown) or None on failure.
+    Returns:
+        The handler (for teardown) or None on failure.
+
     """
     from datetime import datetime
 
@@ -308,6 +310,23 @@ def run(
                 epic_stories[e_num] = filtered
             else:
                 del epic_stories[e_num]
+
+        if not epic_stories:
+            target_epic = epic if epic else "any epic"
+            story_id = f"{epic}.{story}" if epic else str(story)
+            current_status = sprint_status.get_story_status(story_id)
+            if current_status:
+                typer.echo(
+                    f"Story {story_id} is not in backlog "
+                    f"(current status: {current_status}).",
+                    err=True,
+                )
+            else:
+                typer.echo(
+                    f"Story {story} not found in {target_epic} backlog stories.",
+                    err=True,
+                )
+            raise typer.Exit(1)
 
     # Validate epic files exist for each epic
     planning_dir = paths.planning_artifacts

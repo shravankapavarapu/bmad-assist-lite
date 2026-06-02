@@ -538,6 +538,34 @@ def merge_story(
     logger.info("%s Merging branch %s into %s", tag, branch, current_branch)
 
     # ------------------------------------------------------------------
+    # Step 0.5: Ensure clean working tree before merge
+    # ------------------------------------------------------------------
+    # Git refuses to merge when tracked files have uncommitted changes that
+    # the merge would modify.  Common culprit: sprint-status.yaml left dirty
+    # by _update_epic_sprint_status() from a previous parallel run.
+    status_result = _run_git(["status", "--porcelain"], cwd=project_root, check=False)
+    if status_result.stdout.strip():
+        logger.warning(
+            "%s Dirty working tree detected before merge — auto-committing tracked changes",
+            tag,
+        )
+        _run_git(["add", "-u"], cwd=project_root, check=False)
+        pre_commit = _run_git(
+            ["commit", "-m", "chore: auto-commit dirty files before parallel merge"],
+            cwd=project_root,
+            check=False,
+        )
+        if pre_commit.returncode == 0:
+            logger.info("%s Pre-merge auto-commit succeeded", tag)
+        else:
+            logger.warning(
+                "%s Pre-merge auto-commit returned rc=%d: %s — proceeding anyway",
+                tag,
+                pre_commit.returncode,
+                pre_commit.stderr.strip(),
+            )
+
+    # ------------------------------------------------------------------
     # Step 1: Attempt the merge
     # ------------------------------------------------------------------
     merge_result = _run_git(
@@ -565,6 +593,9 @@ def merge_story(
     is_conflict = merge_head.exists() or "CONFLICT" in combined
 
     if not is_conflict:
+        logger.error(
+            "%s git merge failed (not a conflict): %s", tag, combined.strip(),
+        )
         raise ParallelError(
             f"{tag} git merge failed (not a conflict): {combined.strip()}"
         )
@@ -1143,13 +1174,35 @@ class MergeQueue:
                     if self._parallel_config is not None
                     else 120
                 )
-                result = await asyncio.to_thread(
-                    merge_story,
-                    story_id,
-                    self._project_root,
-                    resolve=True,
-                    conflict_resolution_timeout=cr_timeout,
-                )
+                try:
+                    result = await asyncio.to_thread(
+                        merge_story,
+                        story_id,
+                        self._project_root,
+                        resolve=True,
+                        conflict_resolution_timeout=cr_timeout,
+                    )
+                except ParallelError as exc:
+                    logger.error(
+                        "[MERGE|%s] Fatal merge error: %s", story_id, exc,
+                    )
+                    return MergeResult(
+                        success=False,
+                        story_id=story_id,
+                        error=str(exc),
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "[MERGE|%s] Unexpected merge error: %s",
+                        story_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    return MergeResult(
+                        success=False,
+                        story_id=story_id,
+                        error=f"Unexpected error: {exc}",
+                    )
 
                 # Run post-merge QG only on successful merge
                 if result.success:

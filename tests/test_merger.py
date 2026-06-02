@@ -102,12 +102,10 @@ class TestMergeStoryCleanMerge:
     ) -> None:
         """Verify merge_story returns success=True on clean merge."""
         mock_run_git.side_effect = [
-            # git rev-parse --abbrev-ref HEAD
-            _make_completed(stdout="feature/epic-3\n"),
-            # git merge --no-edit parallel/3-1
-            _make_completed(stdout="Merge made by the 'ort' strategy.\n"),
-            # git branch -d parallel/3-1
-            _make_completed(stdout="Deleted branch parallel/3-1\n"),
+            _make_completed(stdout="feature/epic-3\n"),  # rev-parse
+            _make_completed(stdout=""),  # status --porcelain (clean)
+            _make_completed(stdout="Merge made by the 'ort' strategy.\n"),  # merge
+            _make_completed(stdout="Deleted branch parallel/3-1\n"),  # branch -d
         ]
 
         result = merge_story("3.1", Path("/repo"))
@@ -127,14 +125,14 @@ class TestMergeStoryCleanMerge:
         """Verify git branch -d is called after successful merge."""
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(),
         ]
 
         merge_story("3.1", Path("/repo"))
 
-        # Third call should be branch deletion
-        branch_delete_call = mock_run_git.call_args_list[2]
+        branch_delete_call = mock_run_git.call_args_list[3]
         assert branch_delete_call == call(
             ["branch", "-d", "parallel/3-1"], cwd=Path("/repo"), check=False
         )
@@ -149,13 +147,14 @@ class TestMergeStoryCleanMerge:
         """Verify git merge is called with --no-edit and check=False."""
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(),
         ]
 
         merge_story("3.1", Path("/repo"))
 
-        merge_call = mock_run_git.call_args_list[1]
+        merge_call = mock_run_git.call_args_list[2]
         assert merge_call == call(
             ["merge", "--no-edit", "parallel/3-1"],
             cwd=Path("/repo"),
@@ -172,13 +171,14 @@ class TestMergeStoryCleanMerge:
         """Verify dots in story_id are normalized to dashes in branch name."""
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(),
         ]
 
         merge_story("3.2", Path("/repo"))
 
-        merge_call = mock_run_git.call_args_list[1]
+        merge_call = mock_run_git.call_args_list[2]
         assert merge_call == call(
             ["merge", "--no-edit", "parallel/3-2"],
             cwd=Path("/repo"),
@@ -201,23 +201,19 @@ class TestMergeStoryConflict:
         tmp_path: Path,
     ) -> None:
         """Verify conflict path returns success=False with conflict file list."""
-        # Create .git/MERGE_HEAD to signal conflict state
         git_dir = tmp_path / ".git"
         git_dir.mkdir()
         (git_dir / "MERGE_HEAD").write_text("abc123\n")
 
         mock_run_git.side_effect = [
-            # git rev-parse --abbrev-ref HEAD
-            _make_completed(stdout="feature/epic-3\n"),
-            # git merge --no-edit parallel/3-1 (conflict)
+            _make_completed(stdout="feature/epic-3\n"),  # rev-parse
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(
                 returncode=1,
                 stdout="CONFLICT (content): Merge conflict in src/main.py\n",
             ),
-            # git diff --name-only --diff-filter=U
-            _make_completed(stdout="src/main.py\nsrc/utils.py\n"),
-            # git merge --abort
-            _make_completed(),
+            _make_completed(stdout="src/main.py\nsrc/utils.py\n"),  # diff
+            _make_completed(),  # merge --abort
         ]
 
         result = merge_story("3.1", tmp_path)
@@ -240,6 +236,7 @@ class TestMergeStoryConflict:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="CONFLICT (content)\n"),
             _make_completed(stdout="src/main.py\n"),
             _make_completed(),
@@ -247,8 +244,7 @@ class TestMergeStoryConflict:
 
         merge_story("3.1", tmp_path)
 
-        # Fourth call should be merge --abort
-        abort_call = mock_run_git.call_args_list[3]
+        abort_call = mock_run_git.call_args_list[4]
         assert abort_call == call(
             ["merge", "--abort"], cwd=tmp_path, check=False
         )
@@ -266,18 +262,16 @@ class TestMergeStoryConflict:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="CONFLICT (content)\n"),
-            # git diff fails with exception
             ParallelError("git diff failed"),
-            # git merge --abort should still run
-            _make_completed(),
+            _make_completed(),  # merge --abort
         ]
 
         with pytest.raises(ParallelError, match="git diff failed"):
             merge_story("3.1", tmp_path)
 
-        # merge --abort must have been called despite the exception
-        abort_call = mock_run_git.call_args_list[3]
+        abort_call = mock_run_git.call_args_list[4]
         assert abort_call == call(
             ["merge", "--abort"], cwd=tmp_path, check=False
         )
@@ -295,7 +289,7 @@ class TestMergeStoryConflict:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
-            # No CONFLICT in stdout, but MERGE_HEAD exists
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="", stderr=""),
             _make_completed(stdout=""),
             _make_completed(),
@@ -312,12 +306,12 @@ class TestMergeStoryConflict:
         tmp_path: Path,
     ) -> None:
         """Verify conflict detected by CONFLICT keyword in stdout."""
-        # No .git/MERGE_HEAD file — but CONFLICT in output
         git_dir = tmp_path / ".git"
         git_dir.mkdir()
 
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(
                 returncode=1,
                 stdout="CONFLICT (content): Merge conflict in foo.py\n",
@@ -344,6 +338,7 @@ class TestMergeStoryConflict:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="CONFLICT\n"),
             _make_completed(stdout=""),
             _make_completed(),
@@ -392,6 +387,7 @@ class TestMergeStoryBaseBranchVerification:
         """Verify merge proceeds when on the correct expected branch."""
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(),
         ]
@@ -409,6 +405,7 @@ class TestMergeStoryBaseBranchVerification:
         """Verify merge proceeds on any branch when expected_branch is None."""
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(),
         ]
@@ -436,10 +433,10 @@ class TestMergeStoryFatalError:
         """Verify ParallelError when branch doesn't exist (not a conflict)."""
         git_dir = tmp_path / ".git"
         git_dir.mkdir()
-        # No MERGE_HEAD → not a conflict
 
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(
                 returncode=1,
                 stderr="merge: parallel/9-9 - not something we can merge\n",
@@ -461,6 +458,7 @@ class TestMergeStoryFatalError:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(
                 returncode=128,
                 stderr="fatal: not a git repository\n",
@@ -489,6 +487,7 @@ class TestMergeStoryWorktreeCleanup:
         """Verify cleanup_worktree is called after successful merge."""
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(),
         ]
@@ -507,12 +506,12 @@ class TestMergeStoryWorktreeCleanup:
         """Verify cleanup failure is logged as warning, not raised."""
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(),
         ]
         mock_cleanup.side_effect = ParallelError("cleanup failed")
 
-        # Should not raise
         result = merge_story("3.1", Path("/repo"))
 
         assert result.success is True
@@ -529,6 +528,7 @@ class TestMergeStoryWorktreeCleanup:
         """Verify cleanup failure produces a warning log message."""
         mock_run_git.side_effect = [
             _make_completed(stdout="feature/epic-3\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(),
         ]
@@ -559,6 +559,7 @@ class TestMergeStoryBranchDeletion:
         """Verify branch deletion failure does not crash the merge pipeline."""
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),  # merge succeeds
             _make_completed(returncode=1, stderr="error: branch not found\n"),
         ]
@@ -579,6 +580,7 @@ class TestMergeStoryBranchDeletion:
         """Verify branch deletion failure produces a warning log."""
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(),
             _make_completed(returncode=1, stderr="error: branch not found\n"),
         ]
@@ -614,6 +616,7 @@ class TestMergeAbortFailure:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="CONFLICT\n"),
             _make_completed(stdout="src/main.py\n"),
             _make_completed(returncode=1, stderr="error: abort failed\n"),
@@ -650,6 +653,7 @@ class TestMergeConflictErrorMessage:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="CONFLICT\n"),
             _make_completed(stdout=""),
             _make_completed(),

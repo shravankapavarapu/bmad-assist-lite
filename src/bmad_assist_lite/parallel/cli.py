@@ -136,17 +136,39 @@ def parallel_run(
     # ------------------------------------------------------------------
     # Startup settings summary
     # ------------------------------------------------------------------
+    # Pre-compute done stories from sprint-status for accurate display
+    from bmad_assist_lite.core.sprint_status import (
+        get_sprint_status_path,
+        load_sprint_status,
+    )
+
+    ss_path = get_sprint_status_path(project)
+    done_ids: set[str] = set()
+    if ss_path.exists():
+        try:
+            _ss = load_sprint_status(ss_path)
+            for sid in graph.all_story_ids:
+                if _ss.is_story_done(sid):
+                    done_ids.add(sid)
+        except Exception:
+            pass  # Non-fatal; orchestrator will also seed
+
     ready_stories = graph.get_ready_stories(
-        done_ids=set(),
+        done_ids=done_ids,
         in_flight_ids=set(),
         blocked_ids=set(),
     )
+
+    remaining = graph.story_count - len(done_ids)
 
     typer.echo(f"Max concurrency: {parallel_config.max_concurrency}")
     typer.echo(f"Stagger delay: {parallel_config.stagger_delay}s")
     typer.echo(f"Base branch: {current_branch}")
     typer.echo(f"Epic: {epic_num}")
     typer.echo(f"Total stories: {graph.story_count}")
+    if done_ids:
+        typer.echo(f"Already done: {len(done_ids)}")
+        typer.echo(f"Remaining: {remaining}")
     typer.echo(f"Ready stories: {len(ready_stories)}")
 
     # ------------------------------------------------------------------

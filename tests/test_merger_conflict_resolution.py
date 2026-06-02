@@ -881,21 +881,17 @@ class TestMergeStoryWithResolution:
         (git_dir / "MERGE_HEAD").write_text("abc123\n")
 
         mock_run_git.side_effect = [
-            # git rev-parse --abbrev-ref HEAD
-            _make_completed(stdout="main\n"),
-            # git merge --no-edit parallel/4-2 (conflict)
+            _make_completed(stdout="main\n"),  # rev-parse
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(
                 returncode=1,
                 stdout="CONFLICT (content): Merge conflict in src/main.py\n",
             ),
-            # git diff --name-only --diff-filter=U
-            _make_completed(stdout="src/main.py\n"),
-            # git branch -d parallel/4-2 (after resolution)
-            _make_completed(),
+            _make_completed(stdout="src/main.py\n"),  # diff
+            _make_completed(),  # branch -d
         ]
 
         def _resolve_side_effect(**kwargs: object) -> ConflictResolutionResult:
-            # Simulate resolve_conflicts() committing, which removes MERGE_HEAD
             merge_head = tmp_path / ".git" / "MERGE_HEAD"
             if merge_head.exists():
                 merge_head.unlink()
@@ -917,7 +913,6 @@ class TestMergeStoryWithResolution:
         assert result.success is True
         assert result.story_id == "4.2"
 
-        # Verify resolve_conflicts was called with correct args
         mock_resolve.assert_called_once_with(
             story_id="4.2",
             project_root=tmp_path,
@@ -941,6 +936,7 @@ class TestMergeStoryWithResolution:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(
                 returncode=1, stdout="CONFLICT (content)\n"
             ),
@@ -948,7 +944,6 @@ class TestMergeStoryWithResolution:
         ]
 
         def _resolve_side_effect(**kwargs: object) -> ConflictResolutionResult:
-            # Simulate resolve_conflicts() aborting merge, which removes MERGE_HEAD
             merge_head = tmp_path / ".git" / "MERGE_HEAD"
             if merge_head.exists():
                 merge_head.unlink()
@@ -988,12 +983,12 @@ class TestMergeStoryResolutionDisabled:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(
                 returncode=1, stdout="CONFLICT (content)\n"
             ),
             _make_completed(stdout="src/main.py\n"),
-            # git merge --abort (called by finally block)
-            _make_completed(),
+            _make_completed(),  # merge --abort
         ]
 
         result = merge_story("4.2", tmp_path)
@@ -1016,6 +1011,7 @@ class TestMergeStoryResolutionDisabled:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(
                 returncode=1, stdout="CONFLICT (content)\n"
             ),
@@ -1053,6 +1049,7 @@ class TestMergeStoryResolutionCleanup:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="CONFLICT\n"),
             _make_completed(stdout="src/main.py\n"),
             _make_completed(),  # branch delete
@@ -1089,6 +1086,7 @@ class TestMergeStoryResolutionCleanup:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="CONFLICT\n"),
             _make_completed(stdout="src/main.py\n"),
             _make_completed(),  # branch delete
@@ -1106,8 +1104,7 @@ class TestMergeStoryResolutionCleanup:
 
         merge_story("4.2", tmp_path, resolve=True, story_context="Test")
 
-        # Verify branch deletion was called (4th call)
-        branch_call = mock_run_git.call_args_list[3]
+        branch_call = mock_run_git.call_args_list[4]
         assert branch_call == call(
             ["branch", "-d", "parallel/4-2"], cwd=tmp_path, check=False
         )
@@ -1159,6 +1156,7 @@ class TestConflictResolutionTimeoutConfig:
 
         mock_run_git.side_effect = [
             _make_completed(stdout="main\n"),
+            _make_completed(stdout=""),  # status --porcelain
             _make_completed(returncode=1, stdout="CONFLICT\n"),
             _make_completed(stdout="src/main.py\n"),
             _make_completed(),
@@ -1184,7 +1182,6 @@ class TestConflictResolutionTimeoutConfig:
             conflict_resolution_timeout=config.conflict_resolution_timeout,
         )
 
-        # Verify the timeout was passed through
         mock_resolve.assert_called_once()
         call_kwargs = mock_resolve.call_args
         assert call_kwargs.kwargs["timeout"] == 300

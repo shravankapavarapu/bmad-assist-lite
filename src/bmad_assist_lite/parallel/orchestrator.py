@@ -250,7 +250,11 @@ class Orchestrator:
             self._state: ParallelState = recover_state(
                 existing_state, project_root, config.worktree_base_dir,
             )
-            # Populate in-memory sets from RECOVERED state
+            # Reconcile with sprint-status before populating sets —
+            # stories completed outside this parallel run (sequential
+            # runner, prior run) should be marked DONE here too.
+            self._seed_done_from_sprint_status()
+            # Populate in-memory sets from RECOVERED + seeded state
             for story_id, story_state in self._state.stories.items():
                 if story_state.status == StoryStatus.DONE:
                     self._done_ids.add(story_id)
@@ -262,6 +266,7 @@ class Orchestrator:
                     self._merging_ids.add(story_id)
                 if story_state.worktree_path is not None:
                     self._story_worktrees[story_id] = story_state.worktree_path
+            save_state(self._state, self._state_path)
             logger.info(
                 "[ORCHESTRATOR] Resumed from persisted state: "
                 "done=%d, in_flight=%d, blocked=%d, merging=%d",
@@ -276,11 +281,60 @@ class Orchestrator:
                 epic=epic_num,
                 story_ids=list(dependency_graph.all_story_ids),
             )
+            # Seed done stories from sprint-status.yaml so the
+            # orchestrator never schedules already-completed work.
+            self._seed_done_from_sprint_status()
             save_state(self._state, self._state_path)
             logger.info(
-                "[ORCHESTRATOR] Created fresh parallel state with %d stories",
+                "[ORCHESTRATOR] Created fresh parallel state with %d stories"
+                " (%d already done in sprint-status)",
                 len(self._state.stories),
+                len(self._done_ids),
             )
+
+    # ========================================================================
+    # Sprint-status seeding
+    # ========================================================================
+
+    def _seed_done_from_sprint_status(self) -> None:
+        """Reconcile parallel state with sprint-status.yaml.
+
+        Marks stories as DONE when sprint-status says they're already
+        complete — regardless of their current parallel state (BACKLOG,
+        BLOCKED, etc.).  Called on both fresh and resume paths so the
+        orchestrator never schedules already-completed work.
+        Failures are non-fatal — logged and silently ignored.
+        """
+        from bmad_assist_lite.core.sprint_status import (
+            get_sprint_status_path,
+            load_sprint_status,
+        )
+
+        ss_path = get_sprint_status_path(self._project_root)
+        if not ss_path.exists():
+            return
+
+        try:
+            sprint_status = load_sprint_status(ss_path)
+        except Exception:
+            logger.warning(
+                "[ORCHESTRATOR] Could not load sprint-status for seeding; "
+                "all stories treated as backlog"
+            )
+            return
+
+        for story_id in list(self._state.stories):
+            if story_id in self._done_ids:
+                continue
+            if sprint_status.is_story_done(story_id):
+                self._state = self._state.with_story_status(
+                    story_id,
+                    StoryStatus.DONE,
+                    completed_at=_utc_now(),
+                )
+                self._done_ids.add(story_id)
+                self._blocked_ids.discard(story_id)
+                self._in_flight_ids.discard(story_id)
 
     # ========================================================================
     # Bootstrap config detection (Story 9.2 — Task 1)
@@ -1213,11 +1267,15 @@ class Orchestrator:
     # ========================================================================
 
     def _update_epic_sprint_status(self, status: str) -> None:
-        """Update the epic status in ``sprint-status.yaml``.
+        """Update the epic status in ``sprint-status.yaml`` and commit.
 
         Follows the non-fatal pattern from ``update_sprint_status_done()``
-        in ``merger.py``: load → mutate → save, wrap in try/except, log
-        warning on failure, never propagate exceptions.
+        in ``merger.py``: load → mutate → save → git commit, wrap in
+        try/except, log warning on failure, never propagate exceptions.
+
+        The git commit is essential: without it, sprint-status.yaml is left
+        dirty and the next parallel run's first ``git merge`` will fail with
+        "Your local changes would be overwritten by merge".
 
         Args:
             status: The new status string (e.g. ``"done"``, ``"blocked"``).
@@ -1230,6 +1288,7 @@ class Orchestrator:
                 load_sprint_status,
                 save_sprint_status,
             )
+            from bmad_assist_lite.parallel.git_ops import _run_git
 
             path = get_sprint_status_path(self._project_root)
             sprint_status = load_sprint_status(path)
@@ -1240,6 +1299,16 @@ class Orchestrator:
                 tag,
                 self._epic_num,
                 status,
+            )
+
+            _run_git(["add", str(path)], cwd=self._project_root, check=False)
+            _run_git(
+                [
+                    "commit", "-m",
+                    f"chore: mark epic {self._epic_num} {status} in sprint-status",
+                ],
+                cwd=self._project_root,
+                check=False,
             )
         except Exception:
             logger.warning(
