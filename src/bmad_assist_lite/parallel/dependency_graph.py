@@ -479,7 +479,7 @@ class DependencyGraph:
         # Sort by descending score, then by natural numeric order for tiebreaking
         ready.sort(key=lambda sid: (-self._scores[sid], _story_sort_key(sid)))
 
-        if logger.isEnabledFor(logging.DEBUG):
+        if ready and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[DependencyGraph] Ready stories: %s (scores: %s)",
                 ready,

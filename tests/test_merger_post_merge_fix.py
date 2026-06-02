@@ -66,15 +66,14 @@ class TestRunPostMergeFix:
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger._run_git")
     @patch("bmad_assist_lite.parallel.merger.subprocess.Popen")
-    def test_reads_failure_report_from_cache(
+    def test_copies_failure_report_to_handler_path(
         self,
         mock_popen: MagicMock,
         mock_git: MagicMock,
         mock_qg: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test 5.1: Verify failure report is read from the correct cache path."""
-        # Create the failure report
+        """Verify failure report is copied from post-merge path to handler path."""
         cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
         cache_dir.mkdir(parents=True)
         report = cache_dir / "post-merge-qg-failures-3.1.md"
@@ -86,22 +85,21 @@ class TestRunPostMergeFix:
 
         run_post_merge_fix("3.1", tmp_path)
 
-        # Verify the report content was included in the prompt
-        call_args = mock_popen.return_value.communicate.call_args
-        prompt = call_args[1]["input"] if "input" in call_args[1] else call_args[0][0]
-        assert "Lint failed" in prompt
+        handler_report = cache_dir / "qa-failures-3.1.md"
+        assert handler_report.exists()
+        assert "Lint failed" in handler_report.read_text(encoding="utf-8")
 
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger._run_git")
     @patch("bmad_assist_lite.parallel.merger.subprocess.Popen")
-    def test_invokes_claude_cli_with_failure_report(
+    def test_spawns_fix_subprocess_with_correct_args(
         self,
         mock_popen: MagicMock,
         mock_git: MagicMock,
         mock_qg: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test 5.2: Verify Claude CLI is invoked with failure report in prompt."""
+        """Verify fix subprocess is spawned with --fix-post-merge and correct args."""
         mock_popen.return_value = _make_popen_mock()
         mock_git.return_value = _make_completed_process(stdout="1 file changed")
         mock_qg.return_value = PostMergeQGResult(all_passed=True, story_id="3.1")
@@ -110,13 +108,12 @@ class TestRunPostMergeFix:
 
         mock_popen.assert_called_once()
         cmd = mock_popen.call_args[0][0]
-        assert cmd == ["claude", "--print"]
-
-        # Verify the prompt contains qa-failure-report tags
-        call_args = mock_popen.return_value.communicate.call_args
-        prompt = call_args[1].get("input", call_args[0][0] if call_args[0] else "")
-        assert "<qa-failure-report>" in prompt
-        assert "</qa-failure-report>" in prompt
+        assert "--fix-post-merge" in cmd
+        assert "--epic" in cmd
+        assert "3" in cmd
+        assert "--story" in cmd
+        assert "1" in cmd
+        assert "--attempt" in cmd
 
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger._run_git")
@@ -217,27 +214,23 @@ class TestRunPostMergeFix:
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger._run_git")
     @patch("bmad_assist_lite.parallel.merger.subprocess.Popen")
-    def test_retry_context_included_when_attempt_gt_1(
+    def test_attempt_number_passed_to_subprocess(
         self,
         mock_popen: MagicMock,
         mock_git: MagicMock,
         mock_qg: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test 5.16: Verify retry context is included when attempt > 1."""
+        """Verify attempt number is passed as --attempt flag to subprocess."""
         mock_popen.return_value = _make_popen_mock()
         mock_git.return_value = _make_completed_process(stdout="1 file changed")
         mock_qg.return_value = PostMergeQGResult(all_passed=True, story_id="3.1")
 
         run_post_merge_fix("3.1", tmp_path, attempt=2)
 
-        call_args = mock_popen.return_value.communicate.call_args
-        prompt = call_args[1].get("input", call_args[0][0] if call_args[0] else "")
-        assert "<retry-context>" in prompt
-        assert "fix attempt #2" in prompt
-        assert "choose a different strategy" in prompt
-        assert "Read the failing files" in prompt
-        assert "carefully before making changes" in prompt
+        cmd = mock_popen.call_args[0][0]
+        attempt_idx = cmd.index("--attempt")
+        assert cmd[attempt_idx + 1] == "2"
 
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger._run_git")
@@ -279,17 +272,17 @@ class TestRunPostMergeFix:
         assert result.story_id == "3.1"
 
     @patch("bmad_assist_lite.parallel.merger.subprocess.Popen")
-    def test_claude_cli_not_found_raises_parallel_error(
+    def test_subprocess_not_found_raises_parallel_error(
         self,
         mock_popen: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Verify FileNotFoundError for Claude CLI raises ParallelError."""
+        """Verify FileNotFoundError for subprocess raises ParallelError."""
         from bmad_assist_lite.parallel.exceptions import ParallelError
 
-        mock_popen.side_effect = FileNotFoundError("claude not found")
+        mock_popen.side_effect = FileNotFoundError("python not found")
 
-        with pytest.raises(ParallelError, match="Claude CLI"):
+        with pytest.raises(ParallelError, match="Python executable"):
             run_post_merge_fix("3.1", tmp_path)
 
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
@@ -316,30 +309,22 @@ class TestRunPostMergeFix:
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger._run_git")
     @patch("bmad_assist_lite.parallel.merger.subprocess.Popen")
-    def test_workflow_instructions_included_in_prompt(
+    def test_subprocess_receives_parallel_mode_env(
         self,
         mock_popen: MagicMock,
         mock_git: MagicMock,
         mock_qg: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Verify importlib.resources loads workflow instructions into the prompt."""
+        """Verify subprocess receives BMAD_PARALLEL_MODE=1 in environment."""
         mock_popen.return_value = _make_popen_mock()
         mock_git.return_value = _make_completed_process(stdout="M file.py")
         mock_qg.return_value = PostMergeQGResult(all_passed=True, story_id="3.1")
 
         run_post_merge_fix("3.1", tmp_path)
 
-        call_args = mock_popen.return_value.communicate.call_args
-        prompt = call_args[1].get("input", call_args[0][0] if call_args[0] else "")
-        # The workflow instructions file should be loaded; verify non-trivial
-        # content is present before the failure report tags. The fix-quality-gate
-        # instructions.xml is a real file, so the prompt should contain more
-        # than just the qa-failure-report tags.
-        before_report = prompt.split("<qa-failure-report>")[0]
-        assert len(before_report.strip()) > 0, (
-            "Workflow instructions should be present before the failure report"
-        )
+        call_kwargs = mock_popen.call_args[1]
+        assert call_kwargs["env"]["BMAD_PARALLEL_MODE"] == "1"
 
     @patch("bmad_assist_lite.parallel.merger.subprocess.Popen")
     def test_git_commit_failure_returns_all_passed_false(

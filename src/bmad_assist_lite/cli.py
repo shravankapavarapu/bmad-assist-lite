@@ -174,6 +174,16 @@ def run(
         "--teardown-only",
         help="Skip story discovery and run epic teardown phases directly.",
     ),
+    fix_post_merge: bool = typer.Option(
+        False,
+        "--fix-post-merge",
+        help="Run fix-quality-gate phase for a post-merge QG failure.",
+    ),
+    attempt: int = typer.Option(
+        1,
+        "--attempt",
+        help="Fix attempt number (1-based) for retry context.",
+    ),
 ) -> None:
     """Run the BMAD development loop.
 
@@ -262,6 +272,45 @@ def run(
             raise typer.Exit(130)
         elif exit_reason == LoopExitReason.ERROR:
             typer.echo("\nTeardown failed with errors.", err=True)
+            raise typer.Exit(1)
+        return
+
+    # --- Fix-post-merge mode: run fix_quality_gate handler directly ---
+    if fix_post_merge:
+        if epic is None or story is None:
+            typer.echo(
+                "--fix-post-merge requires both --epic and --story.", err=True,
+            )
+            raise typer.Exit(1)
+
+        from bmad_assist_lite.core.state import Phase, State
+        from bmad_assist_lite.loop.dispatch import execute_phase, init_handlers
+
+        init_handlers(app_config, project)
+
+        story_id = f"{epic}.{story}"
+        fix_state = State(
+            current_epic=epic,
+            current_story=story_id,
+            current_phase=Phase.FIX_QUALITY_GATE,
+            qa_retry_count=attempt,
+        )
+
+        typer.echo(
+            f"Running fix-quality-gate for story {story_id} (attempt {attempt})"
+        )
+
+        result = execute_phase(fix_state)
+
+        if file_handler is not None:
+            file_handler.flush()
+            file_handler.close()
+            logging.getLogger().removeHandler(file_handler)
+
+        if result.success:
+            typer.echo("Fix phase completed successfully.")
+        else:
+            typer.echo("Fix phase failed.", err=True)
             raise typer.Exit(1)
         return
 

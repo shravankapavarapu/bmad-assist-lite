@@ -28,8 +28,8 @@ All git operations use ``_run_git()`` from ``git_ops`` — never raw
 from __future__ import annotations
 
 import asyncio
-import importlib.resources
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -885,111 +885,108 @@ def run_post_merge_fix(
     attempt: int = 1,
     timeout: int = 300,
 ) -> PostMergeQGResult:
-    """Attempt to fix post-merge quality gate failures using Claude CLI.
+    """Attempt to fix post-merge quality gate failures via subprocess.
 
-    Reads the failure report from the cache, loads the ``fix-quality-gate``
-    workflow instructions, and invokes ``claude --print`` with the combined
-    prompt.  After Claude CLI completes, any changes are committed and the
-    quality gate is re-run to verify the fix.
+    Spawns ``bmad-assist-lite run --fix-post-merge`` which runs the
+    ``fix_quality_gate`` handler through the full provider infrastructure
+    (master LLM with tool use — read, edit, run commands).  After the
+    subprocess exits, any file changes are committed and the quality gate
+    is re-run to verify the fix.
 
     Args:
         story_id: Story identifier (e.g. ``"4.4"``).
         project_root: Path to the main git repository (base branch).
         config: Optional configuration for QG command sourcing.
         attempt: Current fix attempt number (1-based).  When ``> 1``,
-            retry context is prepended to the prompt.
-        timeout: Timeout in seconds for Claude CLI invocation.
+            the handler receives retry context to try a different strategy.
+        timeout: Timeout in seconds for the fix subprocess.
 
     Returns:
         A :class:`PostMergeQGResult` from the re-run quality gate.
-        ``all_passed=False`` when the fix attempt itself fails (Claude CLI
-        error, no changes produced, etc.).
-
-    Raises:
-        ParallelError: If Claude CLI (``claude``) is not found on PATH.
+        ``all_passed=False`` when the fix subprocess fails or produces
+        no changes.
 
     """
     tag = f"[FIX-QG|post-merge|{story_id}]"
     logger.info("%s Starting fix attempt #%d", tag, attempt)
 
     # ------------------------------------------------------------------
-    # Step 1: Read the failure report from cache
+    # Step 1: Copy failure report to the path the handler expects
     # ------------------------------------------------------------------
-    report_path = (
-        project_root / ".bmad-assist-lite" / "cache" / f"post-merge-qg-failures-{story_id}.md"
-    )
-    failure_report = ""
-    if report_path.exists():
+    cache_dir = project_root / ".bmad-assist-lite" / "cache"
+    post_merge_report = cache_dir / f"post-merge-qg-failures-{story_id}.md"
+    handler_report = cache_dir / f"qa-failures-{story_id}.md"
+
+    if post_merge_report.exists():
         try:
-            failure_report = report_path.read_text(encoding="utf-8")
-            logger.info("%s Loaded failure report from %s", tag, report_path)
+            import shutil
+
+            shutil.copy2(post_merge_report, handler_report)
+            logger.info(
+                "%s Copied failure report to %s", tag, handler_report,
+            )
         except OSError as exc:
-            logger.warning("%s Failed to read failure report: %s", tag, exc)
-            failure_report = "Failed to read failure report."
+            logger.warning(
+                "%s Failed to copy failure report: %s (handler will see 'no report')",
+                tag,
+                exc,
+            )
     else:
-        logger.warning("%s No failure report found at %s", tag, report_path)
-        failure_report = "No failure report available."
+        logger.warning("%s No failure report at %s", tag, post_merge_report)
 
     # ------------------------------------------------------------------
-    # Step 2: Load fix-quality-gate workflow instructions
+    # Step 2: Parse story_id into epic and story numbers
     # ------------------------------------------------------------------
-    try:
-        instructions_ref = (
-            importlib.resources.files("bmad_assist_lite.workflows")
-            / "fix-quality-gate"
-            / "instructions.xml"
-        )
-        workflow_instructions = instructions_ref.read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError) as exc:
-        logger.warning("%s Failed to load workflow instructions: %s", tag, exc)
-        workflow_instructions = ""
+    parts = story_id.split(".")
+    if len(parts) != 2:  # noqa: PLR2004
+        logger.error("%s Cannot parse story_id %r into epic.story", tag, story_id)
+        return PostMergeQGResult(all_passed=False, story_id=story_id)
+    epic_num, story_num = parts[0], parts[1]
 
     # ------------------------------------------------------------------
-    # Step 3: Build the fix prompt
+    # Step 3: Spawn fix subprocess via Popen
     # ------------------------------------------------------------------
-    retry_context = ""
-    if attempt > 1:
-        retry_context = (
-            "\n\n<retry-context>\n"
-            f"This is fix attempt #{attempt}. A previous fix attempt did not fully resolve the\n"
-            "quality gate failures. The failure report below shows the CURRENT errors after\n"
-            "the previous fix. Do not repeat the same approach — analyze what the previous\n"
-            "attempt likely tried and choose a different strategy. Read the failing files\n"
-            "carefully before making changes.\n"
-            "</retry-context>"
-        )
+    import sys
 
-    prompt = (
-        f"{workflow_instructions}{retry_context}\n\n"
-        f"<qa-failure-report>\n{failure_report}\n</qa-failure-report>"
-    )
+    exec_args = [
+        sys.executable, "-m", "bmad_assist_lite", "run",
+        "--project", str(project_root),
+        "--epic", epic_num,
+        "--story", story_num,
+        "--fix-post-merge",
+        "--attempt", str(attempt),
+    ]
 
-    # ------------------------------------------------------------------
-    # Step 4: Invoke Claude CLI via Popen (Architecture Rule 5)
-    # ------------------------------------------------------------------
-    logger.info("%s Invoking Claude CLI for fix", tag)
+    env = {
+        **os.environ,
+        "BMAD_PARALLEL_MODE": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
+
+    logger.info("%s Spawning fix subprocess (timeout=%ds)", tag, timeout)
     proc: subprocess.Popen[str] | None = None
     try:
         proc = subprocess.Popen(
-            ["claude", "--print"],
-            stdin=subprocess.PIPE,
+            exec_args,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             cwd=str(project_root),
             text=True,
             encoding="utf-8",
+            env=env,
             **get_subprocess_kwargs(),
         )
     except FileNotFoundError as exc:
         raise ParallelError(
-            f"{tag} Claude CLI ('claude') not found on PATH. "
-            "Ensure Claude CLI is installed and available."
+            f"{tag} Python executable not found: {sys.executable}"
         ) from exc
 
     try:
-        stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
+        stdout, _ = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        logger.warning("%s Claude CLI timed out after %ds — killing process tree", tag, timeout)
+        logger.warning(
+            "%s Fix subprocess timed out after %ds — killing", tag, timeout,
+        )
         kill_process(proc)
         proc.wait()
         return PostMergeQGResult(all_passed=False, story_id=story_id)
@@ -997,19 +994,29 @@ def run_post_merge_fix(
         if proc is not None and proc.poll() is None:
             kill_process(proc)
 
+    if stdout:
+        for line in stdout.strip().splitlines():
+            logger.info("%s [subprocess] %s", tag, line)
+
     if proc.returncode != 0:
-        error_msg = (stderr or "").strip() or (stdout or "").strip()
-        logger.error("%s Claude CLI failed (rc=%d): %s", tag, proc.returncode, error_msg)
+        logger.error(
+            "%s Fix subprocess failed (rc=%d)", tag, proc.returncode,
+        )
         return PostMergeQGResult(all_passed=False, story_id=story_id)
 
-    logger.info("%s Claude CLI completed successfully", tag)
+    logger.info("%s Fix subprocess completed successfully", tag)
 
     # ------------------------------------------------------------------
-    # Step 5: Check for changes, commit if any
+    # Step 4: Check for changes, commit if any
     # ------------------------------------------------------------------
-    status_result = _run_git(["status", "--porcelain"], cwd=project_root, check=False)
+    status_result = _run_git(
+        ["status", "--porcelain"], cwd=project_root, check=False,
+    )
     if not status_result.stdout.strip():
-        logger.warning("%s Claude CLI produced no changes — treating as failed attempt", tag)
+        logger.warning(
+            "%s Fix subprocess produced no changes — treating as failed attempt",
+            tag,
+        )
         return PostMergeQGResult(all_passed=False, story_id=story_id)
 
     commit_msg = f"fix: post-merge integration fix for story {story_id}"
@@ -1022,14 +1029,16 @@ def run_post_merge_fix(
         return PostMergeQGResult(all_passed=False, story_id=story_id)
 
     # ------------------------------------------------------------------
-    # Step 6: Re-run quality gate to verify fix
+    # Step 5: Re-run quality gate to verify fix
     # ------------------------------------------------------------------
     logger.info("%s Re-running post-merge quality gate", tag)
     qg_result = run_post_merge_qg(story_id, project_root, config)
     if qg_result.all_passed:
         logger.info("%s Quality gate passed after fix attempt #%d", tag, attempt)
     else:
-        logger.warning("%s Quality gate still failing after fix attempt #%d", tag, attempt)
+        logger.warning(
+            "%s Quality gate still failing after fix attempt #%d", tag, attempt,
+        )
 
     return qg_result
 
