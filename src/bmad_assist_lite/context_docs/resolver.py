@@ -206,7 +206,7 @@ def resolve_epic_docs(
     project_root: Path,
     cache_dir: Path,
     epic_file: Path | None = None,
-    architecture_file: Path | None = None,
+    architecture_files: list[Path] | None = None,
     max_libs: int = 8,
     max_tokens_per_lib: int = 5000,
 ) -> dict[str, str]:
@@ -223,7 +223,7 @@ def resolve_epic_docs(
         project_root: Path to project root.
         cache_dir: Path to .bmad-assist-lite/cache directory.
         epic_file: Optional epic markdown file path.
-        architecture_file: Optional architecture doc path.
+        architecture_files: Optional list of architecture doc paths.
         max_libs: Maximum libraries to resolve.
         max_tokens_per_lib: Token limit per library for Context7 API.
 
@@ -261,7 +261,7 @@ def resolve_epic_docs(
     libraries = detect_libraries(
         project_root,
         epic_file=epic_file,
-        architecture_file=architecture_file,
+        architecture_files=architecture_files,
         max_libs=max_libs,
     )
 

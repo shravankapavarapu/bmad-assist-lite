@@ -449,6 +449,9 @@ def apply_context_filter(context: CompilerContext) -> None:
     missing_docs: list[str] = []
     missing_sections: dict[str, list[str]] = {}
 
+    accumulated: dict[str, list[str]] = {}
+    seen_keys: set[str] = set()
+
     for req in reqs:
         doc_lower = req.document.lower()
         content_key = filename_to_key.get(doc_lower)
@@ -465,15 +468,22 @@ def apply_context_filter(context: CompilerContext) -> None:
                     missing_docs.append(req.document)
             continue
 
+        seen_keys.add(content_key)
+
+        # Resolve source content: prefer per-file content for precise extraction,
+        # fall back to concatenated content for backward compat (single-file case).
+        source = context.per_file_contents.get(
+            doc_lower, context.file_contents.get(content_key, "")
+        )
+
         if req.directive == "skip":
-            context.file_contents[content_key] = ""
+            accumulated.setdefault(content_key, [])
         elif req.directive == "full":
-            pass  # no change
+            if source:
+                accumulated.setdefault(content_key, []).append(source)
         elif req.directive == "sections":
-            original = context.file_contents[content_key]
-            extracted_parts: list[str] = []
             for idx, section_name in enumerate(req.sections):
-                section = _extract_section_from_content(original, section_name)
+                section = _extract_section_from_content(source, section_name)
                 if section is None:
                     if idx in req.optional_sections:
                         logger.warning(
@@ -486,9 +496,15 @@ def apply_context_filter(context: CompilerContext) -> None:
                             section_name
                         )
                     continue
-                extracted_parts.append(section)
-            if extracted_parts:
-                context.file_contents[content_key] = "\n\n".join(extracted_parts)
+                accumulated.setdefault(content_key, []).append(section)
+
+    # Apply accumulated results — keys not mentioned in the table stay unchanged
+    for key in seen_keys:
+        acc_parts = accumulated.get(key, [])
+        if acc_parts:
+            context.file_contents[key] = "\n\n".join(acc_parts)
+        else:
+            context.file_contents[key] = ""
 
     if missing_docs or missing_sections:
         if missing_sections and missing_docs:

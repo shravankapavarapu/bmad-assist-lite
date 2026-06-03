@@ -108,6 +108,11 @@ class ProjectPaths:
         return self.project_knowledge / "architecture.md"
 
     @cached_property
+    def architecture_files(self) -> list[Path]:
+        """Return all architecture document file paths."""
+        return sorted(self.project_knowledge.glob("architecture*.md"))
+
+    @cached_property
     def project_context_file(self) -> Path:
         """Return the project context file path."""
         return self.project_knowledge / "project_context.md"

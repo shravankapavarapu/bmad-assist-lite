@@ -11,7 +11,7 @@ input_file_patterns:
     strategy: SELECTIVE_LOAD
   architecture_file:
     pattern: "{planning_artifacts}/*architecture*.md"
-    strategy: SELECTIVE_LOAD
+    strategy: FULL_LOAD
   ux_file:
     pattern: "{planning_artifacts}/*ux*.md"
     strategy: SELECTIVE_LOAD

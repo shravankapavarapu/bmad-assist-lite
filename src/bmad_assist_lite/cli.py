@@ -347,6 +347,7 @@ def run(
         epic_stories.setdefault(epic_num, []).append((epic_num, story_num, full_key))
 
     if not epic_stories:
+        logger.error("No backlog stories match the specified filters.")
         typer.echo("No backlog stories match the specified filters.", err=True)
         raise typer.Exit(1)
 
@@ -365,16 +366,14 @@ def run(
             story_id = f"{epic}.{story}" if epic else str(story)
             current_status = sprint_status.get_story_status(story_id)
             if current_status:
-                typer.echo(
+                msg = (
                     f"Story {story_id} is not in backlog "
-                    f"(current status: {current_status}).",
-                    err=True,
+                    f"(current status: {current_status})."
                 )
             else:
-                typer.echo(
-                    f"Story {story} not found in {target_epic} backlog stories.",
-                    err=True,
-                )
+                msg = f"Story {story} not found in {target_epic} backlog stories."
+            logger.error(msg)
+            typer.echo(msg, err=True)
             raise typer.Exit(1)
 
     # Validate epic files exist for each epic
@@ -385,6 +384,10 @@ def run(
     for e_num in epic_stories:
         epic_file = _find_epic_file(planning_dir, e_num)
         if epic_file is None or not _is_dedicated_epic_file(epic_file, e_num):
+            logger.warning(
+                "No dedicated epic file for epic %d (e.g. epic-%d.md) in %s — skipping.",
+                e_num, e_num, planning_dir,
+            )
             typer.echo(
                 f"Warning: No dedicated epic file for epic {e_num} "
                 f"(e.g. epic-{e_num}.md) in {planning_dir} — skipping.",
@@ -399,6 +402,7 @@ def run(
         del epic_stories[e_num]
 
     if not epic_stories:
+        logger.error("No epics with dedicated epic files found. Cannot continue.")
         typer.echo("No epics with dedicated epic files found. Cannot continue.", err=True)
         raise typer.Exit(1)
 
@@ -492,6 +496,7 @@ def run(
         typer.echo("\nLoop interrupted. Use --resume to continue.")
         raise typer.Exit(130)
     elif exit_reason == LoopExitReason.ERROR:
+        logger.error("Loop failed with errors.")
         typer.echo("\nLoop failed with errors.", err=True)
         raise typer.Exit(1)
 
@@ -741,7 +746,7 @@ def _resolve_context_docs(
     from bmad_assist_lite.context_docs.resolver import resolve_epic_docs
 
     ctx_cfg = app_config.context_docs
-    arch_file = paths.architecture_file if paths.architecture_file.exists() else None
+    arch_files = paths.architecture_files or None
 
     typer.echo("Context7: fetching library docs...")
     for epic_num in epics_list:
@@ -757,7 +762,7 @@ def _resolve_context_docs(
                 project_root=project,
                 cache_dir=paths.cache_dir,
                 epic_file=epic_file,
-                architecture_file=arch_file,
+                architecture_files=arch_files,
                 max_libs=ctx_cfg.max_libs,
                 max_tokens_per_lib=ctx_cfg.max_tokens_per_lib,
             )
@@ -815,7 +820,7 @@ def fetch_docs(
     # Find epic and architecture files
     planning_dir = paths.planning_artifacts
     epic_file = _find_epic_file(planning_dir, epic_num)
-    arch_file = paths.architecture_file if paths.architecture_file.exists() else None
+    arch_files = paths.architecture_files or None
 
     from bmad_assist_lite.context_docs.resolver import resolve_epic_docs
 
@@ -825,7 +830,7 @@ def fetch_docs(
             project_root=project,
             cache_dir=paths.cache_dir,
             epic_file=epic_file,
-            architecture_file=arch_file,
+            architecture_files=arch_files,
             max_libs=max_libs,
             max_tokens_per_lib=max_tokens,
         )

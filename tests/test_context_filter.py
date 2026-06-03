@@ -1337,3 +1337,262 @@ Bar content.
         # Document is missing and has required sections → must raise CompilerError
         with pytest.raises(CompilerError, match="arch.md"):
             apply_context_filter(ctx)
+
+
+# ---------------------------------------------------------------------------
+# Sharded architecture file support (per-file extraction + accumulation)
+# ---------------------------------------------------------------------------
+
+
+class TestShardedArchitectureFiltering:
+    """Tests for per-file section extraction from sharded documents."""
+
+    ARCH_MAIN = """\
+# Architecture
+
+## Data Architecture
+
+Database schema and tables.
+
+## Architectural Boundaries
+
+Service boundaries and contracts.
+
+## Deployment
+
+Docker and CI/CD.
+"""
+
+    ARCH_ADRS = """\
+# Architecture Decision Records
+
+## ADR-001 State Machine Pattern
+
+We use a state machine for pipeline control.
+
+## ADR-002 Envelope Assembly
+
+Envelope assembly happens at build time.
+
+## ADR-003 Caching Strategy
+
+Redis for hot data, Postgres for cold.
+"""
+
+    ARCH_AGENTS = """\
+# Agent Architecture
+
+## Agent Implementation Patterns
+
+Agents follow the tool-use pattern with MCP.
+
+## MCP Tool Inventory
+
+Database, filesystem, and web tools.
+
+## Agent Output Contract
+
+JSON envelope with status and payload.
+"""
+
+    def _make_sharded_context(self, tmp_path: Path, epic: str) -> CompilerContext:
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {
+            "epic_file": [tmp_path / "epic-3.md"],
+            "architecture_file": [
+                tmp_path / "architecture.md",
+                tmp_path / "architecture-adrs.md",
+                tmp_path / "architecture-agents.md",
+            ],
+        }
+        ctx.file_contents = {
+            "epic_file": epic,
+            "architecture_file": (
+                self.ARCH_MAIN + "\n\n" + self.ARCH_ADRS + "\n\n" + self.ARCH_AGENTS
+            ),
+        }
+        ctx.per_file_contents = {
+            "architecture.md": self.ARCH_MAIN,
+            "architecture-adrs.md": self.ARCH_ADRS,
+            "architecture-agents.md": self.ARCH_AGENTS,
+        }
+        return ctx
+
+    def test_per_file_sections_extracted_from_correct_shard(self, tmp_path: Path):
+        """Each row extracts sections from its own file, not the concatenated blob."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture.md` | Data Architecture |
+| `architecture-adrs.md` | ADR-001 State Machine Pattern |
+| `architecture-agents.md` | MCP Tool Inventory |
+"""
+        ctx = self._make_sharded_context(tmp_path, epic)
+        apply_context_filter(ctx)
+
+        result = ctx.file_contents["architecture_file"]
+        assert "Database schema and tables." in result
+        assert "We use a state machine" in result
+        assert "Database, filesystem, and web tools." in result
+        # Sections NOT requested should be absent
+        assert "Docker and CI/CD." not in result
+        assert "Envelope Assembly" not in result
+        assert "Agent Output Contract" not in result
+
+    def test_accumulation_across_shards(self, tmp_path: Path):
+        """Multiple rows for the same key accumulate — no clobber."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture.md` | Data Architecture; Architectural Boundaries |
+| `architecture-adrs.md` | ADR-001 State Machine Pattern; ADR-002 Envelope Assembly |
+| `architecture-agents.md` | Agent Implementation Patterns; MCP Tool Inventory; Agent Output Contract |
+"""
+        ctx = self._make_sharded_context(tmp_path, epic)
+        apply_context_filter(ctx)
+
+        result = ctx.file_contents["architecture_file"]
+        # All 7 sections from all 3 rows should be present
+        assert "Database schema and tables." in result
+        assert "Service boundaries and contracts." in result
+        assert "We use a state machine" in result
+        assert "Envelope assembly happens at build time." in result
+        assert "Agents follow the tool-use pattern" in result
+        assert "Database, filesystem, and web tools." in result
+        assert "JSON envelope with status and payload." in result
+        # Unrequested sections absent
+        assert "Docker and CI/CD." not in result
+        assert "Caching Strategy" not in result
+
+    def test_mixed_directives_across_shards(self, tmp_path: Path):
+        """Skip one shard, full another, sections from third."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture.md` | (skip) |
+| `architecture-adrs.md` | (full) |
+| `architecture-agents.md` | Agent Implementation Patterns |
+"""
+        ctx = self._make_sharded_context(tmp_path, epic)
+        apply_context_filter(ctx)
+
+        result = ctx.file_contents["architecture_file"]
+        # Skip: main architecture content should NOT be present
+        assert "Database schema and tables." not in result
+        assert "Docker and CI/CD." not in result
+        # Full: all ADR content should be present
+        assert "ADR-001 State Machine Pattern" in result
+        assert "ADR-002 Envelope Assembly" in result
+        assert "ADR-003 Caching Strategy" in result
+        # Sections: only the requested section
+        assert "Agents follow the tool-use pattern" in result
+        assert "MCP Tool Inventory" not in result
+
+    def test_backward_compat_single_file(self, tmp_path: Path):
+        """Single architecture file with sections produces identical result."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture.md` | Data Architecture; Architectural Boundaries |
+"""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {
+            "epic_file": [tmp_path / "epic.md"],
+            "architecture_file": [tmp_path / "architecture.md"],
+        }
+        ctx.file_contents = {
+            "epic_file": epic,
+            "architecture_file": self.ARCH_MAIN,
+        }
+        ctx.per_file_contents = {
+            "architecture.md": self.ARCH_MAIN,
+        }
+
+        apply_context_filter(ctx)
+
+        result = ctx.file_contents["architecture_file"]
+        assert "Database schema and tables." in result
+        assert "Service boundaries and contracts." in result
+        assert "Docker and CI/CD." not in result
+
+    def test_missing_section_in_shard_raises(self, tmp_path: Path):
+        """Missing required section in a specific shard raises CompilerError."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture-adrs.md` | ADR-001 State Machine Pattern; Nonexistent Section |
+"""
+        ctx = self._make_sharded_context(tmp_path, epic)
+
+        with pytest.raises(CompilerError) as exc_info:
+            apply_context_filter(ctx)
+
+        msg = str(exc_info.value)
+        assert "Nonexistent Section" in msg
+        assert "architecture-adrs.md" in msg
+
+    def test_optional_section_in_shard_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Optional missing section in shard logs warning, doesn't error."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture-adrs.md` | ADR-001 State Machine Pattern; Ghost Section (optional) |
+"""
+        ctx = self._make_sharded_context(tmp_path, epic)
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            apply_context_filter(ctx)
+
+        result = ctx.file_contents["architecture_file"]
+        assert "We use a state machine" in result
+        assert "Ghost Section" in caplog.text
+
+    def test_full_directive_on_one_shard_only(self, tmp_path: Path):
+        """(full) on one shard loads only that shard's content."""
+        epic = """\
+# Epic
+
+### Context Requirements
+
+| Document | Sections to Load |
+|----------|-----------------|
+| `architecture-agents.md` | (full) |
+"""
+        ctx = self._make_sharded_context(tmp_path, epic)
+        apply_context_filter(ctx)
+
+        result = ctx.file_contents["architecture_file"]
+        assert "Agent Implementation Patterns" in result
+        assert "MCP Tool Inventory" in result
+        assert "Agent Output Contract" in result
+        # Other shards' content should NOT be present
+        assert "Database schema and tables." not in result
+        assert "ADR-001" not in result

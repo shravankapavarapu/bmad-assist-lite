@@ -175,7 +175,7 @@ def _scan_doc_for_frameworks(text: str) -> list[str]:
 def detect_libraries(
     project_root: Path,
     epic_file: Path | None = None,
-    architecture_file: Path | None = None,
+    architecture_files: list[Path] | None = None,
     max_libs: int = 8,
 ) -> list[str]:
     """Detect libraries used in a project from dependency files and documentation.
@@ -183,7 +183,7 @@ def detect_libraries(
     Args:
         project_root: Path to the project root directory.
         epic_file: Optional path to an epic markdown file to scan.
-        architecture_file: Optional path to architecture doc to scan.
+        architecture_files: Optional list of architecture doc paths to scan.
         max_libs: Maximum number of libraries to return.
 
     Returns:
@@ -199,7 +199,8 @@ def detect_libraries(
     all_libs.extend(_detect_from_cargo(project_root))
 
     # 2. Scan documentation for framework patterns
-    for doc_path in (architecture_file, epic_file):
+    doc_paths = list(architecture_files or []) + ([epic_file] if epic_file else [])
+    for doc_path in doc_paths:
         if doc_path and doc_path.exists():
             try:
                 text = doc_path.read_text(encoding="utf-8")

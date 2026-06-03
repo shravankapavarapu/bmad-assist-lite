@@ -205,6 +205,7 @@ def load_file_contents(
             try:
                 content = file_path.read_text(encoding="utf-8")
                 content_parts.append(content)
+                context.per_file_contents[file_path.name.lower()] = content
             except UnicodeDecodeError:
                 continue
             except PermissionError as e:

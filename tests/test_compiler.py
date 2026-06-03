@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from bmad_assist_lite.compiler.core import get_workflow_compiler
+from bmad_assist_lite.compiler.discovery import load_file_contents
 from bmad_assist_lite.compiler.types import CompilerContext, WorkflowIR
 from bmad_assist_lite.compiler.variables import resolve_variables
 from bmad_assist_lite.core.exceptions import CompilerError
@@ -76,6 +77,7 @@ class TestCompilerContext:
         assert ctx.resolved_variables == {}
         assert ctx.discovered_files == {}
         assert ctx.file_contents == {}
+        assert ctx.per_file_contents == {}
         assert ctx.links_only is False
 
 
@@ -142,3 +144,56 @@ class TestResolveVariables:
 
         assert ctx.resolved_variables is result
         assert ctx.resolved_variables["key"] == "value"
+
+
+# ---------------------------------------------------------------------------
+# load_file_contents — per_file_contents population
+# ---------------------------------------------------------------------------
+
+
+class TestLoadFileContentsPerFile:
+    """Tests for per_file_contents population during load_file_contents."""
+
+    def test_per_file_contents_populated(self, tmp_path: Path):
+        """load_file_contents stores individual file content by lowercase filename."""
+        (tmp_path / "architecture.md").write_text("# Main arch", encoding="utf-8")
+        (tmp_path / "architecture-adrs.md").write_text("# ADRs", encoding="utf-8")
+
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {
+            "architecture_file": [
+                tmp_path / "architecture.md",
+                tmp_path / "architecture-adrs.md",
+            ],
+        }
+
+        load_file_contents(ctx)
+
+        assert ctx.per_file_contents["architecture.md"] == "# Main arch"
+        assert ctx.per_file_contents["architecture-adrs.md"] == "# ADRs"
+        assert "# Main arch" in ctx.file_contents["architecture_file"]
+        assert "# ADRs" in ctx.file_contents["architecture_file"]
+
+    def test_per_file_contents_single_file(self, tmp_path: Path):
+        """Single file populates per_file_contents with one entry."""
+        (tmp_path / "architecture.md").write_text("# Arch", encoding="utf-8")
+
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {
+            "architecture_file": [tmp_path / "architecture.md"],
+        }
+
+        load_file_contents(ctx)
+
+        assert ctx.per_file_contents["architecture.md"] == "# Arch"
+        assert ctx.file_contents["architecture_file"] == "# Arch"
+
+    def test_per_file_contents_empty_pattern(self, tmp_path: Path):
+        """Empty discovered files produces no per_file_contents entries."""
+        ctx = CompilerContext(project_root=tmp_path, output_folder=tmp_path / "_output")
+        ctx.discovered_files = {"architecture_file": []}
+
+        load_file_contents(ctx)
+
+        assert ctx.per_file_contents == {}
+        assert ctx.file_contents["architecture_file"] == ""
