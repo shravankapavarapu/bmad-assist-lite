@@ -485,11 +485,14 @@ class CodexProvider(BaseProvider):
 
         if returncode != 0:
             exit_status = ExitStatus.from_code(returncode)
-            stderr_truncated = (
-                stderr_content[:STDERR_TRUNCATE_LENGTH]
-                if stderr_content
-                else "(empty)"
-            )
+            if not stderr_content:
+                stderr_truncated = "(empty)"
+            elif len(stderr_content) <= STDERR_TRUNCATE_LENGTH:
+                stderr_truncated = stderr_content.strip()
+            else:
+                stderr_truncated = "..." + stderr_content[
+                    -STDERR_TRUNCATE_LENGTH:
+                ].strip()
             message = (
                 f"Codex CLI failed with exit code {returncode}: "
                 f"{stderr_truncated}"

@@ -1376,9 +1376,11 @@ class TestErrors:
         mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
-        """Long stderr (> 200 chars) is truncated in error message (Task 8.7)."""
+        """Long stderr (> 200 chars) shows the tail in error message."""
         mock_resolve_cli.return_value = "/usr/bin/codex"
-        long_stderr = "x" * 500
+        # Mock adds trailing \n per line, so use 301 b's to guarantee
+        # 200+ b's survive after [-200:].strip()
+        long_stderr = "a" * 300 + "b" * 301
         process = create_mock_process(
             stdout_content="",
             stderr_content=long_stderr,
@@ -1392,11 +1394,12 @@ class TestErrors:
             provider.invoke("test", timeout=300)
 
         # The full stderr is stored in the exception attribute (includes trailing newline)
-        assert len(exc_info.value.stderr.strip()) == 500
-        # The error message only contains the truncated version (200 chars)
+        assert len(exc_info.value.stderr.strip()) == 601
+        # The error message shows the LAST 200 chars (tail) with ellipsis prefix
         error_msg = str(exc_info.value)
-        assert "x" * 200 in error_msg
-        assert "x" * 201 not in error_msg
+        assert "..." in error_msg
+        assert "b" * 199 in error_msg
+        assert "a" * 100 not in error_msg
 
 
 # ============================================================================
