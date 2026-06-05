@@ -830,6 +830,7 @@ class TestResumeSkipsCanary:
                     config=config,
                     project_root=Path("/fake/project"),
                     epic_num=3,
+                    resume=True,
                 )
                 orch._output_mux = _mock_output_mux()
 

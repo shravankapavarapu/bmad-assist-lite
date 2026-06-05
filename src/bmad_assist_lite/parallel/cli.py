@@ -37,6 +37,11 @@ def parallel_run(
         "-e",
         help="Epic number to run in parallel.",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Resume a previous parallel run (reuse existing state).",
+    ),
     verbose: int = typer.Option(
         0,
         "--verbose",
@@ -187,6 +192,7 @@ def parallel_run(
                 project_root=project,
                 epic_num=epic_num,
                 base_branch=current_branch,
+                resume=resume,
             )
             try:
                 asyncio.run(orchestrator.run())

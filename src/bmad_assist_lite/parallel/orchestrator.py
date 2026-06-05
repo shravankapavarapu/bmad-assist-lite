@@ -181,6 +181,7 @@ class Orchestrator:
         epic_num: int,
         *,
         base_branch: str = "main",
+        resume: bool = False,
     ) -> None:
         """Initialize the orchestrator with injected dependencies.
 
@@ -190,6 +191,9 @@ class Orchestrator:
             project_root: Path to the main git repository.
             epic_num: The epic number being executed.
             base_branch: The git branch stories are based on.
+            resume: If ``True``, load existing ``parallel-state.yaml``
+                for crash recovery.  When ``False`` (default), always
+                create fresh state from the dependency graph.
 
         """
         self._dependency_graph = dependency_graph
@@ -242,9 +246,9 @@ class Orchestrator:
         # so _on_sigint() can terminate it on Ctrl+C
         self._teardown_process: asyncio.subprocess.Process | None = None
 
-        # Persistent state — load existing or create fresh
+        # Persistent state — load existing on --resume, create fresh otherwise
         self._state_path = get_parallel_state_path(project_root)
-        existing_state = load_state(self._state_path)
+        existing_state = load_state(self._state_path) if resume else None
         if existing_state is not None:
             # Run crash recovery to reconcile state against on-disk worktrees
             self._state: ParallelState = recover_state(

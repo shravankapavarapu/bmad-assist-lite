@@ -787,6 +787,7 @@ class TestOrchestratorRecoveryIntegration:
             config=config,
             project_root=Path("/project"),
             epic_num=3,
+            resume=True,
         )
 
         # Verify recover_state was called with the loaded state
@@ -837,6 +838,7 @@ class TestOrchestratorRecoveryIntegration:
             config=ParallelConfig(),
             project_root=Path("/project"),
             epic_num=3,
+            resume=True,
         )
 
         # 3.1 should NOT be in _in_flight_ids (it was reset to backlog)
