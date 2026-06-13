@@ -3,7 +3,6 @@ stepsCompleted: []
 inputDocuments:
   - 'architecture.md'
   - 'project-context.md'
-  - 'requirements-cursor-provider.md'
 ---
 
 # bmad-assist-lite-parallel-stories - Epic 11 Breakdown
@@ -50,14 +49,13 @@ Run dev loops at roughly 1/10th of Opus token cost without giving up implementat
 
 | Library | Context7 ID | Query Focus | Stories |
 |---------|-------------|-------------|---------|
-| — | — | — | — |
 
 ### Context Requirements
 
 | Document | Sections to Load |
 |----------|-----------------|
 | `architecture.md` | Core Architectural Decisions (Cursor Provider Extension); Implementation Patterns & Consistency Rules (Cursor Provider Extension); Project Structure & Boundaries (Cursor Provider Extension) |
-| `requirements-cursor-provider.md` | (full) |
+| `requirements-cursor-provider.md` | (full) (optional) |
 | `project-context.md` | (full) |
 | `prd.md` | (skip) |
 

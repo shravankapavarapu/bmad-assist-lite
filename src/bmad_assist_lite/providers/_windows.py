@@ -11,6 +11,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,9 @@ IS_WINDOWS = sys.platform == "win32"
 # Win32 API constants
 CREATE_NO_WINDOW = 0x08000000
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+# Unix SIGTERM→SIGKILL escalation grace period (seconds)
+SIGTERM_GRACE_SECONDS = 5
 
 
 def get_subprocess_kwargs() -> dict[str, Any]:
@@ -61,6 +65,26 @@ def terminate_process(pid: int) -> bool:
                 os.killpg(pgid, signal.SIGTERM)  # type: ignore[attr-defined]
             except ProcessLookupError:
                 return False
+
+            # Poll for graceful exit before escalating to SIGKILL
+            start = time.monotonic()
+            while time.monotonic() - start < SIGTERM_GRACE_SECONDS:
+                if not is_pid_alive(pid):
+                    logger.debug("PID %d exited after SIGTERM within grace period", pid)
+                    return True
+                time.sleep(0.1)
+
+            # Grace period expired — escalate to SIGKILL
+            logger.debug(
+                "PID %d still alive after %ds grace period, sending SIGKILL",
+                pid,
+                SIGTERM_GRACE_SECONDS,
+            )
+            try:
+                os.killpg(pgid, signal.SIGKILL)  # type: ignore[attr-defined]
+            except ProcessLookupError:
+                # Mid-escalation death: process died between check and SIGKILL
+                logger.debug("PID %d died before SIGKILL delivery", pid)
             return True
     except Exception as e:
         logger.warning("Failed to terminate PID %d: %s", pid, e)
