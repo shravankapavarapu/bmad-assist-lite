@@ -11,6 +11,7 @@ import pytest
 from bmad_assist_lite.core.config import _reset_config, load_config
 from bmad_assist_lite.core.paths import _reset_paths
 from bmad_assist_lite.loop.dispatch import reset_handlers
+from bmad_assist_lite.providers.cursor import _reset_cursor_cli_version
 
 # ============================================================================
 # Markers
@@ -64,6 +65,14 @@ def reset_loop_dispatch():
     reset_handlers()
     yield
     reset_handlers()
+
+
+@pytest.fixture(autouse=True)
+def reset_cursor_cli_version_singleton():
+    """Reset the Cursor CLI version cache before each test."""
+    _reset_cursor_cli_version()
+    yield
+    _reset_cursor_cli_version()
 
 
 @pytest.fixture(autouse=True)

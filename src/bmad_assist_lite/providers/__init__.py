@@ -3,7 +3,7 @@
 Provider Registry:
     - ClaudeSDKProvider: Claude integration using claude-agent-sdk
     - CodexProvider: Codex CLI subprocess provider
-    - CursorProvider: Cursor CLI subprocess provider (stub — Story 11.3)
+    - CursorProvider: Cursor CLI subprocess provider
     - GeminiProvider: Gemini CLI subprocess provider
 
 Registry Functions:

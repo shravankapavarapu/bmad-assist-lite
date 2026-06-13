@@ -352,25 +352,23 @@ class TestCursorProviderRegistry:
 
         assert issubclass(CursorProvider, BaseProvider)
 
-    def test_cursor_stub_methods_raise_not_implemented(self) -> None:
-        """All abstract method implementations raise NotImplementedError."""
+    def test_cursor_methods_are_implemented(self) -> None:
+        """All abstract methods have real implementations (Story 11.3 replaced stub)."""
         from bmad_assist_lite.providers.cursor import CursorProvider
-        from bmad_assist_lite.providers.result_collector import ResultCollector
 
         provider = CursorProvider()
 
-        with pytest.raises(NotImplementedError):
-            provider._do_invoke("test", collector=ResultCollector())
+        # supports_model is fully implemented
+        assert provider.supports_model("composer-2.5") is True
+        assert provider.supports_model("auto") is False
 
-        with pytest.raises(NotImplementedError):
-            provider._cleanup()
+        # parse_output is fully implemented
+        mock_result = MagicMock()
+        mock_result.stdout = "  hello  "
+        assert provider.parse_output(mock_result) == "hello"
 
-        with pytest.raises(NotImplementedError):
-            mock_result = MagicMock()
-            provider.parse_output(mock_result)
-
-        with pytest.raises(NotImplementedError):
-            provider.supports_model("composer-2.5")
+        # _cleanup runs without error when no process is active
+        provider._cleanup()  # Should not raise
 
 
 # ============================================================================
