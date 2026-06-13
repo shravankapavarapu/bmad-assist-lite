@@ -53,8 +53,19 @@ COMMON_TOOL_NAMES: frozenset[str] = frozenset(
     {"Edit", "Write", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Read"}
 )
 
+# Provider→binary-name mapping: ordered tuples of binary names to try per provider.
+# After this refactor, resolve_cli_path()'s cli_name parameter is effectively a
+# **provider name** (not a binary name), and _KNOWN_CLI_PATHS keys likewise shift
+# from CLI/binary names to provider names.  For existing providers (codex, gemini)
+# these are identical, so no behavioral change occurs.
+_PROVIDER_BINARY_NAMES: dict[str, tuple[str, ...]] = {
+    "codex": ("codex",),
+    "cursor": ("cursor-agent", "agent"),
+    "gemini": ("gemini",),
+}
+
 # Known install locations per platform, checked when shutil.which() fails.
-# Keyed by CLI name; values are lists of candidate paths per platform.
+# Keyed by provider name; values are lists of candidate directories per platform.
 _KNOWN_CLI_PATHS: dict[str, list[Path]] = {
     "codex": (
         [
@@ -67,6 +78,20 @@ _KNOWN_CLI_PATHS: dict[str, list[Path]] = {
             Path("/usr/local/bin"),
             Path.home() / ".npm-global" / "bin",
             Path.home() / ".npm" / "bin",
+        ]
+    ),
+    "cursor": (
+        (
+            # Guard: skip Windows known-path probing if LOCALAPPDATA is unset/empty
+            # to avoid creating a relative path from Path("").
+            [Path(os.environ["LOCALAPPDATA"]) / "cursor-agent"]
+            if os.environ.get("LOCALAPPDATA")
+            else []
+        )
+        if sys.platform == "win32"
+        else [
+            Path.home() / ".local" / "bin",
+            Path("/usr/local/bin"),
         ]
     ),
     "gemini": (
@@ -90,10 +115,15 @@ _GRACE_POLL_INTERVAL: float = 2.0
 def resolve_cli_path(cli_name: str) -> str:
     """Resolve the full path to a CLI binary.
 
+    ``cli_name`` is a **provider name** (e.g. ``"cursor"``), not necessarily
+    the binary name on disk.  The mapping from provider name to one or more
+    candidate binary names lives in ``_PROVIDER_BINARY_NAMES``.  Providers
+    not listed there default to ``(cli_name,)`` for backward compatibility.
+
     Resolution order:
-    1. Config override (``providers.cli_paths.<cli_name>``)
-    2. ``shutil.which()`` (PATH lookup)
-    3. Known platform-specific install locations
+    1. Config override (``providers.cli_paths.<cli_name>``) — single explicit path
+    2. ``shutil.which()`` (PATH lookup) — tries each binary name in order
+    3. Known platform-specific install locations — tries each binary name in order
     """
     from bmad_assist_lite.core.exceptions import ProviderError
 
@@ -104,6 +134,7 @@ def resolve_cli_path(cli_name: str) -> str:
     except Exception:
         config = None
 
+    # Tier 1: Config override — single explicit path, no multi-name iteration
     if config and hasattr(config.providers, "cli_paths") and config.providers.cli_paths:
         override: str | None = getattr(config.providers.cli_paths, cli_name, None)
         if override:
@@ -113,18 +144,30 @@ def resolve_cli_path(cli_name: str) -> str:
                 return str(p)
             logger.warning("Configured cli_paths.%s=%s not found, falling back", cli_name, override)
 
-    found = shutil.which(cli_name)
-    if found:
-        logger.debug("Resolved %s via PATH: %s", cli_name, found)
-        return found
+    # Resolve ordered binary names for this provider (defaults to (cli_name,))
+    binary_names = _PROVIDER_BINARY_NAMES.get(cli_name, (cli_name,))
 
+    # Tier 2: PATH lookup — try each binary name in preference order
+    for binary_name in binary_names:
+        found = shutil.which(binary_name)
+        if found:
+            logger.debug("Resolved %s via PATH: %s (binary=%s)", cli_name, found, binary_name)
+            return found
+
+    # Tier 3: Known platform install locations — try each binary name per directory
     suffixes = [".cmd", ".exe", ""] if sys.platform == "win32" else [""]
     for directory in _KNOWN_CLI_PATHS.get(cli_name, []):
-        for suffix in suffixes:
-            candidate = directory / f"{cli_name}{suffix}"
-            if candidate.is_file():
-                logger.info("Found %s at known path: %s", cli_name, candidate)
-                return str(candidate)
+        for binary_name in binary_names:
+            for suffix in suffixes:
+                candidate = directory / f"{binary_name}{suffix}"
+                if candidate.is_file():
+                    logger.info(
+                        "Found %s at known path: %s (binary=%s)",
+                        cli_name,
+                        candidate,
+                        binary_name,
+                    )
+                    return str(candidate)
 
     raise ProviderError(
         f"{cli_name} CLI not found. Checked PATH and known install locations. "

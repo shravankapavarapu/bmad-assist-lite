@@ -33,7 +33,7 @@ class MasterProviderConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    provider: str = Field(..., description="Provider name: claude, gemini")
+    provider: str = Field(..., description="Provider name: claude, codex, cursor, gemini")
     model: str = Field(..., description="Model identifier: sonnet, opus, gemini-2.5-flash, etc.")
     model_name: str | None = Field(None, description="Display name override")
     settings: str | None = Field(None, description="Path to provider settings JSON")
@@ -60,7 +60,7 @@ class MultiProviderConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    provider: str = Field(..., description="Provider name: claude, gemini")
+    provider: str = Field(..., description="Provider name: claude, codex, cursor, gemini")
     model: str = Field(..., description="Model identifier")
     model_name: str | None = Field(None, description="Display name override")
     settings: str | None = Field(None, description="Path to provider settings JSON")
@@ -88,6 +88,7 @@ class CliPathsConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     codex: str | None = Field(None, description="Absolute path to codex binary")
+    cursor: str | None = Field(None, description="Absolute path to cursor/agent binary")
     gemini: str | None = Field(None, description="Absolute path to gemini binary")
 
 
