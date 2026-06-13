@@ -122,7 +122,7 @@ class CodeReviewHandler(BaseHandler):
                 read_only_tools = ["Read", "Glob", "Grep", "Bash"]
 
                 def _make_invoker(
-                    p: Any, m: str, t: int
+                    p: Any, m: str, t: int, e: str | None
                 ) -> Any:
                     return lambda: p.invoke(
                         prompt,
@@ -130,6 +130,7 @@ class CodeReviewHandler(BaseHandler):
                         timeout=t,
                         cwd=self.project_path,
                         allowed_tools=read_only_tools,
+                        effort=e,
                     )
 
                 with concurrent.futures.ThreadPoolExecutor(
@@ -143,7 +144,7 @@ class CodeReviewHandler(BaseHandler):
                         futures.append(
                             loop.run_in_executor(
                                 executor,
-                                _make_invoker(provider, mc.model, timeout),
+                                _make_invoker(provider, mc.model, timeout, mc.effort),
                             )
                         )
 

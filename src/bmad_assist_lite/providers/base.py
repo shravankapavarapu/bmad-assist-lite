@@ -342,6 +342,7 @@ class BaseProvider(ABC):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Execute LLM provider with the given prompt.

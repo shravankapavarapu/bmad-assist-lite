@@ -3,8 +3,6 @@
 import logging
 from pathlib import Path
 
-import pytest
-
 from bmad_assist_lite.compiler.context_filter import (
     _build_filename_to_key_map,
     _extract_section_from_content,

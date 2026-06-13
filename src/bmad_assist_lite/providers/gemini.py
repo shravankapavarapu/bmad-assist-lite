@@ -94,39 +94,15 @@ class GeminiProvider(BaseProvider):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
-        """Execute Gemini CLI with streaming and collector integration.
-
-        Resolves model, validates settings, spawns subprocess, parses JSON stream,
-        and feeds collector. Raises TimeoutError on subprocess timeout for base class
-        grace period handling.
-
-        The retry loop for transient Gemini errors (exit_code != 0, empty stderr)
-        is provider-specific behavior handled entirely within this method.
-
-        Args:
-            prompt: The prompt text to send to the provider.
-            collector: ResultCollector to accumulate streaming chunks into.
-            model: Model identifier, or None for provider default.
-            timeout: Timeout in seconds (always an int, resolved by invoke()).
-            settings_file: Optional path to provider settings file.
-            cwd: Working directory for the provider process.
-            allowed_tools: List of tool names the provider may use.
-            color_index: Index for ANSI color differentiation in output.
-
-        Returns:
-            ProviderResult with timed_out=False on successful completion.
-
-        Raises:
-            TimeoutError: When subprocess.wait() times out (handled by base class).
-            ProviderError: On CLI not found or FileNotFoundError.
-            ProviderExitCodeError: On non-transient CLI exit code errors.
-            ValueError: When timeout <= 0.
-
-        """
+        """Execute Gemini CLI with the given prompt and return the result."""
         if timeout <= 0:
             raise ValueError(f"timeout must be positive, got {timeout}")
+
+        if effort:
+            logger.debug("Gemini ignores effort=%s (Claude-only feature)", effort)
 
         effective_model = model or self.default_model or "gemini-2.5-flash"
 

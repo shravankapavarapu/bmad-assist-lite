@@ -37,6 +37,10 @@ class MasterProviderConfig(BaseModel):
     model: str = Field(..., description="Model identifier: sonnet, opus, gemini-2.5-flash, etc.")
     model_name: str | None = Field(None, description="Display name override")
     settings: str | None = Field(None, description="Path to provider settings JSON")
+    effort: str | None = Field(
+        None,
+        description="Claude effort: low|medium|high|xhigh|max (Opus 4.7 only; ignored elsewhere)",
+    )
 
     @property
     def display_model(self) -> str:
@@ -60,6 +64,10 @@ class MultiProviderConfig(BaseModel):
     model: str = Field(..., description="Model identifier")
     model_name: str | None = Field(None, description="Display name override")
     settings: str | None = Field(None, description="Path to provider settings JSON")
+    effort: str | None = Field(
+        None,
+        description="Claude effort: low|medium|high|xhigh|max (Opus 4.7 only; ignored elsewhere)",
+    )
 
     @property
     def display_model(self) -> str:
@@ -113,11 +121,11 @@ class TimeoutsConfig(BaseModel):
     # Phases that need longer timeouts than default (300s)
     _PHASE_DEFAULTS: ClassVar[dict[str, int]] = {
         "create_story": 900,
-        "validate_story": 600,
-        "validate_story_synthesis": 600,
-        "dev_story": 1200,
-        "code_review": 900,
-        "code_review_synthesis": 900,
+        "validate_story": 900,
+        "validate_story_synthesis": 900,
+        "dev_story": 1800,
+        "code_review": 1200,
+        "code_review_synthesis": 1200,
         "quality_gate": 300,
         "fix_quality_gate": 900,
         "epic_quality_gate": 600,

@@ -70,35 +70,19 @@ class ClaudeSDKProvider(BaseProvider):
         cwd: Path | None,
         collector: ResultCollector,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
     ) -> str:
-        """Run the Claude SDK query and feed chunks into the collector.
+        extra_args: dict[str, str | None] = {}
+        if effort:
+            extra_args["effort"] = effort
 
-        Iterates over AssistantMessage objects from the SDK streaming response,
-        extracting TextBlock.text values and feeding them to the collector.
-
-        Args:
-            prompt: The prompt text to send.
-            model: Model identifier (e.g. "sonnet", "opus").
-            settings: Optional path to Claude settings file.
-            cwd: Working directory for the SDK process.
-            collector: ResultCollector to accumulate text chunks into.
-            allowed_tools: List of tool names the provider may use.
-
-        Returns:
-            The full accumulated text from collector.text.
-
-        Raises:
-            CLINotFoundError: If the claude CLI is not found.
-            ProcessError: If the SDK subprocess fails.
-            ProviderError: If no response text is received.
-
-        """
         options = ClaudeAgentOptions(
             model=model,
             permission_mode="acceptEdits",
             settings=str(settings) if settings is not None else None,
             cwd=cwd,
             tools=allowed_tools if allowed_tools is not None else None,
+            extra_args=extra_args,
         )
 
         async for message in query(prompt=prompt, options=options):
@@ -122,34 +106,10 @@ class ClaudeSDKProvider(BaseProvider):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
-        """Execute Claude SDK with streaming and collector integration.
-
-        Resolves model, validates settings, runs the async query via
-        run_async_in_thread(asyncio.wait_for(...)), and returns a ProviderResult.
-
-        TimeoutError from asyncio.wait_for is intentionally NOT caught here —
-        it propagates to the base class invoke() which handles grace period logic.
-
-        Args:
-            prompt: The prompt text to send to the provider.
-            collector: ResultCollector to accumulate streaming chunks into.
-            model: Model identifier, or None for provider default.
-            timeout: Timeout in seconds (always an int, resolved by invoke()).
-            settings_file: Optional path to provider settings file.
-            cwd: Working directory for the provider process.
-            allowed_tools: List of tool names the provider may use.
-            color_index: Index for ANSI color differentiation (unused).
-
-        Returns:
-            ProviderResult with timed_out=False on successful completion.
-
-        Raises:
-            TimeoutError: When asyncio.wait_for fires (handled by base class).
-            ProviderError: On SDK errors (CLINotFoundError, ProcessError, etc.).
-
-        """
+        """Execute Claude SDK with the given prompt and return the result."""
         _ = color_index
 
         if timeout <= 0:
@@ -190,6 +150,7 @@ class ClaudeSDKProvider(BaseProvider):
                         cwd,
                         collector,
                         allowed_tools,
+                        effort,
                     ),
                     timeout=timeout,
                 )
