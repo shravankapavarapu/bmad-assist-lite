@@ -1,4 +1,4 @@
-"""Tests for CursorProvider (Story 11.3: CursorProvider Core).
+"""Tests for CursorProvider (Stories 11.3 and 11.4).
 
 Covers all acceptance criteria:
 - TestCursorProviderInit: Class properties (provider_name, default_model)
@@ -17,11 +17,23 @@ Covers all acceptance criteria:
 - TestCursorBinaryNotFound: Popen FileNotFoundError -> ProviderError
 - TestCursorVersionCacheReset: _reset_cursor_cli_version clears cache
 
+Story 11.4 deny-config lifecycle tests:
+- TestDenyConfigSetup: read-only creates .cursor/cli.json + marker
+- TestDenyConfigAtomicWrite: temp file + os.replace used
+- TestDenyConfigCleanup: both files removed after invocation
+- TestDenyConfigPreExisting: user file untouched, DEBUG logged
+- TestDenyConfigWriteMode: allowed_tools=None creates no deny-config
+- TestDenyConfigConcurrentSafe: concurrent identical writes succeed
+- TestDenyConfigCleanupOnException: exception path still removes files
+- TestDenyConfigTempFileCleanup: write failure cleans temp file
+
 All tests mock subprocess.Popen -- NO live CLI invocation (NFR2).
 """
 
 import json
 import logging
+import os
+from pathlib import Path
 from subprocess import TimeoutExpired
 from unittest.mock import MagicMock, patch
 
@@ -30,6 +42,10 @@ import pytest
 from bmad_assist_lite.core.exceptions import ProviderError, ProviderTimeoutError
 from bmad_assist_lite.providers.base import BaseProvider, ProviderResult
 from bmad_assist_lite.providers.cursor import (
+    CURSOR_CLI_JSON,
+    CURSOR_DENY_CONFIG_CONTENT,
+    CURSOR_DENY_CONFIG_MARKER_NAME,
+    CURSOR_DIR_NAME,
     DEFAULT_CURSOR_MODEL,
     CursorProvider,
     _reset_cursor_cli_version,
@@ -1199,3 +1215,498 @@ class TestCursorRegistryIntegration:
         providers = list_providers()
         assert "cursor" in providers
         _reset_registry()
+
+
+# ============================================================================
+# Story 11.4: Deny-Config Lifecycle Tests
+# ============================================================================
+
+
+class TestDenyConfigSetup:
+    """Test deny-config creation for read-only invocations (AC #1)."""
+
+    def test_creates_deny_config_and_marker(self, tmp_path: Path) -> None:
+        """Read-only invocation creates .cursor/cli.json with correct content and marker."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        provider._setup_deny_config(tmp_path, cache_dir)
+
+        deny_config_path = (tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON).resolve()
+        assert deny_config_path.exists()
+        assert deny_config_path.read_text(encoding="utf-8") == CURSOR_DENY_CONFIG_CONTENT
+
+        marker_path = cache_dir / CURSOR_DENY_CONFIG_MARKER_NAME
+        assert marker_path.exists()
+        # Marker stores absolute (resolved) path
+        assert marker_path.read_text(encoding="utf-8") == str(deny_config_path)
+
+    def test_deny_config_content_is_valid_json(self) -> None:
+        """CURSOR_DENY_CONFIG_CONTENT is valid JSON with expected structure."""
+        parsed = json.loads(CURSOR_DENY_CONFIG_CONTENT)
+        assert "permissions" in parsed
+        assert "deny" in parsed["permissions"]
+        assert "Write(**)" in parsed["permissions"]["deny"]
+        assert "Shell(**)" in parsed["permissions"]["deny"]
+
+    def test_sets_instance_attributes(self, tmp_path: Path) -> None:
+        """After setup, _deny_config_path and _deny_marker_path are set."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        provider._setup_deny_config(tmp_path, cache_dir)
+
+        assert provider._deny_config_path == (tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON).resolve()
+        assert provider._deny_marker_path == cache_dir / CURSOR_DENY_CONFIG_MARKER_NAME
+
+    def test_creates_cursor_directory(self, tmp_path: Path) -> None:
+        """Setup creates .cursor/ directory if it doesn't exist."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        assert not (tmp_path / CURSOR_DIR_NAME).exists()
+        provider._setup_deny_config(tmp_path, cache_dir)
+        assert (tmp_path / CURSOR_DIR_NAME).is_dir()
+
+    def test_creates_cache_directory(self, tmp_path: Path) -> None:
+        """Setup creates cache directory if it doesn't exist."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        assert not cache_dir.exists()
+        provider._setup_deny_config(tmp_path, cache_dir)
+        assert cache_dir.is_dir()
+
+
+class TestDenyConfigAtomicWrite:
+    """Test atomic write pattern (temp + os.replace) for deny-config (AC #1)."""
+
+    def test_uses_os_replace_for_deny_config(self, tmp_path: Path) -> None:
+        """Verify os.replace is called with temp -> target for deny-config."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+        deny_config_path = (tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON).resolve()
+        pid_suffix = f".{os.getpid()}.tmp"
+        temp_path = deny_config_path.with_suffix(pid_suffix)
+
+        with patch("bmad_assist_lite.providers.cursor.os.replace") as mock_replace:
+            # Need to let the real mkdir and write_text work
+            provider._setup_deny_config(tmp_path, cache_dir)
+
+        # os.replace called for deny-config (first call) and marker (second call)
+        assert mock_replace.call_count == 2
+        # First call is deny-config: temp → target
+        first_call = mock_replace.call_args_list[0]
+        assert first_call[0][0] == temp_path
+        assert first_call[0][1] == deny_config_path
+
+
+class TestDenyConfigCleanup:
+    """Test deny-config removal after invocation (AC #2)."""
+
+    def test_removes_deny_config_and_marker(self, tmp_path: Path) -> None:
+        """After cleanup, both deny file and marker are removed."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        provider._setup_deny_config(tmp_path, cache_dir)
+        deny_path = provider._deny_config_path
+        marker_path = provider._deny_marker_path
+        assert deny_path is not None
+        assert marker_path is not None
+        assert deny_path.exists()
+        assert marker_path.exists()
+
+        provider._remove_deny_config()
+
+        assert not deny_path.exists()
+        assert not marker_path.exists()
+        assert provider._deny_config_path is None
+        assert provider._deny_marker_path is None
+
+    def test_remove_is_idempotent(self, tmp_path: Path) -> None:
+        """Calling _remove_deny_config() twice does not raise."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        provider._setup_deny_config(tmp_path, cache_dir)
+        provider._remove_deny_config()
+        # Second call should be a no-op (paths are None)
+        provider._remove_deny_config()
+
+    def test_remove_handles_already_deleted_files(self, tmp_path: Path) -> None:
+        """If files are already deleted, _remove_deny_config doesn't raise."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        provider._setup_deny_config(tmp_path, cache_dir)
+
+        # Manually delete the files
+        assert provider._deny_config_path is not None
+        assert provider._deny_marker_path is not None
+        provider._deny_config_path.unlink()
+        provider._deny_marker_path.unlink()
+
+        # Should not raise (missing_ok=True)
+        provider._remove_deny_config()
+
+    @patch("bmad_assist_lite.providers.cursor.subprocess")
+    @patch("bmad_assist_lite.providers.cursor.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.cursor.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.cursor.Popen")
+    def test_cleanup_called_removes_deny_config(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        mock_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Full invoke with cwd removes deny-config via _cleanup()."""
+        mock_resolve_cli.return_value = "/usr/bin/cursor-agent"
+        process = create_mock_process(stdout_content=VALID_STREAM, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CursorProvider()
+        _reset_cursor_cli_version()
+
+        provider.invoke(
+            "test prompt",
+            allowed_tools=["Read", "Glob"],
+            cwd=tmp_path,
+            timeout=300,
+        )
+
+        # Deny-config should have been created and then cleaned up
+        deny_config = tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON
+        assert not deny_config.exists()
+        assert provider._deny_config_path is None
+
+
+class TestDenyConfigPreExisting:
+    """Test pre-existing user .cursor/cli.json is not modified (AC #3)."""
+
+    def test_user_file_not_modified(self, tmp_path: Path) -> None:
+        """Pre-existing .cursor/cli.json is not modified or deleted."""
+        # Create a pre-existing user config
+        cursor_dir = tmp_path / CURSOR_DIR_NAME
+        cursor_dir.mkdir()
+        user_config = cursor_dir / CURSOR_CLI_JSON
+        user_content = '{"custom": "config"}'
+        user_config.write_text(user_content, encoding="utf-8")
+
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+        provider._setup_deny_config(tmp_path, cache_dir)
+
+        # User file should be untouched
+        assert user_config.read_text(encoding="utf-8") == user_content
+        # No marker should be created
+        marker_path = cache_dir / CURSOR_DENY_CONFIG_MARKER_NAME
+        assert not marker_path.exists()
+        assert provider._deny_config_path is None
+
+    def test_user_file_debug_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Pre-existing file triggers DEBUG log message."""
+        cursor_dir = tmp_path / CURSOR_DIR_NAME
+        cursor_dir.mkdir()
+        (cursor_dir / CURSOR_CLI_JSON).write_text("{}", encoding="utf-8")
+
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        with caplog.at_level(logging.DEBUG):
+            provider._setup_deny_config(tmp_path, cache_dir)
+
+        assert any("Pre-existing .cursor/cli.json" in r.message for r in caplog.records)
+
+    @patch("bmad_assist_lite.providers.cursor.subprocess")
+    @patch("bmad_assist_lite.providers.cursor.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.cursor.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.cursor.Popen")
+    def test_pre_existing_not_deleted_after_invoke(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        mock_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Pre-existing .cursor/cli.json survives full invoke lifecycle."""
+        mock_resolve_cli.return_value = "/usr/bin/cursor-agent"
+        process = create_mock_process(stdout_content=VALID_STREAM, returncode=0)
+        mock_popen.return_value = process
+
+        # Create pre-existing user file
+        cursor_dir = tmp_path / CURSOR_DIR_NAME
+        cursor_dir.mkdir()
+        user_config = cursor_dir / CURSOR_CLI_JSON
+        user_content = '{"user": true}'
+        user_config.write_text(user_content, encoding="utf-8")
+
+        provider = CursorProvider()
+        _reset_cursor_cli_version()
+
+        provider.invoke(
+            "test prompt",
+            allowed_tools=["Read", "Glob"],
+            cwd=tmp_path,
+            timeout=300,
+        )
+
+        # User file should still exist with original content
+        assert user_config.read_text(encoding="utf-8") == user_content
+
+    @patch("bmad_assist_lite.providers.cursor.subprocess")
+    @patch("bmad_assist_lite.providers.cursor.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.cursor.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.cursor.Popen")
+    def test_restriction_prompt_still_applied_with_pre_existing(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        mock_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Even with pre-existing file, tool restriction prompt is appended."""
+        mock_resolve_cli.return_value = "/usr/bin/cursor-agent"
+        process = create_mock_process(stdout_content=VALID_STREAM, returncode=0)
+        mock_popen.return_value = process
+
+        # Create pre-existing user file
+        cursor_dir = tmp_path / CURSOR_DIR_NAME
+        cursor_dir.mkdir()
+        (cursor_dir / CURSOR_CLI_JSON).write_text("{}", encoding="utf-8")
+
+        provider = CursorProvider()
+        _reset_cursor_cli_version()
+
+        provider.invoke(
+            "test prompt",
+            allowed_tools=["Read", "Glob"],
+            cwd=tmp_path,
+            timeout=300,
+        )
+
+        call_args = mock_popen.call_args[0][0]
+        prompt_arg = call_args[-1]
+        assert "TOOL ACCESS RESTRICTIONS" in prompt_arg
+
+
+class TestDenyConfigWriteMode:
+    """Test write mode creates no deny-config (AC #5)."""
+
+    @patch("bmad_assist_lite.providers.cursor.subprocess")
+    @patch("bmad_assist_lite.providers.cursor.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.cursor.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.cursor.Popen")
+    def test_write_mode_no_deny_config(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        mock_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """allowed_tools=None (write mode) -> no deny-config or marker."""
+        mock_resolve_cli.return_value = "/usr/bin/cursor-agent"
+        process = create_mock_process(stdout_content=VALID_STREAM, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CursorProvider()
+        _reset_cursor_cli_version()
+
+        provider.invoke(
+            "test prompt",
+            cwd=tmp_path,
+            timeout=300,
+            # allowed_tools defaults to None -> write mode
+        )
+
+        deny_config = tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON
+        assert not deny_config.exists()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+        marker = cache_dir / CURSOR_DENY_CONFIG_MARKER_NAME
+        assert not marker.exists()
+
+    @patch("bmad_assist_lite.providers.cursor.subprocess")
+    @patch("bmad_assist_lite.providers.cursor.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.cursor.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.cursor.Popen")
+    def test_write_mode_existing_user_file_untouched(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        mock_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Write mode with existing user .cursor/cli.json -> file untouched."""
+        mock_resolve_cli.return_value = "/usr/bin/cursor-agent"
+        process = create_mock_process(stdout_content=VALID_STREAM, returncode=0)
+        mock_popen.return_value = process
+
+        # Create user config
+        cursor_dir = tmp_path / CURSOR_DIR_NAME
+        cursor_dir.mkdir()
+        user_config = cursor_dir / CURSOR_CLI_JSON
+        user_content = '{"my": "settings"}'
+        user_config.write_text(user_content, encoding="utf-8")
+
+        provider = CursorProvider()
+        _reset_cursor_cli_version()
+
+        provider.invoke("test", cwd=tmp_path, timeout=300)
+
+        assert user_config.read_text(encoding="utf-8") == user_content
+
+
+class TestDenyConfigConcurrentSafe:
+    """Test concurrent read-only validators race safely (AC #6)."""
+
+    def test_concurrent_identical_writes_succeed(self, tmp_path: Path) -> None:
+        """Multiple validators writing identical deny-config content all succeed."""
+        import concurrent.futures
+
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+        errors: list[Exception] = []
+
+        def create_deny_config() -> None:
+            try:
+                provider = CursorProvider()
+                provider._setup_deny_config(tmp_path, cache_dir)
+            except Exception as e:
+                errors.append(e)
+
+        # Run 5 concurrent validators
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(create_deny_config) for _ in range(5)]
+            concurrent.futures.wait(futures)
+
+        assert errors == [], f"Concurrent creation failed: {errors}"
+
+        # Deny-config should contain valid JSON
+        deny_config = tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON
+        assert deny_config.exists()
+        parsed = json.loads(deny_config.read_text(encoding="utf-8"))
+        assert parsed == {"permissions": {"deny": ["Write(**)", "Shell(**)"]}}
+
+    def test_cleanup_idempotent_via_missing_ok(self, tmp_path: Path) -> None:
+        """Concurrent cleanup is idempotent via unlink(missing_ok=True)."""
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+
+        # Set up two providers pointing to the same deny-config
+        p1 = CursorProvider()
+        p2 = CursorProvider()
+        p1._setup_deny_config(tmp_path, cache_dir)
+        # p2 also points to the same files (simulating concurrent creation)
+        p2._deny_config_path = p1._deny_config_path
+        p2._deny_marker_path = p1._deny_marker_path
+
+        # Both remove calls should succeed without error
+        p1._remove_deny_config()
+        p2._remove_deny_config()
+
+
+class TestDenyConfigCleanupOnException:
+    """Test exception during _do_invoke still removes deny-config (AC #2)."""
+
+    @patch("bmad_assist_lite.providers.cursor.subprocess")
+    @patch("bmad_assist_lite.providers.cursor.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.cursor.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.cursor.Popen")
+    def test_exception_during_invoke_still_cleans_up(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        mock_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Exception in _do_invoke after deny-config -> _cleanup() removes both files."""
+        mock_resolve_cli.return_value = "/usr/bin/cursor-agent"
+        # Process with no result event and non-zero exit -> ProviderError
+        stream = build_ndjson_stream(
+            make_system_init("composer-2.5"),
+            make_assistant_message("partial"),
+        )
+        process = create_mock_process(
+            stdout_content=stream,
+            stderr_content="API error",
+            returncode=1,
+        )
+        mock_popen.return_value = process
+
+        provider = CursorProvider()
+        _reset_cursor_cli_version()
+
+        with pytest.raises(ProviderError):
+            provider.invoke(
+                "test prompt",
+                allowed_tools=["Read", "Glob"],
+                cwd=tmp_path,
+                timeout=300,
+            )
+
+        # Deny-config and marker should be cleaned up
+        deny_config = tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON
+        assert not deny_config.exists()
+        assert provider._deny_config_path is None
+
+
+class TestDenyConfigTempFileCleanup:
+    """Test temp file cleanup on write failure."""
+
+    def test_temp_file_cleaned_on_write_failure(self, tmp_path: Path) -> None:
+        """Exception during atomic write -> temp file is cleaned up."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+        deny_config_path = (tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON).resolve()
+        pid_suffix = f".{os.getpid()}.tmp"
+        temp_path = deny_config_path.with_suffix(pid_suffix)
+
+        # Make os.replace fail
+        with patch(
+            "bmad_assist_lite.providers.cursor.os.replace",
+            side_effect=OSError("disk full"),
+        ):
+            provider._setup_deny_config(tmp_path, cache_dir)
+
+        # Deny-config should NOT exist (write failed)
+        assert not deny_config_path.exists()
+        # Temp file should be cleaned up
+        assert not temp_path.exists()
+        # Provider should not track the deny-config
+        assert provider._deny_config_path is None
+
+    def test_marker_write_failure_still_tracks_deny_config(
+        self, tmp_path: Path
+    ) -> None:
+        """If marker write fails, deny-config is still tracked for cleanup."""
+        provider = CursorProvider()
+        cache_dir = tmp_path / ".bmad-assist-lite" / "cache"
+        deny_config_path = (tmp_path / CURSOR_DIR_NAME / CURSOR_CLI_JSON).resolve()
+
+        call_count = 0
+        original_replace = os.replace
+
+        def replace_fail_on_second(src: object, dst: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise OSError("marker write failed")
+            original_replace(src, dst)  # type: ignore[arg-type]
+
+        with patch(
+            "bmad_assist_lite.providers.cursor.os.replace",
+            side_effect=replace_fail_on_second,
+        ):
+            provider._setup_deny_config(tmp_path, cache_dir)
+
+        # Deny-config should exist (first os.replace succeeded)
+        assert deny_config_path.exists()
+        # Provider should still track it for cleanup
+        assert provider._deny_config_path == deny_config_path

@@ -9,6 +9,7 @@ Implements the BaseProvider Template Method contract:
 import contextlib
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -36,6 +37,21 @@ DEFAULT_CURSOR_MODEL: str = "composer-2.5"
 STDERR_TRUNCATE_LENGTH: int = 200
 """Maximum characters of stderr included in error messages."""
 
+# Deny-config constants (Story 11.4: Read-Only Mode & Deny-Config Lifecycle)
+CURSOR_DENY_CONFIG_CONTENT: str = json.dumps(
+    {"permissions": {"deny": ["Write(**)", "Shell(**)"]}}
+)
+"""Frozen JSON content for the Cursor CLI project-level deny-config file."""
+
+CURSOR_DENY_CONFIG_MARKER_NAME: str = "cursor-deny-config.marker"
+"""Filename for the marker that records deny-config ownership."""
+
+CURSOR_DIR_NAME: str = ".cursor"
+"""Name of the Cursor CLI configuration directory."""
+
+CURSOR_CLI_JSON: str = "cli.json"
+"""Name of the Cursor CLI project-level config file."""
+
 # Lazy one-per-process version cache (reset via _reset_cursor_cli_version for tests)
 _cursor_cli_version: str | None = None
 
@@ -61,6 +77,8 @@ class CursorProvider(BaseProvider):
         self._current_process: Popen[str] | None = None
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
+        self._deny_config_path: Path | None = None
+        self._deny_marker_path: Path | None = None
 
     @property
     def provider_name(self) -> str:
@@ -123,6 +141,94 @@ class CursorProvider(BaseProvider):
             command.append("--force")
         command.append(prompt)
         return command
+
+    def _setup_deny_config(self, cwd: Path, cache_dir: Path) -> None:
+        """Create a deny-config file to physically block writes in read-only mode.
+
+        Writes ``CURSOR_DENY_CONFIG_CONTENT`` to ``<cwd>/.cursor/cli.json``
+        atomically (temp + ``os.replace``). If a pre-existing user file is found,
+        it is left untouched and a DEBUG message is logged.
+
+        Also writes a marker file into ``cache_dir`` recording the absolute path
+        of the created deny-config, enabling crash-recovery cleanup.
+
+        Args:
+            cwd: Working directory (project root) for the subprocess.
+            cache_dir: Path to ``.bmad-assist-lite/cache/`` for the marker file.
+
+        """
+        deny_config_path = (cwd / CURSOR_DIR_NAME / CURSOR_CLI_JSON).resolve()
+
+        # Pre-existing user file — do not modify
+        if deny_config_path.exists():
+            logger.debug(
+                "Pre-existing .cursor/cli.json found at %s — not modifying",
+                deny_config_path,
+            )
+            self._deny_config_path = None
+            return
+
+        # Ensure directories exist
+        try:
+            deny_config_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.debug("Failed to create .cursor directory: %s", e)
+            return
+
+        # Atomic write of deny-config: temp → os.replace
+        # Use PID-based unique temp suffix to avoid collisions with concurrent validators
+        pid_suffix = f".{os.getpid()}.tmp"
+        temp_deny = deny_config_path.with_suffix(pid_suffix)
+        try:
+            temp_deny.write_text(CURSOR_DENY_CONFIG_CONTENT, encoding="utf-8")
+            os.replace(temp_deny, deny_config_path)
+        except OSError as e:
+            logger.debug("Failed to write deny-config: %s", e)
+            with contextlib.suppress(OSError):
+                temp_deny.unlink(missing_ok=True)
+            return
+
+        # Atomic write of marker file
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        marker_path = cache_dir / CURSOR_DENY_CONFIG_MARKER_NAME
+        temp_marker = marker_path.with_suffix(pid_suffix)
+        try:
+            temp_marker.write_text(str(deny_config_path), encoding="utf-8")
+            os.replace(temp_marker, marker_path)
+        except OSError as e:
+            logger.debug("Failed to write deny-config marker: %s", e)
+            with contextlib.suppress(OSError):
+                temp_marker.unlink(missing_ok=True)
+            # Deny-config was written successfully — still track it
+            # even if marker failed (cleanup will still work via instance attrs)
+
+        self._deny_config_path = deny_config_path
+        self._deny_marker_path = marker_path
+        logger.debug("Created deny-config at %s (marker: %s)", deny_config_path, marker_path)
+
+    def _remove_deny_config(self) -> None:
+        """Remove the deny-config file and marker created by this invocation.
+
+        Safe to call multiple times. Only removes files this instance created
+        (tracked via ``_deny_config_path``). Uses ``missing_ok=True`` for
+        idempotency in concurrent scenarios.
+        """
+        if self._deny_config_path is None:
+            return
+
+        try:
+            self._deny_config_path.unlink(missing_ok=True)
+        except OSError as e:
+            logger.debug("Failed to remove deny-config: %s", e)
+
+        if self._deny_marker_path is not None:
+            try:
+                self._deny_marker_path.unlink(missing_ok=True)
+            except OSError as e:
+                logger.debug("Failed to remove deny-config marker: %s", e)
+
+        self._deny_config_path = None
+        self._deny_marker_path = None
 
     def _do_invoke(
         self,
@@ -188,7 +294,12 @@ class CursorProvider(BaseProvider):
         # Derive write mode: allowed_tools=None means master phase (full write)
         write_mode = allowed_tools is None
 
-        # Build tool restriction prompt if needed
+        # Set up deny-config for read-only invocations (before Popen so CLI reads it)
+        if not write_mode and cwd is not None:
+            cache_dir = cwd / ".bmad-assist-lite" / "cache"
+            self._setup_deny_config(cwd, cache_dir)
+
+        # Build tool restriction prompt if needed (already implemented in Story 11.3)
         final_prompt = prompt
         if allowed_tools is not None:
             allowed_set = set(allowed_tools)
@@ -464,3 +575,6 @@ class CursorProvider(BaseProvider):
             stdout_thread.join(timeout=1)
         if stderr_thread is not None:
             stderr_thread.join(timeout=1)
+
+        # Remove deny-config file and marker (guaranteed to run)
+        self._remove_deny_config()

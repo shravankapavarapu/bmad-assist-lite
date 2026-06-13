@@ -146,9 +146,17 @@ class QualityGateHandler:
             return None
 
         epic_num, story_num = parts
+
+        # Try exact name first: story-11.4.md
         story_file = paths.stories_dir / f"story-{epic_num}.{story_num}.md"
         if story_file.exists():
             return story_file
+
+        # Try alternate naming convention: 11-4-*.md
+        matches = list(paths.stories_dir.glob(f"{epic_num}-{story_num}-*.md"))
+        if matches:
+            return matches[0]
+
         return None
 
     def _get_commands(self, state: State) -> list[QualityGateEntry]:
