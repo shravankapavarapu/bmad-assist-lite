@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**bmad-assist-lite** is a lightweight, Windows-native Python CLI tool that automates the BMAD (Breakthrough Method of Agile AI Driven Development) methodology with Multi-LLM orchestration. It coordinates Claude Code CLI + Gemini CLI + Codex CLI to run a 10-phase development loop: create story → validate → synthesize → implement → code-review → synthesize-review → quality-gate → (fix-quality-gate) → epic-quality-gate → retrospective.
+**bmad-assist-lite** is a lightweight, Windows-native Python CLI tool that automates the BMAD (Breakthrough Method of Agile AI Driven Development) methodology with Multi-LLM orchestration. It coordinates Claude Code CLI + Gemini CLI + Codex CLI + Cursor CLI to run a 10-phase development loop: create story → validate → synthesize → implement → code-review → synthesize-review → quality-gate → (fix-quality-gate) → epic-quality-gate → retrospective.
 
 Derived from bmad-assist, with ~60 source files, 13 test files, and 16 workflow templates. Plugin architecture for extensibility.
 
@@ -114,7 +114,7 @@ To change which LLM models are used, edit `bmad-assist-lite.yaml` in your projec
 ```yaml
 providers:
   master:
-    provider: claude    # or: gemini, codex
+    provider: claude    # or: gemini, codex, cursor
     model: opus         # Claude: opus, sonnet, haiku (or full ID like claude-sonnet-4-5-20250929)
     effort: max         # Opus 4.7 thinking effort: low|medium|high|xhigh|max. Omit to use Claude Code's default (xhigh).
   multi:
@@ -130,8 +130,9 @@ providers:
 - **Claude** (`providers/claude_sdk.py`): `opus`, `sonnet`, `haiku`, or any `claude-*` full model ID. Default: `opus`
 - **Gemini** (`providers/gemini.py`): Any model string (e.g., `gemini-2.5-flash`, `gemini-2.5-pro`). Validated by Gemini CLI at runtime. Default: `gemini-2.5-flash`
 - **Codex** (`providers/codex.py`): `gpt-5.3-codex`, `gpt-5.1-codex-mini`, `o4-mini`, or any `gpt-`/`codex-`/`o1-`/`o3-`/`o4-` prefixed model. Default: `gpt-5.3-codex`. Requires OpenAI API key auth (`codex login --with-api-key`); ChatGPT auth does not support model selection
+- **Cursor** (`providers/cursor.py`): `composer-2.5`, `composer-2.5-fast`, or any `composer-*` prefixed model. Default: `composer-2.5`. Requires `CURSOR_API_KEY` (Pro plan) in `.env`. See `docs/linux-deployment.md` for setup
 
-**Valid effort values (Claude Opus 4.7 only):** `low`, `medium`, `high`, `xhigh`, `max`. Forwarded to the CLI as `--effort <value>` via the SDK's `extra_args`. Ignored by Gemini and pre-Opus-4.7 Claude models. Default for this project: `max`.
+**Valid effort values (Claude Opus 4.7 only):** `low`, `medium`, `high`, `xhigh`, `max`. Forwarded to the CLI as `--effort <value>` via the SDK's `extra_args`. Ignored by Gemini, Codex, Cursor, and pre-Opus-4.7 Claude models. Default for this project: `max`.
 
 **Config model definitions** are in `core/config.py`: `MasterProviderConfig` and `MultiProviderConfig` Pydantic models define the `provider`, `model`, and `effort` fields.
 
@@ -175,6 +176,7 @@ providers:
       model: sonnet
   cli_paths:  # Override CLI binary paths (useful when venv strips PATH)
     codex: "C:/path/to/codex.exe"
+    cursor: "/home/user/.local/bin/agent"  # cursor-agent or agent binary
     gemini: "C:/path/to/gemini.cmd"
 
 loop:

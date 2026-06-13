@@ -129,6 +129,6 @@ development_status:
   11-1-sigkill-escalation: blocked
   11-2-cursor-resolution-and-config: blocked
   11-3-cursor-provider-core: blocked
-  11-4-readonly-mode-deny-config: review
-  11-5-linux-deployment-docs: backlog
+  11-4-readonly-mode-deny-config: blocked
+  11-5-linux-deployment-docs: review
   11-6-epic-documentation-sync: backlog
