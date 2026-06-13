@@ -8,6 +8,15 @@ frCoverage: '54/54'
 inputDocuments:
   - 'prd.md'
   - 'architecture.md'
+extension:
+  name: 'cursor-provider-linux'
+  epic: 11
+  status: 'in-progress'
+  date: '2026-06-12'
+  stepsCompleted: ['step-01-validate-prerequisites', 'step-02-design-epics', 'step-03-create-stories']
+  inputDocuments:
+    - 'requirements-cursor-provider.md'
+    - 'architecture.md (Extension: Cursor Provider sections)'
 ---
 
 # bmad-assist-lite-parallel-stories - Epic Breakdown
@@ -908,3 +917,196 @@ So that the full project is validated and lessons are captured before the epic i
 **When** the orchestrator reaches the end of ready stories
 **Then** epic teardown does NOT run (not all stories done)
 **And** the orchestrator reports the blocked stories and exits
+
+---
+
+# Extension: Cursor Provider (Composer 2.5) + Linux Migration — Epic 11
+
+_Appended 2026-06-12. Requirements inventory for Epic 11. Sources: `requirements-cursor-provider.md`, `architecture.md` (extension sections, decisions D1–D14). Dedicated epic file: `epic-11.md`. FR/NFR numbering below is scoped to this extension and independent of the parallel-stories inventory above._
+
+## Requirements Inventory (Cursor Extension)
+
+### Functional Requirements
+
+- FR1: `CursorProvider` extends `BaseProvider` implementing `provider_name`, `_do_invoke()`, `_cleanup()`, `parse_output()`, `supports_model()`
+- FR2: `provider_name` returns `"cursor"`; `supports_model()` accepts `composer-*` model strings
+- FR3: Invocation: `agent -p --output-format stream-json --model <model>` with workspace = project root
+- FR4: Master phases run write-mode (`--force --trust`); multi/code_review runs read-only (no `--force` + permissions deny config)
+- FR5: Streaming assistant-event text fed to `ResultCollector.add()` as it arrives (activity tracking for grace period)
+- FR6: Final response text extracted from the terminal `{"type":"result"}` event's `result` field; `session_id` captured
+- FR7: Missing terminal event or non-zero exit without result event → `ProviderError` carrying the tail of stderr
+- FR8: Model verification: system-init event `model` field compared to requested model; mismatch logged at WARNING and recorded
+- FR9: `resolve_cli_path()` resolves `agent`/`cursor-agent` with standard 3-tier order (config override → PATH → known locations)
+- FR10: Config schema accepts `provider: cursor` in `master` and `multi`; `providers.cli_paths.cursor` override supported
+- FR11: `parse_output()` returns response text compatible with Evidence Score parsing when used as validator
+- FR12: Timeout + grace-period behavior inherited unchanged from `BaseProvider.invoke()`
+- FR13: Prompt delivery works for prompts >32K chars (argv on Linux; stdin if spike S1 confirms)
+- FR14: `terminate_process()` Unix branch escalates SIGTERM → SIGKILL after grace (per its docstring contract)
+- FR15: Linux deployment setup documented (CLI install, API key, project bootstrap)
+
+### NonFunctional Requirements
+
+- NFR1: Zero regression to existing providers and loop behavior on Windows
+- NFR2: Existing toolchain compliance: strict mypy, ruff, pytest conventions (mocked subprocess tests; no live CLI calls in CI)
+- NFR3: Cost safety: a run can never silently proceed on `composer-2.5-fast` without a logged warning
+- NFR4: Reliability: every Cursor invocation bounded by a hard timeout; no orphaned `agent` processes after timeout/kill on either platform
+- NFR5: Provider failures are non-fatal to multi-validator aggregation (consistent with existing multi-LLM handling)
+
+### Additional Requirements (from Architecture Extension)
+
+- No starter template — brownfield extension; first story is the D12 platform fix, not project initialization
+- Deny-config crash-recovery sweep hooks into `loop/cleanup.py` (D3) — marker-file ownership protocol, never touch user-authored `.cursor/cli.json`
+- Actual model recorded via existing `ProviderResult.model` field — no schema changes required (D6, verified)
+- CLI version logged once per process via cached `agent --version` (D11)
+- Binary resolution order: `cursor-agent` before `agent` within each tier (D10)
+- Tolerant NDJSON parsing: malformed lines and unknown event types never crash the provider (patterns section)
+- Spikes S1–S5 are deployment gates documented in `docs/linux-deployment.md`, not code stories
+- Strict 7-file touch budget enforcing the provider boundary (one new module + five touched files + docs)
+- Test fixtures must cover three failure shapes: missing result event, malformed lines, model-mismatch init event
+- Epic Definition of Done uses this project's gates (`ruff check src/`, `mypy src/`, `pytest`) — not web-project placeholders
+
+### UX Design Requirements
+
+None — headless CLI tool, no UI surface.
+
+## Epic List (Extension)
+
+### Epic 11: Cursor Provider — Composer 2.5 as Master LLM on Linux
+
+A developer running bmad-assist-lite can configure `provider: cursor` with `model: composer-2.5` as master (or multi validator) and execute full dev loops on a Linux box — dev_story and code_review_synthesis running on Composer 2.5 at roughly 1/10th of Opus token cost, with hard cost guards against the `composer-2.5-fast` upstream bug, read-only enforcement for parallel review phases, and no orphaned CLI processes. Windows behavior for existing providers is untouched.
+
+**FRs covered:** FR1–FR15 (all — single unified epic per product owner decision)
+**NFRs addressed:** NFR1–NFR5 (woven into story acceptance criteria, not separate stories)
+
+### FR Coverage Map (Extension)
+
+| FR | Epic | Story area |
+|----|------|-----------|
+| FR14 | Epic 11 | Platform fix — SIGTERM→SIGKILL escalation (first story, independent) |
+| FR9, FR10 | Epic 11 | Integration plumbing — binary resolution + config schema |
+| FR1–FR3, FR5–FR7, FR12, FR13 | Epic 11 | Provider core — class, invocation, NDJSON parsing, errors, timeouts |
+| FR4 | Epic 11 | Mode selection + read-only enforcement (deny-config lifecycle + cleanup sweep) |
+| FR8 | Epic 11 | Cost guard + version logging |
+| FR11 | Epic 11 | Validator compatibility (Evidence Score path) |
+| FR15 | Epic 11 | Linux deployment docs + spike checklist |
+
+All 15 FRs mapped. Story breakdown follows the architecture's implementation sequence (D12 → provider core → mode/guards → docs), closing with the mandatory Epic Documentation Sync story per `_epic-template.md`. Full story specifications (Current/Target State, Technical Notes, dependencies, test impact): `epic-11.md`.
+
+## Epic 11: Cursor Provider — Composer 2.5 as Master LLM on Linux
+
+Add the Cursor CLI as a fourth provider so Composer 2.5 can run master phases on a Linux box at ~1/10th Opus cost, with cost guards, read-only enforcement for parallel review, and one platform fix (SIGKILL escalation). Zero Windows regression.
+
+### Story 11.1: SIGTERM→SIGKILL Escalation in Unix Process Termination
+
+As a developer running bmad-assist-lite on Linux,
+I want hung provider processes force-killed after a grace period,
+So that a stuck `agent` CLI can never orphan a dev run.
+
+**Acceptance Criteria:**
+
+**Given** a Unix process that ignores SIGTERM
+**When** `terminate_process(pid)` is called
+**Then** after at most `SIGTERM_GRACE_SECONDS` (5s) `os.killpg(pgid, SIGKILL)` is sent and `True` is returned
+
+**Given** the process exits within the grace period after SIGTERM
+**When** escalation logic polls liveness
+**Then** SIGKILL is never sent
+
+**Given** the platform is Windows
+**When** `terminate_process(pid)` is called
+**Then** the `taskkill` path behaves identically to before (NFR1)
+
+### Story 11.2: Cursor CLI Resolution & Config Schema
+
+As a developer,
+I want `provider: cursor` accepted in configuration and the Cursor CLI binary resolvable,
+So that the provider can be configured before and independently of its implementation.
+
+**Acceptance Criteria:**
+
+**Given** both `cursor-agent` and `agent` exist on PATH with no config override
+**When** `resolve_cli_path("cursor")` is called
+**Then** `cursor-agent` is preferred over `agent` in every resolution tier
+
+**Given** a config with `master: {provider: cursor, model: composer-2.5}`
+**When** the config is loaded
+**Then** validation passes; unknown provider names are still rejected
+
+### Story 11.3: CursorProvider Core — Invocation, Streaming, Errors
+
+As a developer using bmad-assist-lite,
+I want a CursorProvider that invokes `agent -p --output-format stream-json` and returns Composer 2.5's response,
+So that Cursor models can run master phases in dev loops.
+
+**Acceptance Criteria:**
+
+**Given** a mocked stream (init → assistant → tool → result events)
+**When** `invoke()` is called
+**Then** `ProviderResult` carries the result-event text, `session_id`, and the init-event model
+
+**Given** the init event reports `composer-2.5-fast` when `composer-2.5` was requested
+**When** the stream is parsed
+**Then** a WARNING naming both models is logged and the actual model is recorded (NFR3)
+
+**Given** malformed JSON lines or unknown event types in the stream
+**When** parsing runs
+**Then** no exception propagates (DEBUG log, skip)
+
+**Given** the stream ends with no result event and non-zero exit
+**When** `_do_invoke()` finalizes
+**Then** `ProviderError` is raised carrying the tail of stderr; a non-zero exit AFTER a result event is logged and ignored
+
+**Given** `allowed_tools=None` (master phase)
+**When** the command is built
+**Then** `--force --trust` are present; with a restricted list, `--force` is absent
+
+**Given** `supports_model()` is called
+**Then** `composer-*` models return True; `auto` and other vendors' models return False
+
+### Story 11.4: Read-Only Mode & Deny-Config Lifecycle
+
+As a developer running parallel multi-LLM code review,
+I want Cursor validator invocations physically unable to write files or execute shell commands,
+So that the multi-LLM safety constraint holds even against a misbehaving model.
+
+**Acceptance Criteria:**
+
+**Given** a read-only invocation in a cwd with no `.cursor/cli.json`
+**When** the subprocess is prepared
+**Then** a deny-config (`Write(**)`, `Shell(**)`) is created atomically with an ownership marker, and `_cleanup()` removes both
+
+**Given** a user-authored `.cursor/cli.json` already exists
+**When** a read-only invocation runs
+**Then** the file is never touched; fallback layers (no `--force` + prompt restriction warning) still apply
+
+**Given** a crash left deny file + marker behind
+**When** the next run's resume cleanup executes
+**Then** both are removed so write-mode master runs are unaffected
+
+### Story 11.5: Linux Deployment Documentation & Spike Checklist
+
+As a developer setting up the dedicated Linux box,
+I want a step-by-step deployment guide with validation gates and the spike checklist,
+So that the migration is reproducible and verified before real epics run.
+
+**Acceptance Criteria:**
+
+**Given** a fresh Linux box and `docs/linux-deployment.md`
+**When** the steps are followed
+**Then** every command is copy-pasteable: CLI install, `CURSOR_API_KEY` in `.env`, venv bootstrap
+
+**Given** the spike checklist
+**When** documented
+**Then** S5 (`agent --list-models`) is ordered first as the premise gate, and S1–S4 each carry exact commands, expected outcomes, and the decision each result feeds
+
+### Story 11.6: Epic Documentation Sync
+
+As a developer (human or AI),
+I want project documentation to reflect everything built in Epic 11,
+So that future implementation decisions are based on accurate information.
+
+**Acceptance Criteria:**
+
+**Given** all implementation stories are complete
+**When** the documentation sync executes
+**Then** CLAUDE.md (provider list, Changing Models, config examples, Key Patterns) and project-context.md (new conventions) are updated; planning artifacts are not touched
