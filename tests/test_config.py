@@ -285,14 +285,14 @@ class TestPhaseDefaultValues:
     """
 
     def test_retrospective_default_is_600(self):
-        """retrospective phase default timeout is 600s."""
+        """Retrospective phase default timeout is 600s."""
         tc = TimeoutsConfig()
         assert tc.get_timeout("retrospective") == 600
 
-    def test_code_review_synthesis_default_is_900(self):
-        """code_review_synthesis phase default timeout is 900s."""
+    def test_code_review_synthesis_default_is_1200(self):
+        """code_review_synthesis phase default timeout is 1200s."""
         tc = TimeoutsConfig()
-        assert tc.get_timeout("code_review_synthesis") == 900
+        assert tc.get_timeout("code_review_synthesis") == 1200
 
     def test_fix_quality_gate_default_is_900(self):
         """fix_quality_gate phase default timeout is 900s."""

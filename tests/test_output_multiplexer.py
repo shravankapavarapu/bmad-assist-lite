@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 from bmad_assist_lite.parallel.output import OutputMultiplexer
 
-
 # ============================================================================
 # TestOutputMultiplexerInit
 # ============================================================================
@@ -173,7 +172,7 @@ class TestReadStream:
         assert call_count == 3
 
     async def test_strips_trailing_newlines(self) -> None:
-        """Trailing \\n and \\r are stripped from decoded lines."""
+        r"""Trailing \\n and \\r are stripped from decoded lines."""
         mux = OutputMultiplexer()
         reader = asyncio.StreamReader()
         reader.feed_data(b"test line\r\n")
@@ -205,7 +204,6 @@ class TestReadStream:
         mux = OutputMultiplexer()
         reader = asyncio.StreamReader()
 
-        original_readline = reader.readline
         call_count = 0
 
         async def patched_readline() -> bytes:
@@ -544,8 +542,8 @@ class TestConcurrentReaders:
         assert len(written) == 4
 
         # Verify every line has a valid prefix and correct content
-        story_31_lines = [l for l in written if l.startswith("[3.1]")]
-        story_32_lines = [l for l in written if l.startswith("[3.2]")]
+        story_31_lines = [line for line in written if line.startswith("[3.1]")]
+        story_32_lines = [line for line in written if line.startswith("[3.2]")]
         assert len(story_31_lines) == 2, f"Expected 2 lines from 3.1, got {story_31_lines}"
         assert len(story_32_lines) == 2, f"Expected 2 lines from 3.2, got {story_32_lines}"
 

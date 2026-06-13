@@ -18,7 +18,6 @@ from bmad_assist_lite.parallel.worktree_manager import (
     prune_worktrees,
 )
 
-
 # ============================================================================
 # Story ID Normalization Tests
 # ============================================================================

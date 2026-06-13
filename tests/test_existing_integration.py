@@ -305,7 +305,7 @@ class TestParallelSubcommand:
     """Tests for parallel subcommand group registration."""
 
     def test_parallel_help_shows(self):
-        """parallel --help returns success with help text."""
+        """Parallel --help returns success with help text."""
         result = runner.invoke(app, ["parallel", "--help"])
         assert result.exit_code == 0
         assert "Parallel story execution commands" in result.output

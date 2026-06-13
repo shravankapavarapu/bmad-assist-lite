@@ -5,7 +5,7 @@ atomic save/load round-trips, orphan temp-file cleanup, initial state
 creation, and the get_parallel_state_path() utility.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,7 +24,6 @@ from bmad_assist_lite.parallel.state import (
     load_state,
     save_state,
 )
-
 
 # ============================================================================
 # StoryStatus enum
@@ -342,9 +341,8 @@ class TestSaveStateAtomicWrite:
         path = tmp_path / "parallel-state.yaml"
 
         # Simulate error during os.replace by making it raise OSError
-        with patch("bmad_assist_lite.parallel.state.os.replace", side_effect=OSError("disk full")):
-            with pytest.raises(ParallelError, match="Failed to save"):
-                save_state(state, path)
+        with patch("bmad_assist_lite.parallel.state.os.replace", side_effect=OSError("disk full")), pytest.raises(ParallelError, match="Failed to save"):
+            save_state(state, path)
 
         # No partial YAML file should remain
         assert not path.exists()
@@ -354,9 +352,8 @@ class TestSaveStateAtomicWrite:
         path = tmp_path / "parallel-state.yaml"
         temp_path = path.with_suffix(path.suffix + ".tmp")
 
-        with patch("bmad_assist_lite.parallel.state.os.replace", side_effect=OSError("fail")):
-            with pytest.raises(ParallelError):
-                save_state(state, path)
+        with patch("bmad_assist_lite.parallel.state.os.replace", side_effect=OSError("fail")), pytest.raises(ParallelError):
+            save_state(state, path)
 
         assert not temp_path.exists()
 
@@ -571,6 +568,6 @@ class TestUtcNow:
 
     def test_is_close_to_actual_utc(self) -> None:
         now = _utc_now()
-        actual = datetime.now(timezone.utc).replace(tzinfo=None)
+        actual = datetime.now(UTC).replace(tzinfo=None)
         delta = abs((actual - now).total_seconds())
         assert delta < 2  # within 2 seconds

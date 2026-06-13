@@ -8,7 +8,6 @@ Covers:
 - Stalemate detection with blocked stories from merge/QG failures
 """
 
-import asyncio
 import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,7 +18,6 @@ from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.merger import GateResult, MergeResult, PostMergeQGResult
 from bmad_assist_lite.parallel.orchestrator import Orchestrator
 from bmad_assist_lite.parallel.state import StoryStatus
-
 
 # ============================================================================
 # Module-level fixtures — mock state persistence for all orchestrator tests

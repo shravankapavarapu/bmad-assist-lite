@@ -15,16 +15,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from claude_agent_sdk import AssistantMessage, TextBlock
 from claude_agent_sdk import CLINotFoundError as SDKCLINotFoundError
 from claude_agent_sdk import ProcessError as SDKProcessError
 
 from bmad_assist_lite.core.exceptions import ProviderError, ProviderTimeoutError
 from bmad_assist_lite.providers.base import BaseProvider, ProviderResult
-from bmad_assist_lite.providers.claude_sdk import ClaudeSDKProvider, SUPPORTED_MODELS
+from bmad_assist_lite.providers.claude_sdk import SUPPORTED_MODELS, ClaudeSDKProvider
 from bmad_assist_lite.providers.result_collector import ResultCollector
-
 
 # ============================================================================
 # Helpers — Message factories using real SDK types
@@ -43,6 +41,7 @@ class FakeOtherMessage:
     """Fake non-AssistantMessage to verify filtering."""
 
     def __init__(self) -> None:
+        """Initialize with empty content list."""
         self.content: list[object] = []
 
 
@@ -476,7 +475,7 @@ class TestModelResolution:
 
     def test_supported_models_set(self) -> None:
         """SUPPORTED_MODELS contains expected values."""
-        assert SUPPORTED_MODELS == frozenset({"opus", "sonnet", "haiku"})
+        assert frozenset({"opus", "sonnet", "haiku"}) == SUPPORTED_MODELS
 
 
 # ============================================================================

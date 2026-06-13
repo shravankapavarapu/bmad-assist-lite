@@ -18,7 +18,6 @@ from bmad_assist_lite.parallel.orchestrator import (
     _kill_process,
 )
 
-
 # ============================================================================
 # Module-level fixtures — mock state persistence for all orchestrator tests
 # ============================================================================
@@ -789,16 +788,18 @@ class TestRunLoop:
             in_flight_during_spawn.update(orch._in_flight_ids)
             return 0
 
-        with patch.object(orch, "_spawn_story", side_effect=capture_in_flight):
-            with patch.object(orch, "_on_story_complete", new_callable=AsyncMock) as mock_complete:
-                async def complete_side_effect(sid: str, code: int) -> None:
-                    orch._merging_ids.add(sid)
-                    task = orch._running_tasks.pop(sid, None)
-                    if task:
-                        orch._task_to_story.pop(task, None)
+        with (
+            patch.object(orch, "_spawn_story", side_effect=capture_in_flight),
+            patch.object(orch, "_on_story_complete", new_callable=AsyncMock) as mock_complete,
+        ):
+            async def complete_side_effect(sid: str, code: int) -> None:
+                orch._merging_ids.add(sid)
+                task = orch._running_tasks.pop(sid, None)
+                if task:
+                    orch._task_to_story.pop(task, None)
 
-                mock_complete.side_effect = complete_side_effect
-                await orch.run()
+            mock_complete.side_effect = complete_side_effect
+            await orch.run()
 
         assert "3.1" in in_flight_during_spawn
 
@@ -1081,16 +1082,18 @@ class TestConcurrency:
             async with orch._semaphore:
                 return await tracking_spawn(sid)
 
-        with patch.object(orch, "_spawn_story", side_effect=wrapped_spawn):
-            with patch.object(orch, "_on_story_complete", new_callable=AsyncMock) as mock_complete:
-                async def complete_side_effect(sid: str, code: int) -> None:
-                    orch._merging_ids.add(sid)
-                    task = orch._running_tasks.pop(sid, None)
-                    if task:
-                        orch._task_to_story.pop(task, None)
+        with (
+            patch.object(orch, "_spawn_story", side_effect=wrapped_spawn),
+            patch.object(orch, "_on_story_complete", new_callable=AsyncMock) as mock_complete,
+        ):
+            async def complete_side_effect(sid: str, code: int) -> None:
+                orch._merging_ids.add(sid)
+                task = orch._running_tasks.pop(sid, None)
+                if task:
+                    orch._task_to_story.pop(task, None)
 
-                mock_complete.side_effect = complete_side_effect
-                await orch.run()
+            mock_complete.side_effect = complete_side_effect
+            await orch.run()
 
         # With semaphore of 1, should never exceed 1
         assert max_concurrent <= 1
@@ -1529,20 +1532,19 @@ class TestDrainMode:
             orch._draining = True
             return 0
 
-        with patch.object(orch, "_spawn_story", side_effect=counting_spawn):
-            with patch.object(
-                orch, "_on_story_complete", new_callable=AsyncMock
-            ) as mock_complete:
-                async def complete_side_effect(
-                    sid: str, code: int
-                ) -> None:
-                    orch._merging_ids.add(sid)
-                    task = orch._running_tasks.pop(sid, None)
-                    if task:
-                        orch._task_to_story.pop(task, None)
+        with patch.object(orch, "_spawn_story", side_effect=counting_spawn), patch.object(
+            orch, "_on_story_complete", new_callable=AsyncMock
+        ) as mock_complete:
+            async def complete_side_effect(
+                sid: str, code: int
+            ) -> None:
+                orch._merging_ids.add(sid)
+                task = orch._running_tasks.pop(sid, None)
+                if task:
+                    orch._task_to_story.pop(task, None)
 
-                mock_complete.side_effect = complete_side_effect
-                await orch.run()
+            mock_complete.side_effect = complete_side_effect
+            await orch.run()
 
         # Stories were spawned before draining was set, but 3.3 was NOT
         # spawned because draining was True by the time loop re-evaluated
@@ -1563,29 +1565,28 @@ class TestDrainMode:
             await asyncio.sleep(0.05)
             return 0
 
-        with patch.object(orch, "_spawn_story", side_effect=slow_spawn):
-            with patch.object(
-                orch, "_on_story_complete", new_callable=AsyncMock
-            ) as mock_complete:
-                async def complete_side_effect(
-                    sid: str, code: int
-                ) -> None:
-                    completed_stories.append(sid)
-                    orch._merging_ids.add(sid)
-                    task = orch._running_tasks.pop(sid, None)
-                    if task:
-                        orch._task_to_story.pop(task, None)
+        with patch.object(orch, "_spawn_story", side_effect=slow_spawn), patch.object(
+            orch, "_on_story_complete", new_callable=AsyncMock
+        ) as mock_complete:
+            async def complete_side_effect(
+                sid: str, code: int
+            ) -> None:
+                completed_stories.append(sid)
+                orch._merging_ids.add(sid)
+                task = orch._running_tasks.pop(sid, None)
+                if task:
+                    orch._task_to_story.pop(task, None)
 
-                mock_complete.side_effect = complete_side_effect
+            mock_complete.side_effect = complete_side_effect
 
-                # Set draining after stories are spawned (simulate Ctrl+C)
-                async def set_drain_after_delay() -> None:
-                    await asyncio.sleep(0.01)
-                    orch._draining = True
+            # Set draining after stories are spawned (simulate Ctrl+C)
+            async def set_drain_after_delay() -> None:
+                await asyncio.sleep(0.01)
+                orch._draining = True
 
-                drain_task = asyncio.create_task(set_drain_after_delay())
-                await orch.run()
-                await drain_task
+            drain_task = asyncio.create_task(set_drain_after_delay())
+            await orch.run()
+            await drain_task
 
         # The story should have completed before exit (drain waited)
         assert "3.1" in completed_stories
@@ -1704,28 +1705,27 @@ class TestForceExit:
                 cancelled = True
                 raise
 
-        with patch.object(orch, "_spawn_story", side_effect=slow_spawn):
-            with patch.object(
-                orch, "_on_story_complete", new_callable=AsyncMock
-            ) as mock_complete:
-                async def complete_side_effect(
-                    sid: str, code: int
-                ) -> None:
-                    orch._merging_ids.add(sid)
-                    task = orch._running_tasks.pop(sid, None)
-                    if task:
-                        orch._task_to_story.pop(task, None)
+        with patch.object(orch, "_spawn_story", side_effect=slow_spawn), patch.object(
+            orch, "_on_story_complete", new_callable=AsyncMock
+        ) as mock_complete:
+            async def complete_side_effect(
+                sid: str, code: int
+            ) -> None:
+                orch._merging_ids.add(sid)
+                task = orch._running_tasks.pop(sid, None)
+                if task:
+                    orch._task_to_story.pop(task, None)
 
-                mock_complete.side_effect = complete_side_effect
+            mock_complete.side_effect = complete_side_effect
 
-                async def trigger_force_exit() -> None:
-                    await asyncio.sleep(0.05)
-                    orch._draining = True
-                    orch._force_exit = True
+            async def trigger_force_exit() -> None:
+                await asyncio.sleep(0.05)
+                orch._draining = True
+                orch._force_exit = True
 
-                trigger = asyncio.create_task(trigger_force_exit())
-                await orch.run()
-                await trigger
+            trigger = asyncio.create_task(trigger_force_exit())
+            await orch.run()
+            await trigger
 
         assert cancelled is True
 
@@ -1866,20 +1866,19 @@ class TestForceExit:
             await asyncio.sleep(0.05)
             return 0
 
-        with patch.object(orch, "_spawn_story", side_effect=spawn_then_drain):
-            with patch.object(
-                orch, "_on_story_complete", new_callable=AsyncMock
-            ) as mock_complete:
-                async def complete_side_effect(
-                    sid: str, code: int
-                ) -> None:
-                    orch._merging_ids.add(sid)
-                    task = orch._running_tasks.pop(sid, None)
-                    if task:
-                        orch._task_to_story.pop(task, None)
+        with patch.object(orch, "_spawn_story", side_effect=spawn_then_drain), patch.object(
+            orch, "_on_story_complete", new_callable=AsyncMock
+        ) as mock_complete:
+            async def complete_side_effect(
+                sid: str, code: int
+            ) -> None:
+                orch._merging_ids.add(sid)
+                task = orch._running_tasks.pop(sid, None)
+                if task:
+                    orch._task_to_story.pop(task, None)
 
-                mock_complete.side_effect = complete_side_effect
-                await orch.run()
+            mock_complete.side_effect = complete_side_effect
+            await orch.run()
 
         # Should have completed normally (timeout didn't break the loop)
         assert "3.1" in orch._merging_ids

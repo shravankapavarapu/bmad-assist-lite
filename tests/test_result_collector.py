@@ -14,7 +14,6 @@ from unittest.mock import patch
 
 from bmad_assist_lite.providers.result_collector import ResultCollector
 
-
 # ============================================================================
 # TestResultCollectorBasic — Accumulation and Empty State (AC #1, #6)
 # ============================================================================

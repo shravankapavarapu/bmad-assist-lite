@@ -28,7 +28,6 @@ from bmad_assist_lite.providers.base import (
 )
 from bmad_assist_lite.providers.result_collector import ResultCollector
 
-
 # ============================================================================
 # FakeProvider — Configurable test double (Task 6.1)
 # ============================================================================
@@ -230,14 +229,11 @@ class TestTimeoutWithActiveStreaming:
         )
 
         # Mock _wait_for_grace to verify it's called and avoid actual waiting
-        with patch.object(provider, "_wait_for_grace") as mock_grace:
-            # Make the collector appear active at the time _handle_timeout checks
-            with patch.object(
-                ResultCollector,
-                "is_active",
-                return_value=True,
-            ):
-                result = provider.invoke("test", timeout=600)
+        with (
+            patch.object(provider, "_wait_for_grace") as mock_grace,
+            patch.object(ResultCollector, "is_active", return_value=True),
+        ):
+            result = provider.invoke("test", timeout=600)
 
         mock_grace.assert_called_once()
         assert result.timed_out is True
@@ -279,14 +275,11 @@ class TestTimeoutWhileSilent:
             chunks_before_timeout=[large_text],
         )
 
-        with patch.object(provider, "_wait_for_grace") as mock_grace:
-            # Make the collector appear NOT active (stale)
-            with patch.object(
-                ResultCollector,
-                "is_active",
-                return_value=False,
-            ):
-                result = provider.invoke("test", timeout=600)
+        with (
+            patch.object(provider, "_wait_for_grace") as mock_grace,
+            patch.object(ResultCollector, "is_active", return_value=False),
+        ):
+            result = provider.invoke("test", timeout=600)
 
         # _wait_for_grace should NOT be called when stream is silent
         mock_grace.assert_not_called()
@@ -299,9 +292,8 @@ class TestTimeoutWhileSilent:
             chunks_before_timeout=[],
         )
 
-        with patch.object(provider, "_wait_for_grace") as mock_grace:
-            with pytest.raises(ProviderTimeoutError):
-                provider.invoke("test", timeout=600)
+        with patch.object(provider, "_wait_for_grace") as mock_grace, pytest.raises(ProviderTimeoutError):
+            provider.invoke("test", timeout=600)
 
         mock_grace.assert_not_called()
 
@@ -337,9 +329,8 @@ class TestPartialResult:
             chunks_before_timeout=[small_text],
         )
 
-        with patch.object(ResultCollector, "is_active", return_value=False):
-            with pytest.raises(ProviderTimeoutError) as exc_info:
-                provider.invoke("test", timeout=300)
+        with patch.object(ResultCollector, "is_active", return_value=False), pytest.raises(ProviderTimeoutError) as exc_info:
+            provider.invoke("test", timeout=300)
 
         # The exception should have a partial result attached
         assert exc_info.value.partial_result is not None
@@ -383,9 +374,8 @@ class TestPartialResult:
             chunks_before_timeout=[small_text],
         )
 
-        with patch.object(ResultCollector, "is_active", return_value=False):
-            with pytest.raises(ProviderTimeoutError):
-                provider.invoke("test", timeout=300)
+        with patch.object(ResultCollector, "is_active", return_value=False), pytest.raises(ProviderTimeoutError):
+            provider.invoke("test", timeout=300)
 
 
 # ============================================================================
@@ -461,9 +451,8 @@ class TestTimeoutNoneResolution:
         )
 
         # Should not raise TypeError from None * 0.25
-        with patch.object(ResultCollector, "is_active", return_value=True):
-            with patch.object(provider, "_wait_for_grace"):
-                result = provider.invoke("test")  # timeout=None → default
+        with patch.object(ResultCollector, "is_active", return_value=True), patch.object(provider, "_wait_for_grace"):
+            result = provider.invoke("test")  # timeout=None → default
 
         assert result.timed_out is True
 
@@ -494,9 +483,8 @@ class TestWaitForGrace:
         collector = ResultCollector()
 
         # Mock time.sleep to avoid actual waiting
-        with patch("bmad_assist_lite.providers.base.time.sleep"):
-            with patch.object(collector, "is_active", return_value=False):
-                result = provider._wait_for_grace(collector, 60)
+        with patch("bmad_assist_lite.providers.base.time.sleep"), patch.object(collector, "is_active", return_value=False):
+            result = provider._wait_for_grace(collector, 60)
 
         assert result is None
 
@@ -505,28 +493,25 @@ class TestWaitForGrace:
         provider = FakeProvider()
         collector = ResultCollector()
 
-        with patch("bmad_assist_lite.providers.base.time.sleep"):
-            # First call active, then stalled
-            with patch.object(
-                collector, "is_active", side_effect=[True, False]
-            ):
-                provider._wait_for_grace(collector, 120)
-                # Should have exited after seeing stall
+        with (
+            patch("bmad_assist_lite.providers.base.time.sleep"),
+            patch.object(collector, "is_active", side_effect=[True, False]),
+        ):
+            provider._wait_for_grace(collector, 120)
 
     def test_wait_for_grace_respects_duration(self) -> None:
         """Grace period does not exceed grace_seconds (Task 5.1)."""
         provider = FakeProvider()
         collector = ResultCollector()
 
-        with patch("bmad_assist_lite.providers.base.time.sleep"):
-            with patch("bmad_assist_lite.providers.base.time.monotonic", side_effect=[
-                0.0,   # start time
-                2.0,   # first check
-                4.0,   # second check
-                100.0, # exceeds grace_seconds=60
-            ]):
-                with patch.object(collector, "is_active", return_value=True):
-                    provider._wait_for_grace(collector, 60)
+        with (
+            patch("bmad_assist_lite.providers.base.time.sleep"),
+            patch("bmad_assist_lite.providers.base.time.monotonic", side_effect=[
+                0.0, 2.0, 4.0, 100.0,
+            ]),
+            patch.object(collector, "is_active", return_value=True),
+        ):
+            provider._wait_for_grace(collector, 60)
 
 
 # ============================================================================
@@ -573,11 +558,10 @@ class TestHandleTimeout:
         collector.add("x" * 300)
         start_time = time.monotonic()
 
-        with patch.object(collector, "is_active", return_value=True):
-            with patch.object(provider, "_wait_for_grace") as mock_grace:
-                result = provider._handle_timeout(
-                    collector, 600, "test-model", ("fake", "test-model"), start_time
-                )
+        with patch.object(collector, "is_active", return_value=True), patch.object(provider, "_wait_for_grace") as mock_grace:
+            provider._handle_timeout(
+                collector, 600, "test-model", ("fake", "test-model"), start_time
+            )
 
         mock_grace.assert_called_once()
 
@@ -588,11 +572,10 @@ class TestHandleTimeout:
         collector.add("x" * 300)
         start_time = time.monotonic()
 
-        with patch.object(collector, "is_active", return_value=False):
-            with patch.object(provider, "_wait_for_grace") as mock_grace:
-                result = provider._handle_timeout(
-                    collector, 600, "test-model", ("fake", "test-model"), start_time
-                )
+        with patch.object(collector, "is_active", return_value=False), patch.object(provider, "_wait_for_grace") as mock_grace:
+            result = provider._handle_timeout(
+                collector, 600, "test-model", ("fake", "test-model"), start_time
+            )
 
         mock_grace.assert_not_called()
         assert result.timed_out is True
@@ -621,11 +604,10 @@ class TestHandleTimeout:
         collector.add("z" * 50)
         start_time = time.monotonic()
 
-        with patch.object(collector, "is_active", return_value=False):
-            with pytest.raises(ProviderTimeoutError) as exc_info:
-                provider._handle_timeout(
-                    collector, 300, None, ("fake", "default"), start_time
-                )
+        with patch.object(collector, "is_active", return_value=False), pytest.raises(ProviderTimeoutError) as exc_info:
+            provider._handle_timeout(
+                collector, 300, None, ("fake", "default"), start_time
+            )
 
         assert exc_info.value.partial_result is not None
         assert exc_info.value.partial_result.timed_out is True
@@ -648,11 +630,10 @@ class TestHandleTimeout:
         collector.add("x" * 300)
         start_time = time.monotonic()
 
-        with patch.object(collector, "is_active", return_value=True):
-            with patch.object(provider, "_wait_for_grace") as mock_grace:
-                provider._handle_timeout(
-                    collector, 600, None, ("fake", "default"), start_time
-                )
+        with patch.object(collector, "is_active", return_value=True), patch.object(provider, "_wait_for_grace") as mock_grace:
+            provider._handle_timeout(
+                collector, 600, None, ("fake", "default"), start_time
+            )
 
         # Grace should be max(60, int(600 * 0.25)) = 150
         call_args = mock_grace.call_args
@@ -697,8 +678,10 @@ class TestInheritance:
     """Test that subclasses automatically get timeout behavior."""
 
     def test_subclass_only_needs_do_invoke_and_cleanup(self) -> None:
-        """A subclass implementing _do_invoke, _cleanup, parse_output, supports_model
-        automatically gets grace period, partial capture, activity detection (AC #7)."""
+        """A subclass implementing _do_invoke, _cleanup, parse_output, supports_model.
+
+        Automatically gets grace period, partial capture, activity detection (AC #7).
+        """
         provider = FakeProvider()
         # Verify it can be used as a BaseProvider
         assert isinstance(provider, BaseProvider)
@@ -781,11 +764,10 @@ class TestHandleTimeoutIntegration:
         # Collector is active for the initial check, then stalls during grace
         with patch.object(
             collector, "is_active", side_effect=[True, False]
-        ):
-            with patch("bmad_assist_lite.providers.base.time.sleep"):
-                result = provider._handle_timeout(
-                    collector, 600, None, ("fake", "default"), start_time
-                )
+        ), patch("bmad_assist_lite.providers.base.time.sleep"):
+            result = provider._handle_timeout(
+                collector, 600, None, ("fake", "default"), start_time
+            )
 
         assert result.timed_out is True
         assert result.stdout == "x" * 300

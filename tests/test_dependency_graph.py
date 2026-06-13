@@ -9,7 +9,6 @@ from bmad_assist_lite.bmad.parser import EpicStory
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 from bmad_assist_lite.parallel.exceptions import ParallelError
 
-
 # ============================================================================
 # Helper factory
 # ============================================================================
@@ -728,7 +727,7 @@ class TestSchedulingScores:
             graph.score_of("9.9")
 
     def test_scores_property_returns_copy(self) -> None:
-        """scores property returns a copy, not the internal dict."""
+        """Scores property returns a copy, not the internal dict."""
         graph = DependencyGraph([_story("1.1")])
         s1 = graph.scores
         s2 = graph.scores

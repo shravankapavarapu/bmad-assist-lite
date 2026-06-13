@@ -52,7 +52,7 @@ def _make_state(
     )
 
 
-def _invoke_status(tmp_path: Path) -> "Result":  # noqa: F821
+def _invoke_status(tmp_path: Path) -> Result:  # noqa: F821
     """Invoke the parallel status command via CLI runner."""
     return runner.invoke(app, ["parallel", "status", "--project", str(tmp_path)])
 

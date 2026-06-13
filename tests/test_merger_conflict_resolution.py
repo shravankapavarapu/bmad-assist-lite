@@ -11,14 +11,12 @@ from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.merger import (
     ConflictResolutionResult,
-    MergeResult,
     _build_resolution_prompt,
     _has_residual_markers,
     _parse_resolution_output,
     merge_story,
     resolve_conflicts,
 )
-
 
 # ============================================================================
 # Helpers
@@ -256,7 +254,7 @@ class TestParseResolutionOutput:
         assert result["src/main.py"] == "clean content\n"
 
     def test_crlf_line_endings_in_output(self) -> None:
-        """Verify parser handles CRLF (\\r\\n) line endings from Windows Claude CLI."""
+        r"""Verify parser handles CRLF (\\r\\n) line endings from Windows Claude CLI."""
         output = (
             "--- FILE: src/main.py ---\r\n"
             "resolved content\r\n"

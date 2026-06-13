@@ -20,7 +20,6 @@ from bmad_assist_lite.parallel.bootstrap import (
 )
 from bmad_assist_lite.parallel.config import ParallelConfig
 
-
 # ============================================================================
 # ParallelConfig — Bootstrap Field Defaults (Task 8.1)
 # ============================================================================

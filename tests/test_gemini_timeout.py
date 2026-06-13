@@ -40,7 +40,6 @@ from bmad_assist_lite.providers.base import (
 from bmad_assist_lite.providers.gemini import GeminiProvider
 from bmad_assist_lite.providers.result_collector import ResultCollector
 
-
 # ============================================================================
 # Helpers — JSON stream simulation
 # ============================================================================
@@ -457,9 +456,8 @@ class TestTimeoutPropagation:
             cleanup_calls.append(True)
             original_cleanup()
 
-        with patch.object(provider, "_cleanup", side_effect=tracking_cleanup):
-            with pytest.raises(ProviderTimeoutError):
-                provider.invoke("test", timeout=10)
+        with patch.object(provider, "_cleanup", side_effect=tracking_cleanup), pytest.raises(ProviderTimeoutError):
+            provider.invoke("test", timeout=10)
 
         assert len(cleanup_calls) == 1
 
@@ -746,7 +744,7 @@ class TestEdgeCases:
         mock_popen.return_value = process
 
         provider = GeminiProvider()
-        result = provider.invoke("test prompt", allowed_tools=["Read", "Glob", "Grep"])
+        provider.invoke("test prompt", allowed_tools=["Read", "Glob", "Grep"])
 
         # Verify the prompt was modified with restriction warning
         # Check stdin.write was called with the restriction text

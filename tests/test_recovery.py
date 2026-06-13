@@ -19,7 +19,6 @@ from bmad_assist_lite.parallel.state import (
 )
 from bmad_assist_lite.parallel.worktree_manager import WorktreeInfo
 
-
 # ============================================================================
 # Helper factories
 # ============================================================================
@@ -614,10 +613,9 @@ class TestCleanupTempFiles:
 
         with patch.object(
             Path, "unlink", side_effect=OSError("Permission denied")
-        ):
-            with caplog.at_level(logging.WARNING):
-                # Should not raise
-                _cleanup_temp_files(tmp_path)
+        ), caplog.at_level(logging.WARNING):
+            # Should not raise
+            _cleanup_temp_files(tmp_path)
 
         assert any("locked.tmp" in r.message for r in caplog.records)
 
@@ -686,9 +684,8 @@ class TestCleanupTempFiles:
 
         with patch.object(
             Path, "rglob", side_effect=OSError("Permission denied")
-        ):
-            with caplog.at_level(logging.WARNING):
-                count = _cleanup_temp_files(tmp_path)
+        ), caplog.at_level(logging.WARNING):
+            count = _cleanup_temp_files(tmp_path)
 
         assert count == 0
         assert any("scan" in r.message.lower() for r in caplog.records)
@@ -782,7 +779,7 @@ class TestOrchestratorRecoveryIntegration:
         graph.story_count = 2
 
         config = ParallelConfig()
-        orch = Orchestrator(
+        Orchestrator(
             dependency_graph=graph,
             config=config,
             project_root=Path("/project"),
@@ -1149,11 +1146,10 @@ class TestPruneAndCleanOrphanedWorktrees:
 
         with patch(
             "bmad_assist_lite.parallel.recovery.cleanup_worktree"
-        ) as mock_cleanup:
-            with caplog.at_level(logging.WARNING):
-                count = prune_and_clean_orphaned_worktrees(
-                    state, Path("/project"), worktrees,
-                )
+        ) as mock_cleanup, caplog.at_level(logging.WARNING):
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
 
         assert count == 1
         mock_cleanup.assert_called_once_with("3.2", Path("/project"), None)
@@ -1412,11 +1408,10 @@ class TestPruneAndCleanOrphanedWorktrees:
 
         with patch(
             "bmad_assist_lite.parallel.recovery.cleanup_worktree"
-        ) as mock_cleanup:
-            with caplog.at_level(logging.WARNING):
-                count = prune_and_clean_orphaned_worktrees(
-                    state, Path("/project"), worktrees,
-                )
+        ) as mock_cleanup, caplog.at_level(logging.WARNING):
+            count = prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
 
         assert count == 0
         mock_cleanup.assert_not_called()
@@ -1477,11 +1472,10 @@ class TestPruneAndCleanOrphanedWorktrees:
             ),
         ]
 
-        with patch("bmad_assist_lite.parallel.recovery.cleanup_worktree"):
-            with caplog.at_level(logging.WARNING):
-                prune_and_clean_orphaned_worktrees(
-                    state, Path("/project"), worktrees,
-                )
+        with patch("bmad_assist_lite.parallel.recovery.cleanup_worktree"), caplog.at_level(logging.WARNING):
+            prune_and_clean_orphaned_worktrees(
+                state, Path("/project"), worktrees,
+            )
 
         assert any(
             "3.1" in r.message and "no_state_record" in r.message

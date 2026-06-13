@@ -3,6 +3,8 @@
 import logging
 from pathlib import Path
 
+import pytest
+
 from bmad_assist_lite.compiler.context_filter import (
     _build_filename_to_key_map,
     _extract_section_from_content,
@@ -1156,9 +1158,8 @@ Overview only, no matching sections.
         ctx.discovered_files = {"arch_file": [tmp_path / "arch.md"]}
         ctx.file_contents = {"epic_file": epic, "arch_file": arch_content}
 
-        with caplog.at_level(logging.WARNING):
-            with pytest.raises(CompilerError) as exc_info:
-                apply_context_filter(ctx)
+        with caplog.at_level(logging.WARNING), pytest.raises(CompilerError) as exc_info:
+            apply_context_filter(ctx)
 
         msg = str(exc_info.value)
         # Required sections raise errors
@@ -1303,9 +1304,8 @@ Bar content.
         ctx.file_contents = {"epic_file": epic}
         ctx.discovered_files = {}
 
-        with caplog.at_level(logging.WARNING):
-            with pytest.raises(CompilerError) as exc_info:
-                apply_context_filter(ctx)
+        with caplog.at_level(logging.WARNING), pytest.raises(CompilerError) as exc_info:
+            apply_context_filter(ctx)
 
         msg = str(exc_info.value)
         # Required doc in error

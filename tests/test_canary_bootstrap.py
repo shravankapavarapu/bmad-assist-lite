@@ -5,7 +5,6 @@ non-canary failure blocking, zero overhead when unconfigured, logging,
 stagger delay conditioning, and resume mode.
 """
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +15,6 @@ from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.orchestrator import Orchestrator
 from bmad_assist_lite.parallel.state import StoryStatus
-
 
 # ============================================================================
 # Module-level fixtures — mock state persistence for all orchestrator tests

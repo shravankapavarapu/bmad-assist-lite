@@ -1,6 +1,6 @@
 """Tests for parallel/report.py — summary report generation (Story 6.3)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,7 +24,6 @@ from bmad_assist_lite.parallel.state import (
     StoryStatus,
 )
 
-
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -32,7 +31,7 @@ from bmad_assist_lite.parallel.state import (
 
 def _utc_now() -> datetime:
     """Get current UTC datetime without timezone info (naive UTC)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _make_state(
