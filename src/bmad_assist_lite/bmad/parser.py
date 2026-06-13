@@ -141,8 +141,10 @@ def _extract_story_metadata(section: str) -> dict[str, Any]:
     deps_match = _DEPENDENCIES_PATTERN.search(section)
     if deps_match:
         deps_text = deps_match.group(1).strip()
-        deps = [d.strip() for d in deps_text.split(",") if d.strip()]
-        metadata["dependencies"] = deps
+        deps_text = deps_text.strip("[]")
+        if deps_text:
+            deps = [d.strip() for d in deps_text.split(",") if d.strip()]
+            metadata["dependencies"] = deps
 
     # Count acceptance criteria checkboxes
     ac_matches = _AC_CHECKBOX_PATTERN.findall(section)

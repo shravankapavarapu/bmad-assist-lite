@@ -56,7 +56,16 @@ class FixQualityGateHandler(BaseHandler):
                     "The failure report below shows the CURRENT errors after the previous fix. "
                     "Do not repeat the same approach — analyze what the previous attempt likely "
                     "tried and choose a different strategy. Read the failing files carefully "
-                    "before making changes.\n"
+                    "before making changes.\n\n"
+                    "Alternative strategies to consider:\n"
+                    "- Mock/patch the failing dependency in test fixtures (autouse fixture "
+                    "or @patch decorator) instead of modifying source code\n"
+                    "- If tests fail on fake/non-existent paths, patch the function that "
+                    "touches the filesystem — do NOT create directories at fake paths\n"
+                    "- If pre-existing tests broke (not the new test file), the fix belongs "
+                    "in test setup, not in the implementation\n"
+                    "- If many tests fail at the same call site, one autouse fixture fix "
+                    "covers all of them\n"
                     "</retry-context>"
                 )
             full_prompt = (

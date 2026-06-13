@@ -44,4 +44,5 @@ class CompilerContext:
     resolved_variables: dict[str, Any] = field(default_factory=dict)
     discovered_files: dict[str, list[Path]] = field(default_factory=dict)
     file_contents: dict[str, str] = field(default_factory=dict)
+    per_file_contents: dict[str, str] = field(default_factory=dict)
     links_only: bool = False

@@ -208,7 +208,7 @@ class TestDetectLibraries:
         arch_file = tmp_path / "architecture.md"
         arch_file.write_text("Backend uses FastAPI with Redis caching.")
 
-        result = detect_libraries(tmp_path, architecture_file=arch_file, max_libs=10)
+        result = detect_libraries(tmp_path, architecture_files=[arch_file], max_libs=10)
         assert "react" in result
         assert "fastapi" in result
         assert "redis" in result

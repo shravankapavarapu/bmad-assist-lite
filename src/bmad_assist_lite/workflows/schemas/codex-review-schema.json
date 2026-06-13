@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "body": {"type": "string"},
+          "priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+          "confidence_score": {"type": "number"},
+          "code_location": {
+            "type": "object",
+            "properties": {
+              "file_path": {"type": "string"},
+              "line_range": {"type": "array", "items": {"type": "integer"}}
+            },
+            "required": ["file_path", "line_range"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["title", "body", "priority", "confidence_score", "code_location"],
+        "additionalProperties": false
+      }
+    },
+    "overall_verdict": {"type": "string", "enum": ["PASS", "NEEDS_WORK", "REJECT"]},
+    "summary": {"type": "string"}
+  },
+  "required": ["findings", "overall_verdict", "summary"],
+  "additionalProperties": false
+}

@@ -1,0 +1,125 @@
+# generated: 2026-03-17
+# last_updated: 2026-03-18
+# project: bmad-assist-lite-parallel-stories
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-03-23
+last_updated: 2026-03-18
+project: bmad-assist-lite-parallel-stories
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: Foundation & Configuration
+  epic-1: done
+  1-1-parallel-module-structure-and-configuration-model: done
+  1-2-git-operations-wrapper: done
+  1-3-existing-code-integration: done
+  epic-1-retrospective: done
+
+  # Epic 2: Dependency Resolution
+  epic-2: done
+  2-1-epic-dependency-parsing-and-dag-construction: done
+  2-2-circular-dependency-detection-and-scheduling-scores: done
+  2-3-ready-story-discovery-and-re-evaluation: done
+  epic-2-retrospective: done
+
+  # Epic 3: Parallel Execution Core
+  epic-3: done
+  3-1-worktree-manager: done
+  3-2-orchestrator-core-loop-and-subprocess-spawning: done
+  3-3-parallel-state-persistence: done
+  3-4-parallel-run-cli-command-and-branch-guard: done
+  3-5-live-output-multiplexing: done
+  3-6-graceful-shutdown-and-drain-mode: done
+  epic-3-retrospective: done
+
+  # Epic 4: Merge & Integration Safety
+  epic-4: done
+  4-1-sequential-merge-queue-and-git-merge: done
+  4-2-claude-cli-merge-conflict-resolution: done
+  4-3-post-merge-quality-gate: done
+  4-4-post-merge-fix-quality-gate-and-sprint-status-update: done
+  epic-4-retrospective: done
+
+  # Epic 5: Resilience & Recovery
+  epic-5: done
+  5-1-crash-recovery-and-resume-in-flight-stories: done
+  5-2-orphan-detection-and-worktree-pruning: done
+  5-3-blocked-story-handling-and-dependency-cascade: done
+  5-4-status-cli-command: done
+  5-5-unblock-cli-command: done
+  epic-5-retrospective: done
+
+  # Epic 6: Observability & Epic Teardown
+  epic-6: done
+  6-1-orchestrator-log-file: done
+  6-2-enhanced-status-display-with-phase-info: done
+  6-3-summary-report-generation: done
+  6-4-epic-teardown-phases: done
+  epic-6-retrospective: done
+
+  # Epic 7: Graceful Provider Timeout & Partial Result Recovery
+  epic-7: done
+  7-1-fix-phase-timeout-defaults: done
+  7-2-result-collector: done
+  7-3-graceful-timeout-base-provider: done
+  7-4-claude-sdk-graceful-timeout: done
+  7-5-gemini-alignment-and-documentation-sync: done
+  epic-7-retrospective: done
+
+  # Epic 8: Context Requirements Validation & Compiler Hardening
+  epic-8: done
+  8-1-context-filter-error-on-missing-sections: done
+  8-2-optional-reference-convention: done
+  8-3-epic-documentation-sync: done
+  epic-8-retrospective: done
+
+  # Epic 9: Worktree Bootstrap & Validation
+  epic-9: done
+  9-1-bootstrap-module-and-config: done
+  9-2-canary-bootstrap-integration: done
+  9-3-epic-documentation-sync: done
+  epic-9-retrospective: done
+
+  # Epic 10: Codex CLI Provider (Replace Gemini)
+  epic-10: done
+  10-1-codex-provider-core: done
+  10-2-provider-registry: done
+  10-3-structured-output: done
+  10-4-evidence-score-integration: done
+  10-5-configuration-and-docs: done
+  10-6-e2e-testing-and-hardening: done
+  10-7-epic-documentation-sync: done

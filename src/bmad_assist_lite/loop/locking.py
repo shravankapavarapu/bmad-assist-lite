@@ -92,7 +92,17 @@ def _try_exclusive_create(lock_path: Path, content: str) -> bool:
 
 @contextmanager
 def running_lock(project_path: Path) -> Generator[Path, None, None]:
-    """Context manager for .bmad-assist-lite/running.lock file."""
+    """Context manager for .bmad-assist-lite/running.lock file.
+
+    When ``BMAD_PARALLEL_MODE=1`` is set, the lock is skipped entirely
+    because the parent orchestrator already holds it.  Subprocesses
+    (story worktrees, teardown) run under the parent's lock.
+    """
+    if os.environ.get("BMAD_PARALLEL_MODE") == "1":
+        lock_path = project_path / ".bmad-assist-lite" / "running.lock"
+        yield lock_path
+        return
+
     lock_dir = project_path / ".bmad-assist-lite"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / "running.lock"

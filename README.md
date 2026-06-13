@@ -2,7 +2,7 @@
 
 Lightweight, Windows-native Python CLI that automates the **BMAD** (Breakthrough Method of Agile AI Driven Development) methodology with Multi-LLM orchestration.
 
-Coordinates **Claude Code CLI** and **Gemini CLI** to run a 10-phase development loop:
+Coordinates **Claude Code CLI**, **Gemini CLI**, and **Codex CLI** to run a 10-phase development loop:
 
 ```
 create story → validate → synthesize → implement → code review → synthesize review →
@@ -18,6 +18,7 @@ Multiple LLMs validate and review in parallel, then a single Master LLM synthesi
 - Python 3.11+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated
+- [Codex CLI](https://github.com/openai/codex) installed and authenticated (requires `CODEX_API_KEY`)
 
 ### Install
 
@@ -32,6 +33,20 @@ pip install -e .
 
 # Or install with dev tools
 pip install -e ".[dev]"
+```
+
+#### Install Codex CLI
+
+**Windows PowerShell:**
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+```
+
+**macOS/Linux:**
+
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
 ### Initialize a Project
@@ -95,12 +110,16 @@ If no epic file is found, the run stops immediately with a clear error.
 
 ```bash
 # Run all epics and stories
-bmad-assist-lite run
+bmad-assist-lite run 
+# or
+python -m bmad_assist_lite run 
 
 # Run a specific epic
-bmad-assist-lite run --epic 1
+bmad-assist-lite run --epic 1 
+#or 
+python -m bmad_assist_lite run --epic 1
 
-# Run starting from a specific story
+# Run only a specific story
 bmad-assist-lite run --epic 1 --story 2
 
 # Resume after interrupt (Ctrl+C saves state)
@@ -109,6 +128,56 @@ bmad-assist-lite run --resume
 # Verbose output
 bmad-assist-lite run -vv
 ```
+
+### Run Stories in Parallel (Git Worktrees)
+
+Run multiple stories from an epic concurrently using git worktrees. Each story gets its own isolated worktree and branch, with results merged back sequentially.
+
+```bash
+# Run all stories from epic 1 in parallel (max 3 concurrent by default)
+bmad-assist-lite parallel run --epic 1
+
+# Run from a specific project directory
+bmad-assist-lite parallel run --epic 1 --project /path/to/project
+
+# Verbose output
+bmad-assist-lite parallel run --epic 1 -vv
+
+# Check status of a running parallel execution (safe from another terminal)
+bmad-assist-lite parallel status
+
+# Unblock a story that failed (resets to backlog for retry)
+bmad-assist-lite parallel unblock 3.2
+```
+
+**Requirements:**
+- Must be on a feature branch (not `main`/`master` or detached HEAD)
+- Epic must have a dedicated epic file (e.g., `epic-1.md`) in `planning-artifacts/`
+
+**How it works:**
+1. Parses the epic file and builds a dependency graph
+2. Creates git worktrees for each story (with optional bootstrap: file copy, setup commands, validation)
+3. Runs stories concurrently up to `max_concurrency`, respecting dependency ordering
+4. Merges completed stories back to the base branch sequentially
+5. Runs post-merge quality gates to catch integration issues
+
+**Configuration** (in `bmad-assist-lite.yaml`):
+
+```yaml
+parallel:
+  max_concurrency: 3          # max concurrent stories (1-5)
+  stagger_delay: 10.0         # seconds between story spawns
+  post_merge_fix_retries: 1   # retry attempts for post-merge quality gate fixes
+  conflict_resolution_timeout: 120  # seconds for Claude CLI conflict resolution
+  worktree_base_dir: null     # custom base dir for worktrees (null = auto)
+  copy_to_worktree: []        # files/dirs to copy to worktrees (e.g., [".env", "secrets/"])
+  setup_commands: []           # commands to run in each worktree (e.g., ["pip install -e ."])
+  validation_command: null     # smoke test after bootstrap (e.g., "pytest -q -x")
+  copy_strict: false           # true = error on missing copy source, false = warn
+  bootstrap_timeout: 120       # per-command timeout for setup/validation
+```
+
+The first worktree acts as a **canary** — it runs the full bootstrap with validation. If the canary fails, the entire run aborts immediately. If it passes, remaining worktrees skip the redundant validation step.
 
 ### Other Commands
 
@@ -138,6 +207,8 @@ providers:
   multi:                    # Validators/reviewers: run in parallel
     - provider: gemini
       model: gemini-2.5-flash
+    - provider: codex
+      model: gpt-5.3-codex
     - provider: claude
       model: sonnet
 
@@ -193,11 +264,13 @@ Edit the `providers` section in `bmad-assist-lite.yaml` in your **project root**
 ```yaml
 providers:
   master:
-    provider: claude          # Options: claude, gemini
+    provider: claude          # Options: claude, gemini, codex
     model: opus               # See supported values below
   multi:
     - provider: gemini
       model: gemini-2.5-pro   # Any Gemini model string
+    - provider: codex
+      model: gpt-5.3-codex    # Any gpt-*/codex-* model
     - provider: claude
       model: haiku
 ```
@@ -208,6 +281,7 @@ providers:
 |----------|-------------|---------|------------|
 | **claude** | `opus`, `sonnet`, `haiku`, or any full ID (e.g., `claude-sonnet-4-5-20250929`) | `opus` | `src/bmad_assist_lite/providers/claude_sdk.py` |
 | **gemini** | Any model string (validated by Gemini CLI at runtime, e.g., `gemini-2.5-flash`, `gemini-2.5-pro`) | `gemini-2.5-flash` | `src/bmad_assist_lite/providers/gemini.py` |
+| **codex** | `codex-mini-latest`, `gpt-5.3-codex`, `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, or any `gpt-`/`codex-` prefixed model | `codex-mini-latest` | `src/bmad_assist_lite/providers/codex.py` |
 
 The config model definitions (Pydantic) are in `src/bmad_assist_lite/core/config.py` — see `MasterProviderConfig` and `MultiProviderConfig`.
 
@@ -334,7 +408,7 @@ pip install -e ".[context7]"
 bmad-assist-lite fetch-docs --epic 1 -p /path/to/project -vv
 ```
 
-### Optional: API Key
+### Optional: Context7 API Key
 
 Context7 works without an API key (anonymous tier, rate-limited). For higher limits, set:
 
@@ -345,6 +419,21 @@ CONTEXT7_API_KEY=your-key-here
 # Or as environment variable
 export CONTEXT7_API_KEY=your-key-here
 ```
+
+## Codex CLI Authentication
+
+Codex CLI requires an OpenAI API key for pay-as-you-go API access. Set the `CODEX_API_KEY` environment variable:
+
+```bash
+# In .env file (recommended for automation -- no browser login, no ChatGPT rate limits)
+CODEX_API_KEY=your-api-key-here
+
+# Or as environment variable
+export CODEX_API_KEY=your-api-key-here    # macOS/Linux
+$env:CODEX_API_KEY = "your-api-key-here"  # Windows PowerShell
+```
+
+Pay-as-you-go API auth avoids ChatGPT rate limits that apply to browser-based authentication.
 
 ## Sprint Status Tracking
 
@@ -405,11 +494,20 @@ src/bmad_assist_lite/
     toolchain.py            # Auto-detect project build commands (Node/Python/Rust)
     quality_gates.py        # Parse/update Quality Gates markdown table in story files
     command_runner.py       # Run shell commands with timeout, capture output
-  providers/                # Claude SDK + Gemini CLI implementations
+  providers/                # Claude SDK + Gemini CLI + Codex CLI implementations
   compiler/                 # Workflow compilation pipeline
   loop/                     # Main loop, dispatch, transitions, signals, locking
     handlers/               # 10 phase handler implementations (7 LLM + 3 non-LLM)
     cleanup.py              # Crash recovery (temp file cleanup)
+  parallel/                 # Parallel story execution via git worktrees
+    orchestrator.py         # Async orchestrator with semaphore-based concurrency
+    worktree_manager.py     # Create/cleanup worktrees
+    bootstrap.py            # Worktree bootstrap pipeline (copy, setup, validate)
+    dependency_graph.py     # Story dependency DAG resolution
+    merger.py               # Sequential merge queue with post-merge quality gates
+    git_ops.py              # Branch operations
+    state.py                # ParallelState/StoryState frozen models with YAML persistence
+    cli.py                  # parallel run/status/unblock subcommands
   context_docs/             # Context7 library doc fetching, caching, injection
   validation/               # Evidence Score system (scoring, parsing, aggregation)
   plugins/                  # Plugin protocols, registry, loader
@@ -504,7 +602,7 @@ bmad-assist-lite includes several built-in protections, but there are risks user
 - **LLMs can produce malicious code.** The Master LLM modifies your project files during `dev_story`. Always review generated code before committing. The code review phase helps catch issues, but is not a guarantee.
 - **Config files are trusted input.** `bmad-assist-lite.yaml` and `config_source` paths control what files the compiler reads. Don't accept config files from untrusted sources.
 - **Sprint-status.yaml is the source of truth.** This file controls which stories are queued for development. Manually editing story statuses to `done` will cause those stories to be skipped. If someone with write access marks stories done prematurely, work will be skipped silently.
-- **Provider credentials.** Claude and Gemini CLI tools manage their own authentication. bmad-assist-lite does not store or handle API keys directly, but ensure your CLI tools are properly secured.
+- **Provider credentials.** Claude and Gemini CLI tools manage their own authentication. Codex CLI uses the `CODEX_API_KEY` environment variable (typically set in `.env`). bmad-assist-lite does not store or handle API keys directly, but ensure your CLI tools and `.env` file are properly secured.
 
 ## Adding Features from bmad-assist
 
@@ -516,7 +614,7 @@ Three plugin protocols enable extensibility:
 
 | Protocol | Purpose | Example |
 |----------|---------|---------|
-| `ProviderPlugin` | Add new LLM providers | Codex, OpenCode, Amp, Cursor |
+| `ProviderPlugin` | Add new LLM providers | OpenCode, Amp, Cursor, Copilot |
 | `PhasePlugin` | Add new phases to the loop | TestArch, Deep Verify, QA |
 | `WorkflowPlugin` | Add new workflow templates | Custom validation workflows |
 
@@ -527,13 +625,13 @@ Create Python files in `.bmad-assist-lite/plugins/` in your project root. They'r
 **Example: Adding a new provider**
 
 ```python
-# .bmad-assist-lite/plugins/codex_provider.py
+# .bmad-assist-lite/plugins/opencode_provider.py
 from bmad_assist_lite.providers.base import BaseProvider, ProviderResult
 
-class CodexProvider(BaseProvider):
+class OpenCodeProvider(BaseProvider):
     @property
     def provider_name(self) -> str:
-        return "codex"
+        return "opencode"
 
     def invoke(self, prompt, *, model=None, timeout=None,
                settings_file=None, cwd=None, allowed_tools=None,
@@ -545,11 +643,11 @@ class CodexProvider(BaseProvider):
         return result.stdout
 
     def supports_model(self, model):
-        return model in ("codex", "codex-mini")
+        return model.startswith("opencode-")
 
 # Auto-registration function (called by plugin loader)
 def register(registry):
-    registry.register_provider("codex", CodexProvider())
+    registry.register_provider("opencode", OpenCodeProvider())
 ```
 
 **Example: Adding a phase handler**
@@ -609,7 +707,7 @@ Here's what to port from bmad-assist and how:
 
 | bmad-assist Feature | Plugin Type | Complexity | Source Files to Reference |
 |---------------------|-------------|------------|--------------------------|
-| **Additional providers** (Codex, OpenCode, Amp, Cursor, Copilot, Kimi) | ProviderPlugin | Low | `bmad-assist/src/bmad_assist/providers/{name}.py` |
+| **Additional providers** (OpenCode, Amp, Cursor, Copilot, Kimi) | ProviderPlugin | Low | `bmad-assist/src/bmad_assist/providers/{name}.py` |
 | **Git branch management** | PhasePlugin | Low | `bmad-assist/src/bmad_assist/core/loop/helpers.py` |
 | **Sprint status tracking** | **Built-in** | — | `core/sprint_status.py`, `core/sprint_sync.py`, `core/resume_validation.py` |
 | **Deep Verify** (code quality verification) | PhasePlugin + WorkflowPlugin | Medium | `bmad-assist/src/bmad_assist/deep_verify/` |
@@ -667,7 +765,7 @@ ruff format src/
 | **Quality Gates** | Built-in (Next.js-specific) | Built-in (tech-stack agnostic, auto-detect toolchain, deterministic non-LLM enforcement) |
 | **Runtime Verification** | Built-in (pnpm-specific) | Built-in (auto-detect: npm/pnpm/yarn/pytest/maven/gradle/cargo) |
 | **Review Continuation** | Built-in | Built-in (detect prior review, prioritize `[AI-Review]` fixes) |
-| **Providers** | 9 (Claude, Gemini, Codex, OpenCode, Amp, Cursor, Copilot, Kimi, Claude-subprocess) | 2 (Claude SDK, Gemini) |
+| **Providers** | 9 (Claude, Gemini, Codex, OpenCode, Amp, Cursor, Copilot, Kimi, Claude-subprocess) | 3 (Claude SDK, Gemini, Codex) |
 | **Windows support** | Partial (uses SIGKILL, killpg) | Native (taskkill, CREATE_NO_WINDOW, ctypes PID check) |
 | **Config tiers** | 3 (global + CWD + project) | 2 (global + project) |
 | **Plugin system** | None (monolithic) | Yes (ProviderPlugin, PhasePlugin, WorkflowPlugin) |

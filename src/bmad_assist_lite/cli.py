@@ -25,6 +25,19 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+parallel_app = typer.Typer(
+    name="parallel",
+    help="Parallel story execution commands.",
+    no_args_is_help=True,
+)
+app.add_typer(parallel_app, name="parallel")
+
+from bmad_assist_lite.parallel.cli import parallel_run, parallel_status, parallel_unblock  # noqa: E402, I001
+
+parallel_app.command(name="run")(parallel_run)
+parallel_app.command(name="status")(parallel_status)
+parallel_app.command(name="unblock")(parallel_unblock)
+
 
 def _setup_logging(verbosity: int) -> None:
     """Configure logging based on verbosity level."""
@@ -46,20 +59,28 @@ def _setup_logging(verbosity: int) -> None:
             h.setLevel(level)
 
 
-def _add_file_log_handler(logs_dir: Path) -> logging.FileHandler | None:
+def _add_file_log_handler(
+    logs_dir: Path, *, label: str = "run",
+) -> logging.FileHandler | None:
     """Attach a FileHandler to the root logger that captures all messages.
 
-    Writes to ``logs_dir/run-{local_timestamp}.log``.  Always logs at
+    Writes to ``logs_dir/{label}-{local_timestamp}.log``.  Always logs at
     DEBUG level regardless of console verbosity so the file captures
     everything.
 
-    Returns the handler (for teardown) or None on failure.
+    Args:
+        logs_dir: Directory to write the log file in.
+        label: Prefix for the log filename (e.g. ``"run"`` or ``"story-2.1"``).
+
+    Returns:
+        The handler (for teardown) or None on failure.
+
     """
     from datetime import datetime
 
     logs_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = logs_dir / f"run-{ts}.log"
+    log_path = logs_dir / f"{label}-{ts}.log"
 
     try:
         fh = logging.FileHandler(log_path, encoding="utf-8")
@@ -128,7 +149,7 @@ def run(
         None,
         "--story",
         "-s",
-        help="Specific story number to start from.",
+        help="Run only this story number (implies --single-story).",
     ),
     verbose: int = typer.Option(
         0,
@@ -137,11 +158,31 @@ def run(
         count=True,
         help="Increase verbosity (-v for INFO, -vv for DEBUG).",
     ),
+    single_story: bool = typer.Option(
+        False,
+        "--single-story",
+        help="Exit after completing a single story.",
+    ),
     resume: bool = typer.Option(
         False,
         "--resume",
         "-r",
         help="Resume from saved state.",
+    ),
+    teardown_only: bool = typer.Option(
+        False,
+        "--teardown-only",
+        help="Skip story discovery and run epic teardown phases directly.",
+    ),
+    fix_post_merge: bool = typer.Option(
+        False,
+        "--fix-post-merge",
+        help="Run fix-quality-gate phase for a post-merge QG failure.",
+    ),
+    attempt: int = typer.Option(
+        1,
+        "--attempt",
+        help="Fix attempt number (1-based) for retry context.",
     ),
 ) -> None:
     """Run the BMAD development loop.
@@ -175,7 +216,103 @@ def run(
     from bmad_assist_lite.core.paths import init_paths
 
     paths = init_paths(project)
-    file_handler = _add_file_log_handler(paths.logs_dir)
+    parallel_logs_dir = os.environ.get("BMAD_PARALLEL_LOGS_DIR")
+    logs_dir = Path(parallel_logs_dir) if parallel_logs_dir else paths.logs_dir
+    log_label = "run"
+    if parallel_logs_dir and epic is not None and story is not None:
+        log_label = f"story-{epic}.{story}"
+    file_handler = _add_file_log_handler(logs_dir, label=log_label)
+
+    # --- Teardown-only mode: bypass story discovery, run epic teardown directly ---
+    if teardown_only:
+        if epic is None:
+            typer.echo("--teardown-only requires --epic to be specified.", err=True)
+            raise typer.Exit(1)
+
+        from bmad_assist_lite.core.state import Phase, State
+        from bmad_assist_lite.loop.runner import run_loop
+        from bmad_assist_lite.loop.types import LoopExitReason
+
+        epic_teardown_phases = app_config.loop.epic_teardown
+        if not epic_teardown_phases:
+            typer.echo("No epic teardown phases configured.", err=True)
+            raise typer.Exit(1)
+
+        # Construct a resume state starting at the first teardown phase
+        teardown_state = State(
+            current_epic=epic,
+            current_story=None,
+            current_phase=Phase(epic_teardown_phases[0]),
+        )
+
+        typer.echo(
+            f"Running epic teardown for epic {epic} "
+            f"(phases: {', '.join(epic_teardown_phases)})"
+        )
+
+        exit_reason = run_loop(
+            config=app_config,
+            project_path=project,
+            epics=[epic],
+            stories_for_epic={epic: []},
+            resume_state=teardown_state,
+            single_story=False,
+        )
+
+        # Close file log handler
+        if file_handler is not None:
+            file_handler.flush()
+            file_handler.close()
+            logging.getLogger().removeHandler(file_handler)
+
+        if exit_reason == LoopExitReason.COMPLETED:
+            typer.echo("\nEpic teardown completed successfully!")
+        elif exit_reason == LoopExitReason.INTERRUPTED:
+            typer.echo("\nTeardown interrupted.", err=True)
+            raise typer.Exit(130)
+        elif exit_reason == LoopExitReason.ERROR:
+            typer.echo("\nTeardown failed with errors.", err=True)
+            raise typer.Exit(1)
+        return
+
+    # --- Fix-post-merge mode: run fix_quality_gate handler directly ---
+    if fix_post_merge:
+        if epic is None or story is None:
+            typer.echo(
+                "--fix-post-merge requires both --epic and --story.", err=True,
+            )
+            raise typer.Exit(1)
+
+        from bmad_assist_lite.core.state import Phase, State
+        from bmad_assist_lite.loop.dispatch import execute_phase, init_handlers
+
+        init_handlers(app_config, project)
+
+        story_id = f"{epic}.{story}"
+        fix_state = State(
+            current_epic=epic,
+            current_story=story_id,
+            current_phase=Phase.FIX_QUALITY_GATE,
+            qa_retry_count=attempt,
+        )
+
+        typer.echo(
+            f"Running fix-quality-gate for story {story_id} (attempt {attempt})"
+        )
+
+        result = execute_phase(fix_state)
+
+        if file_handler is not None:
+            file_handler.flush()
+            file_handler.close()
+            logging.getLogger().removeHandler(file_handler)
+
+        if result.success:
+            typer.echo("Fix phase completed successfully.")
+        else:
+            typer.echo("Fix phase failed.", err=True)
+            raise typer.Exit(1)
+        return
 
     # --- Sprint-status-driven story discovery ---
     from bmad_assist_lite.core.sprint_status import load_sprint_status
@@ -210,17 +347,34 @@ def run(
         epic_stories.setdefault(epic_num, []).append((epic_num, story_num, full_key))
 
     if not epic_stories:
+        logger.error("No backlog stories match the specified filters.")
         typer.echo("No backlog stories match the specified filters.", err=True)
         raise typer.Exit(1)
 
-    # Filter by --story option (start from specific story number)
+    # Filter by --story option — specifying a story implies single-story mode
     if story:
+        single_story = True
         for e_num, story_list in list(epic_stories.items()):
-            filtered = [(en, sn, fk) for en, sn, fk in story_list if sn >= story]
+            filtered = [(en, sn, fk) for en, sn, fk in story_list if sn == story]
             if filtered:
                 epic_stories[e_num] = filtered
             else:
                 del epic_stories[e_num]
+
+        if not epic_stories:
+            target_epic = epic if epic else "any epic"
+            story_id = f"{epic}.{story}" if epic else str(story)
+            current_status = sprint_status.get_story_status(story_id)
+            if current_status:
+                msg = (
+                    f"Story {story_id} is not in backlog "
+                    f"(current status: {current_status})."
+                )
+            else:
+                msg = f"Story {story} not found in {target_epic} backlog stories."
+            logger.error(msg)
+            typer.echo(msg, err=True)
+            raise typer.Exit(1)
 
     # Validate epic files exist for each epic
     planning_dir = paths.planning_artifacts
@@ -230,6 +384,10 @@ def run(
     for e_num in epic_stories:
         epic_file = _find_epic_file(planning_dir, e_num)
         if epic_file is None or not _is_dedicated_epic_file(epic_file, e_num):
+            logger.warning(
+                "No dedicated epic file for epic %d (e.g. epic-%d.md) in %s — skipping.",
+                e_num, e_num, planning_dir,
+            )
             typer.echo(
                 f"Warning: No dedicated epic file for epic {e_num} "
                 f"(e.g. epic-{e_num}.md) in {planning_dir} — skipping.",
@@ -244,6 +402,7 @@ def run(
         del epic_stories[e_num]
 
     if not epic_stories:
+        logger.error("No epics with dedicated epic files found. Cannot continue.")
         typer.echo("No epics with dedicated epic files found. Cannot continue.", err=True)
         raise typer.Exit(1)
 
@@ -322,6 +481,7 @@ def run(
         epics=epics_list,
         stories_for_epic=stories_for_epic,
         resume_state=resume_state,
+        single_story=single_story,
     )
 
     # Close file log handler
@@ -336,6 +496,7 @@ def run(
         typer.echo("\nLoop interrupted. Use --resume to continue.")
         raise typer.Exit(130)
     elif exit_reason == LoopExitReason.ERROR:
+        logger.error("Loop failed with errors.")
         typer.echo("\nLoop failed with errors.", err=True)
         raise typer.Exit(1)
 
@@ -585,7 +746,7 @@ def _resolve_context_docs(
     from bmad_assist_lite.context_docs.resolver import resolve_epic_docs
 
     ctx_cfg = app_config.context_docs
-    arch_file = paths.architecture_file if paths.architecture_file.exists() else None
+    arch_files = paths.architecture_files or None
 
     typer.echo("Context7: fetching library docs...")
     for epic_num in epics_list:
@@ -601,7 +762,7 @@ def _resolve_context_docs(
                 project_root=project,
                 cache_dir=paths.cache_dir,
                 epic_file=epic_file,
-                architecture_file=arch_file,
+                architecture_files=arch_files,
                 max_libs=ctx_cfg.max_libs,
                 max_tokens_per_lib=ctx_cfg.max_tokens_per_lib,
             )
@@ -659,7 +820,7 @@ def fetch_docs(
     # Find epic and architecture files
     planning_dir = paths.planning_artifacts
     epic_file = _find_epic_file(planning_dir, epic_num)
-    arch_file = paths.architecture_file if paths.architecture_file.exists() else None
+    arch_files = paths.architecture_files or None
 
     from bmad_assist_lite.context_docs.resolver import resolve_epic_docs
 
@@ -669,7 +830,7 @@ def fetch_docs(
             project_root=project,
             cache_dir=paths.cache_dir,
             epic_file=epic_file,
-            architecture_file=arch_file,
+            architecture_files=arch_files,
             max_libs=max_libs,
             max_tokens_per_lib=max_tokens,
         )

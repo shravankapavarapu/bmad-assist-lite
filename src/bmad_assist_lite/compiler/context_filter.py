@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from bmad_assist_lite.compiler.types import CompilerContext
+from bmad_assist_lite.core.exceptions import CompilerError
 
 logger = logging.getLogger(__name__)
 
 _HEADING_RE = re.compile(r"^#{2,4}\s+Context\s+Requirements", re.IGNORECASE)
+_OPTIONAL_RE = re.compile(r"\s*\(optional\)\s*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -27,12 +29,16 @@ class ContextRequirement:
         document: Filename (e.g. ``"architecture.md"``).
         sections: Section header names to extract.
         directive: ``"full"``, ``"skip"``, or ``"sections"``.
+        optional: Whether the entire document reference is optional.
+        optional_sections: Indices (into ``sections``) that are optional.
 
     """
 
     document: str
     sections: list[str]
     directive: str  # "full", "skip", or "sections"
+    optional: bool = False
+    optional_sections: frozenset[int] = field(default_factory=frozenset)
 
 
 # ---------------------------------------------------------------------------
@@ -119,19 +125,53 @@ def parse_context_requirements(epic_content: str) -> list[ContextRequirement] | 
         if not document:
             continue
 
-        sections_lower = sections_raw.lower()
-        if sections_lower == "(skip)":
+        # Strip (optional) from the raw cell to isolate the directive keyword.
+        # "(full) (optional)" → "(full)", "(skip) (optional)" → "(skip)"
+        directive_val = _OPTIONAL_RE.sub("", sections_raw).strip().strip("`").strip()
+
+        directive_lower = directive_val.lower()
+        if directive_lower == "(skip)":
             directive = "skip"
             sections: list[str] = []
-        elif sections_lower == "(full)" or not sections_raw:
+            optional_indices: frozenset[int] = frozenset()
+            # Document-level optional: (optional) in a (skip)/(full) directive row
+            doc_optional = bool(_OPTIONAL_RE.search(sections_raw))
+        elif directive_lower == "(full)" or not directive_val:
             directive = "full"
             sections = []
+            optional_indices = frozenset()
+            doc_optional = bool(_OPTIONAL_RE.search(sections_raw))
         else:
             directive = "sections"
-            sections = [s.strip().strip("`") for s in sections_raw.split(";") if s.strip()]
+            # Split by semicolon, then detect per-section (optional)
+            raw_parts = [s.strip() for s in sections_raw.split(";") if s.strip()]
+            sections = []
+            opt_idx: set[int] = set()
+            for part in raw_parts:
+                # Detect (optional) before stripping backticks
+                if _OPTIONAL_RE.search(part):
+                    cleaned = _OPTIONAL_RE.sub("", part).strip().strip("`").strip()
+                    if cleaned:
+                        opt_idx.add(len(sections))
+                        sections.append(cleaned)
+                else:
+                    cleaned = part.strip("`").strip()
+                    if cleaned:
+                        sections.append(cleaned)
+            optional_indices = frozenset(opt_idx)
+            # Document-level optional only if ALL sections are optional
+            doc_optional = bool(
+                optional_indices and len(optional_indices) == len(sections)
+            )
 
         reqs.append(
-            ContextRequirement(document=document, sections=sections, directive=directive)
+            ContextRequirement(
+                document=document,
+                sections=sections,
+                directive=directive,
+                optional=doc_optional,
+                optional_sections=optional_indices,
+            )
         )
 
     return reqs if reqs else None
@@ -383,6 +423,12 @@ def apply_context_filter(context: CompilerContext) -> None:
     """Filter ``context.file_contents`` based on the epic's Context Requirements table.
 
     No-op if the epic file is not loaded or no table is found.
+
+    Raises:
+        CompilerError: If any referenced documents are missing from discovered
+            files or referenced sections are not found in loaded documents.
+            All missing references are collected and reported in a single error.
+
     """
     # Find the epic content in file_contents
     epic_content: str | None = None
@@ -400,45 +446,94 @@ def apply_context_filter(context: CompilerContext) -> None:
 
     filename_to_key = _build_filename_to_key_map(context.discovered_files)
 
+    missing_docs: list[str] = []
+    missing_sections: dict[str, list[str]] = {}
+
+    accumulated: dict[str, list[str]] = {}
+    seen_keys: set[str] = set()
+
     for req in reqs:
         doc_lower = req.document.lower()
         content_key = filename_to_key.get(doc_lower)
-        if content_key is None:
-            logger.warning(
-                "Context Requirements: document '%s' not found in discovered files",
-                req.document,
-            )
-            continue
 
-        if content_key not in context.file_contents:
-            logger.warning(
-                "Context Requirements: key '%s' for document '%s' has no loaded content",
-                content_key,
-                req.document,
-            )
-            continue
-
-        if req.directive == "skip":
-            context.file_contents[content_key] = ""
-        elif req.directive == "full":
-            pass  # no change
-        elif req.directive == "sections":
-            original = context.file_contents[content_key]
-            extracted_parts: list[str] = []
-            for section_name in req.sections:
-                section = _extract_section_from_content(original, section_name)
-                if section is None:
+        # Document not discovered or not loaded — handle missing doc
+        if content_key is None or content_key not in context.file_contents:
+            if req.directive != "skip":
+                if req.optional:
                     logger.warning(
-                        "Context Requirements: section '%s' not found in '%s'",
-                        section_name,
+                        "Optional document '%s' not found, skipping",
                         req.document,
                     )
+                else:
+                    missing_docs.append(req.document)
+            continue
+
+        seen_keys.add(content_key)
+
+        # Resolve source content: prefer per-file content for precise extraction,
+        # fall back to concatenated content for backward compat (single-file case).
+        source = context.per_file_contents.get(
+            doc_lower, context.file_contents.get(content_key, "")
+        )
+
+        if req.directive == "skip":
+            accumulated.setdefault(content_key, [])
+        elif req.directive == "full":
+            if source:
+                accumulated.setdefault(content_key, []).append(source)
+        elif req.directive == "sections":
+            for idx, section_name in enumerate(req.sections):
+                section = _extract_section_from_content(source, section_name)
+                if section is None:
+                    if idx in req.optional_sections:
+                        logger.warning(
+                            "Optional section '%s' in '%s' not found, skipping",
+                            section_name,
+                            req.document,
+                        )
+                    else:
+                        missing_sections.setdefault(req.document, []).append(
+                            section_name
+                        )
                     continue
-                extracted_parts.append(section)
-            if extracted_parts:
-                context.file_contents[content_key] = "\n\n".join(extracted_parts)
-            else:
-                logger.warning(
-                    "Context Requirements: no sections matched for '%s', keeping full content",
-                    req.document,
-                )
+                accumulated.setdefault(content_key, []).append(section)
+
+    # Apply accumulated results — keys not mentioned in the table stay unchanged
+    for key in seen_keys:
+        acc_parts = accumulated.get(key, [])
+        if acc_parts:
+            context.file_contents[key] = "\n\n".join(acc_parts)
+        else:
+            context.file_contents[key] = ""
+
+    if missing_docs or missing_sections:
+        if missing_sections and missing_docs:
+            header = "Context Requirements have unresolved references:"
+        elif missing_sections:
+            header = "Context Requirements reference missing sections:"
+        else:
+            header = "Context Requirements reference missing documents:"
+        parts: list[str] = [header]
+        for doc, sections in missing_sections.items():
+            parts.append(f"\n  {doc}:")
+            for s in sections:
+                parts.append(f"    - {s}")
+        if missing_docs:
+            parts.append("\n  Discovered files missing:")
+            for doc in missing_docs:
+                parts.append(f"    - {doc}")
+        fix_lines = []
+        if missing_sections:
+            fix_lines.append(
+                "Add missing sections to the referenced documents"
+            )
+        if missing_docs:
+            fix_lines.append(
+                "Ensure missing documents exist in the project"
+            )
+        fix_lines.append(
+            "or mark non-critical references as (optional)"
+            " in the epic file"
+        )
+        parts.append(f"\nFix: {', '.join(fix_lines)}.")
+        raise CompilerError("\n".join(parts))

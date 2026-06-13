@@ -8,12 +8,13 @@
 import copy
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from bmad_assist_lite.core.exceptions import ConfigError
+from bmad_assist_lite.parallel.config import ParallelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,15 @@ class MultiProviderConfig(BaseModel):
         return Path(self.settings).expanduser()
 
 
+class CliPathsConfig(BaseModel):
+    """Override paths for CLI-based provider binaries."""
+
+    model_config = ConfigDict(frozen=True)
+
+    codex: str | None = Field(None, description="Absolute path to codex binary")
+    gemini: str | None = Field(None, description="Absolute path to gemini binary")
+
+
 class ProviderConfig(BaseModel):
     """Provider configuration section."""
 
@@ -88,6 +98,7 @@ class ProviderConfig(BaseModel):
 
     master: MasterProviderConfig
     multi: list[MultiProviderConfig] = Field(default_factory=list)
+    cli_paths: CliPathsConfig = Field(default_factory=CliPathsConfig)
 
 
 class TimeoutsConfig(BaseModel):
@@ -108,7 +119,7 @@ class TimeoutsConfig(BaseModel):
     retrospective: int | None = None
 
     # Phases that need longer timeouts than default (300s)
-    _PHASE_DEFAULTS: dict[str, int] = {
+    _PHASE_DEFAULTS: ClassVar[dict[str, int]] = {
         "create_story": 900,
         "validate_story": 900,
         "validate_story_synthesis": 900,
@@ -118,6 +129,7 @@ class TimeoutsConfig(BaseModel):
         "quality_gate": 300,
         "fix_quality_gate": 900,
         "epic_quality_gate": 600,
+        "retrospective": 600,
     }
 
     def get_timeout(self, phase: str) -> int:
@@ -219,6 +231,9 @@ class Config(BaseModel):
         default=None, description="Fallback quality gate commands"
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
+    parallel: ParallelConfig | None = Field(
+        default=None, description="Parallel story execution configuration"
+    )
 
 
 # ============================================================================

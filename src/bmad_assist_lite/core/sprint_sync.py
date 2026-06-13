@@ -7,6 +7,7 @@ This is non-fatal: sync errors are logged as warnings and never propagated.
 """
 
 import logging
+import os
 from pathlib import Path
 
 from bmad_assist_lite.core.sprint_status import (
@@ -84,6 +85,10 @@ def trigger_sync(state: State, project_path: Path) -> None:
         project_path: Path to the project root.
 
     """
+    if os.environ.get("BMAD_PARALLEL_MODE") == "1":
+        logger.debug("Sprint sync bypassed (BMAD_PARALLEL_MODE=1)")
+        return
+
     try:
         ss_path = get_sprint_status_path(project_path)
         sprint_status = load_sprint_status(ss_path)
