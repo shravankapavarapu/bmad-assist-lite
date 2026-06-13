@@ -123,3 +123,12 @@ development_status:
   10-5-configuration-and-docs: done
   10-6-e2e-testing-and-hardening: done
   10-7-epic-documentation-sync: done
+
+  # Epic 11: Cursor Provider — Composer 2.5 as Master LLM on Linux
+  epic-11: backlog
+  11-1-sigkill-escalation: backlog
+  11-2-cursor-resolution-and-config: backlog
+  11-3-cursor-provider-core: backlog
+  11-4-readonly-mode-deny-config: backlog
+  11-5-linux-deployment-docs: backlog
+  11-6-epic-documentation-sync: backlog
