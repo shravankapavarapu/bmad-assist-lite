@@ -345,18 +345,23 @@ class Orchestrator:
     # ========================================================================
 
     def _has_bootstrap_config(self) -> bool:
-        """Check whether any bootstrap fields are non-default.
+        """Check whether bootstrap should run.
 
-        Returns ``True`` if ``copy_to_worktree`` is non-empty,
-        ``setup_commands`` is non-empty, or ``validation_command``
-        is not ``None``.  Used to short-circuit all bootstrap logic
-        for zero-overhead when unconfigured.
+        Returns ``True`` if any explicit bootstrap fields are set, or
+        if the project type can be auto-detected (install command
+        fallback).  Used to short-circuit all bootstrap logic for
+        zero-overhead when truly unconfigured.
         """
-        return bool(
+        if (
             self._config.copy_to_worktree
             or self._config.setup_commands
             or (self._config.validation_command is not None)
-        )
+        ):
+            return True
+
+        from bmad_assist_lite.core.toolchain import detect_install_command
+
+        return detect_install_command(self._project_root) is not None
 
     # ========================================================================
     # Signal handling (Task 1, Task 2)

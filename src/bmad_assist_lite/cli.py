@@ -521,9 +521,83 @@ def init(
         typer.echo(f"Config already exists: {config_path}")
         return
 
-    # Create default config
-    default_config = """\
-# bmad-assist-lite configuration
+    # Detect project toolchain for quality_gate and parallel defaults
+    from bmad_assist_lite.core.toolchain import detect_install_command, detect_toolchain
+
+    toolchain = detect_toolchain(project)
+    install_cmd = detect_install_command(project)
+
+    # Build quality_gate section — active if detected, commented out otherwise
+    if toolchain.lint or toolchain.typecheck or toolchain.test:
+        qg_lines = ["quality_gate:"]
+        if toolchain.lint:
+            qg_lines.append(f'  lint: "{toolchain.lint}"')
+        if toolchain.typecheck:
+            qg_lines.append(f'  typecheck: "{toolchain.typecheck}"')
+        if toolchain.build:
+            qg_lines.append(f'  build: "{toolchain.build}"')
+        if toolchain.test:
+            qg_lines.append(f'  test: "{toolchain.test}"')
+        qg_lines.append("  command_timeout: 120     # per-command timeout in seconds")
+        quality_gate_block = "\n".join(qg_lines)
+    else:
+        quality_gate_block = """\
+# Fallback quality gate commands (auto-detected from build system if omitted).
+# quality_gate:
+#   lint: "ruff check src/"
+#   typecheck: "mypy src/"
+#   test: "pytest -q --tb=short --no-header"
+#   command_timeout: 120     # per-command timeout in seconds"""
+
+    # Build parallel section — use detected install command if available
+    if install_cmd:
+        parallel_block = f"""\
+# Parallel story execution via git worktrees.
+# parallel:
+#   max_concurrency: 3               # max concurrent stories (1-5)
+#   stagger_delay: 10.0              # seconds between spawns
+#   copy_to_worktree:                # files/dirs to copy into each worktree
+#     - ".env"
+#     - "bmad-assist-lite.yaml"
+#   setup_commands:                   # sequential shell commands run in each worktree
+#     - "{install_cmd}"
+#   validation_command: null          # smoke test command (e.g., "pytest -q -x")
+#   bootstrap_timeout: 120           # per-command timeout in seconds for setup/validation"""
+    else:
+        parallel_block = """\
+# Parallel story execution via git worktrees.
+# parallel:
+#   max_concurrency: 3               # max concurrent stories (1-5)
+#   stagger_delay: 10.0              # seconds between spawns
+#   copy_to_worktree:                # files/dirs to copy into each worktree
+#     - ".env"
+#     - "bmad-assist-lite.yaml"
+#   setup_commands: []                # sequential shell commands run in each worktree
+#   validation_command: null          # smoke test command (e.g., "pytest -q -x")
+#   bootstrap_timeout: 120           # per-command timeout in seconds for setup/validation"""
+
+    detected_label = ""
+    if toolchain.lint or install_cmd:
+        parts = []
+        if toolchain.lint:
+            # Infer language from the detected commands
+            if "ruff" in (toolchain.lint or ""):
+                parts.append("Python")
+            elif "cargo" in (toolchain.lint or ""):
+                parts.append("Rust")
+            else:
+                parts.append("Node.js")
+        elif install_cmd:
+            if "pip" in install_cmd:
+                parts.append("Python")
+            elif "cargo" in install_cmd:
+                parts.append("Rust")
+            else:
+                parts.append("Node.js")
+        detected_label = f" (detected: {', '.join(parts)} project)"
+
+    default_config = f"""\
+# bmad-assist-lite configuration{detected_label}
 providers:
   master:
     provider: claude          # claude, gemini, codex, cursor
@@ -558,12 +632,7 @@ timeouts:
 paths:
   output_folder: _bmad-output
 
-# Fallback quality gate commands (auto-detected from build system if omitted).
-# quality_gate:
-#   lint: "ruff check src/"
-#   typecheck: "mypy src/"
-#   test: "pytest -q --tb=short --no-header"
-#   command_timeout: 120     # per-command timeout in seconds
+{quality_gate_block}
 
 # Auto-commit story changes after quality gate pass/fail.
 # auto_commit:
@@ -575,21 +644,7 @@ paths:
 #   max_libs: 8              # max libraries to fetch docs for
 #   max_tokens_per_lib: 5000 # max tokens of docs per library
 
-# Parallel story execution via git worktrees.
-# parallel:
-#   max_concurrency: 3               # max concurrent stories (1-5)
-#   stagger_delay: 10.0              # seconds between spawns
-#   post_merge_fix_retries: 1        # retry attempts for post-merge quality gate fixes
-#   conflict_resolution_timeout: 120 # seconds for Claude CLI conflict resolution
-#   worktree_base_dir: null          # custom base dir for worktrees (null = auto)
-#   copy_to_worktree:                # files/dirs to copy into each worktree
-#     - ".env"
-#     - "bmad-assist-lite.yaml"
-#   copy_strict: false               # true = error on missing copy source, false = warn
-#   setup_commands:                   # sequential shell commands run in each worktree
-#     - "pip install -e .[dev]"
-#   validation_command: null          # smoke test command (e.g., "pytest -q -x")
-#   bootstrap_timeout: 120           # per-command timeout in seconds for setup/validation
+{parallel_block}
 """
     config_path.write_text(default_config)
     typer.echo(f"Created config: {config_path}")
