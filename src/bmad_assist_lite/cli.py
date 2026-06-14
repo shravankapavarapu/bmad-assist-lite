@@ -526,13 +526,17 @@ def init(
 # bmad-assist-lite configuration
 providers:
   master:
-    provider: claude
-    model: claude-opus-4-6   # Pin Opus 4.6. To use 4.7, set `model: claude-opus-4-7` and add `effort: max` (4.7-only thinking effort: low|medium|high|xhigh|max).
+    provider: claude          # claude, gemini, codex, cursor
+    model: claude-opus-4-6    # Pin Opus 4.6. To use 4.7, set `model: claude-opus-4-7` and add `effort: max`.
   multi:
     - provider: gemini
       model: gemini-3.1-pro-preview
     - provider: claude
       model: sonnet
+  # cli_paths:               # Override CLI binary paths (useful when venv strips PATH)
+  #   codex: "C:/path/to/codex.exe"
+  #   gemini: "C:/path/to/gemini.cmd"
+  #   cursor: "C:/path/to/cursor-agent.exe"
 
 loop:
   story:
@@ -554,13 +558,38 @@ timeouts:
 paths:
   output_folder: _bmad-output
 
+# Fallback quality gate commands (auto-detected from build system if omitted).
+# quality_gate:
+#   lint: "ruff check src/"
+#   typecheck: "mypy src/"
+#   test: "pytest -q --tb=short --no-header"
+#   command_timeout: 120     # per-command timeout in seconds
+
+# Auto-commit story changes after quality gate pass/fail.
+# auto_commit:
+#   enabled: true            # default
+
 # Uncomment to enable library documentation fetching from Context7.
-# Fetches up-to-date API docs for detected project dependencies and injects
-# them into dev-story and code-review-synthesis prompts.
 # context_docs:
 #   enabled: true
 #   max_libs: 8              # max libraries to fetch docs for
 #   max_tokens_per_lib: 5000 # max tokens of docs per library
+
+# Parallel story execution via git worktrees.
+# parallel:
+#   max_concurrency: 3               # max concurrent stories (1-5)
+#   stagger_delay: 10.0              # seconds between spawns
+#   post_merge_fix_retries: 1        # retry attempts for post-merge quality gate fixes
+#   conflict_resolution_timeout: 120 # seconds for Claude CLI conflict resolution
+#   worktree_base_dir: null          # custom base dir for worktrees (null = auto)
+#   copy_to_worktree:                # files/dirs to copy into each worktree
+#     - ".env"
+#     - "bmad-assist-lite.yaml"
+#   copy_strict: false               # true = error on missing copy source, false = warn
+#   setup_commands:                   # sequential shell commands run in each worktree
+#     - "pip install -e .[dev]"
+#   validation_command: null          # smoke test command (e.g., "pytest -q -x")
+#   bootstrap_timeout: 120           # per-command timeout in seconds for setup/validation
 """
     config_path.write_text(default_config)
     typer.echo(f"Created config: {config_path}")
