@@ -34,8 +34,8 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-06-13
-last_updated: 2026-03-18
+generated: 2026-06-14
+last_updated: 2026-06-13
 project: bmad-assist-lite-parallel-stories
 project_key: NOKEY
 tracking_system: file-system
@@ -130,5 +130,5 @@ development_status:
   11-2-cursor-resolution-and-config: blocked
   11-3-cursor-provider-core: blocked
   11-4-readonly-mode-deny-config: blocked
-  11-5-linux-deployment-docs: review
-  11-6-epic-documentation-sync: backlog
+  11-5-linux-deployment-docs: blocked
+  11-6-epic-documentation-sync: review

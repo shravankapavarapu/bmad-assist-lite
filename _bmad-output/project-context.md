@@ -4,7 +4,7 @@ user_name: 'Shravan'
 date: '2026-03-22'
 sections_completed: ['technology_stack', 'language_rules', 'framework_rules', 'testing_rules', 'quality_rules', 'workflow_rules', 'anti_patterns']
 status: 'complete'
-rule_count: 56
+rule_count: 66
 optimized_for_llm: true
 ---
 
@@ -46,14 +46,17 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 - **Plugin protocol pattern** — Three `@runtime_checkable` Protocol classes (`ProviderPlugin`, `PhasePlugin`, `WorkflowPlugin`) in `plugins/protocols.py`. New plugins must implement `name: str` attribute and `register(self, registry: Any) -> None` method. Built-ins register first, plugins override
 - **Phase handler pattern** — All phase handlers subclass `BaseHandler` (in `loop/handlers/base.py`). Must implement `phase_name` property and `build_context()` method. Use `render_prompt()` → `invoke_provider()` flow from base class, don't call compiler/provider directly
-- **Provider ABC** — New providers subclass `BaseProvider` with 4 abstract methods: `provider_name` (property), `invoke()`, `parse_output()`, `supports_model()`. The `invoke()` signature has exactly 6 keyword args — don't add more
+- **Provider ABC** — New providers subclass `BaseProvider` with 5 abstract methods: `provider_name` (property), `_do_invoke()`, `_cleanup()`, `parse_output()`, `supports_model()`. The concrete `invoke()` (Template Method) has 7 keyword args — don't add more. Four providers registered: claude, codex, cursor, gemini
 - **Workflow compilation pipeline** — `workflow.yaml` → parser → variable resolution → file discovery → XML prompt output. Compiler modules live in `compiler/workflows/` and match workflow names (e.g., `create-story` → `create_story.py`)
 - **Context Requirements validation** — The compiler's `apply_context_filter()` in `context_filter.py` validates epic Context Requirements references at compilation time. Missing non-optional documents or sections are collected into accumulators and raise a single `CompilerError` with all missing items grouped by category (missing documents, missing sections per document) and actionable fix instructions. Documents referenced with a `(skip)` directive that are missing are silently ignored (the user's intent — exclude the document — is already satisfied). References marked `(optional)` produce `logger.warning()` instead of contributing to the error
 - **`(optional)` convention for Context Requirements** — Epic file Context Requirements tables support an `(optional)` marker (parsed case-insensitively) at two levels: document-level (`(full) (optional)` or `(skip) (optional)` in the Sections column sets `ContextRequirement.optional = True`) and per-section (`Section A; Section B (optional); Section C` records the index in `ContextRequirement.optional_sections: frozenset[int]`). The marker is stripped before section name matching so `Section Name (optional)` matches the heading `## Section Name` in the document. When optional refs are missing, warnings are logged instead of raising `CompilerError`
 - **Two-tier config merge** — Global (`~/.bmad-assist-lite/config.yaml`) merges under project (`bmad-assist-lite.yaml`). Project values always win via `_deep_merge()`. Never read config files directly — use `load_config_with_project()` or `get_config()` singleton
 - **State machine** — 10 phases in `Phase` enum. Story loop is configurable via `loop.story` list. `fix_quality_gate` is NOT in the story phase list — only reached via `next_phase` override in quality_gate handler. Epic teardown phases run after all stories complete
 - **Sprint-status as source of truth** — Story discovery reads `sprint-status.yaml`, not filesystem. One-way sync: `state.yaml` → `sprint-status.yaml` (never reverse). Sprint sync is non-fatal — errors logged as warnings, never propagated
-- **Windows-native process management** — Use `taskkill /F /T /PID` on Windows, `os.killpg()` on Unix. Core process cleanup in `providers/_windows.py`; bootstrap-specific process tree cleanup in `parallel/bootstrap.py` (`_kill_process_tree()`). Never use `SIGKILL`/`SIGTERM` on Windows
+- **Cross-platform process management** — Use `taskkill /F /T /PID` on Windows, `os.killpg()` on Unix. Core process cleanup in `providers/_windows.py`; bootstrap-specific process tree cleanup in `parallel/bootstrap.py` (`_kill_process_tree()`). Never use `SIGKILL`/`SIGTERM` on Windows. On Unix, `terminate_process()` implements SIGTERM→SIGKILL escalation: sends SIGTERM → polls `is_pid_alive()` for up to `SIGTERM_GRACE_SECONDS` (5s) → sends SIGKILL if process survives. The constant `SIGTERM_GRACE_SECONDS = 5` is defined in `providers/_windows.py`
+- **CursorProvider write-mode predicate** — `allowed_tools is None` determines write mode (single location, single predicate in `_do_invoke()`). When `allowed_tools is None`, the invocation is a master/write phase (includes `--force` flag). When `allowed_tools` is a list, it's a read-only validator phase (deny-config is deployed, tool restriction prompt appended)
+- **Cursor deny-config marker protocol** — For read-only invocations, CursorProvider atomically creates `.cursor/cli.json` (deny-config) to physically block writes. Ownership is tracked via `.bmad-assist-lite/cache/cursor-deny-config.marker` (contains the absolute path to the deny-config file). Cleanup occurs in `_cleanup()` (normal flow) and `cleanup_for_phase()` (crash recovery sweep). Pre-existing user `.cursor/cli.json` files are left untouched
+- **Cursor tolerant NDJSON parsing** — Malformed NDJSON lines are logged at DEBUG level and skipped (`json.JSONDecodeError` caught per-line). Unknown event types are silently ignored. The result event (not the process exit code) determines success — non-zero exit codes after a successful result event are logged as a known upstream quirk
 
 ### Testing Rules
 
@@ -118,4 +121,4 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Review quarterly for outdated rules
 - Remove rules that become obvious over time
 
-Last Updated: 2026-05-30
+Last Updated: 2026-06-13
