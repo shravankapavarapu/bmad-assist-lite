@@ -59,7 +59,7 @@ class TestCursorCliPathsConfig:
              patch("bmad_assist_lite.providers.base.shutil.which") as mock_which:
             result = resolve_cli_path("cursor")
 
-            assert result == configured_path
+            assert result == str(Path(configured_path))
             # shutil.which should NOT have been called
             mock_which.assert_not_called()
 

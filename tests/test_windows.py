@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, call, patch
 
 from bmad_assist_lite.providers._windows import (
     SIGTERM_GRACE_SECONDS,
+    _SIGKILL,
     is_pid_alive,
     terminate_process,
 )
@@ -142,7 +143,7 @@ class TestSigkillEscalation:
         killpg_calls = mock_os.killpg.call_args_list
         assert len(killpg_calls) == 2
         assert killpg_calls[0] == call(1000, signal.SIGTERM)
-        assert killpg_calls[1] == call(1000, signal.SIGKILL)
+        assert killpg_calls[1] == call(1000, _SIGKILL)
 
     @patch(f"{_MOD}.IS_WINDOWS", False)
     @patch(f"{_MOD}.time")
@@ -385,7 +386,7 @@ class TestEdgeCases:
         # SIGKILL should have been sent even with only one iteration
         killpg_calls = mock_os.killpg.call_args_list
         assert len(killpg_calls) == 2
-        assert killpg_calls[1] == call(1000, signal.SIGKILL)
+        assert killpg_calls[1] == call(1000, _SIGKILL)
 
 
 class TestIsPidAlive:

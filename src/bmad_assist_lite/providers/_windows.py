@@ -25,6 +25,9 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 # Unix SIGTERM→SIGKILL escalation grace period (seconds)
 SIGTERM_GRACE_SECONDS = 5
 
+# signal.SIGKILL is unavailable on Windows; define the raw value (9) as fallback
+_SIGKILL: int = getattr(signal, "SIGKILL", 9)
+
 
 def get_subprocess_kwargs() -> dict[str, Any]:
     """Get platform-specific kwargs for subprocess.Popen.
@@ -81,7 +84,7 @@ def terminate_process(pid: int) -> bool:
                 SIGTERM_GRACE_SECONDS,
             )
             try:
-                os.killpg(pgid, signal.SIGKILL)  # type: ignore[attr-defined]
+                os.killpg(pgid, _SIGKILL)  # type: ignore[attr-defined]
             except ProcessLookupError:
                 # Mid-escalation death: process died between check and SIGKILL
                 logger.debug("PID %d died before SIGKILL delivery", pid)
