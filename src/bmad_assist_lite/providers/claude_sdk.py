@@ -33,6 +33,32 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
+# claude-agent-sdk >= 0.2.x escalation quirk: when the CLI emits a result with
+# is_error=true but subtype="success" and an empty errors array, then exits
+# non-zero, the SDK builds the message
+# f"Claude Code returned an error result: {subtype}" and re-raises it as a bare
+# Exception (claude_agent_sdk/_internal/query.py:340-344, 851-852). The turn
+# actually succeeded; the non-zero process exit is ancillary. Genuine failures
+# carry a different subtype (e.g. error_max_turns) or joined error messages, so
+# matching the prefix AND requiring the subtype to be exactly "success" keeps
+# this narrow and lets real errors propagate.
+_SDK_ERROR_RESULT_PREFIX = "Claude Code returned an error result:"
+_SDK_BENIGN_SUCCESS_SUBTYPE = "success"
+
+
+def _is_benign_success_error(exc: Exception) -> bool:
+    """Return True if exc is the SDK's benign "error result: success" escalation.
+
+    Only matches when the trailing subtype is exactly "success"; any other
+    subtype (real error) or joined error message does not match, so genuine
+    failures are never swallowed.
+    """
+    message = str(exc).strip()
+    if not message.startswith(_SDK_ERROR_RESULT_PREFIX):
+        return False
+    subtype = message[len(_SDK_ERROR_RESULT_PREFIX) :].strip()
+    return subtype == _SDK_BENIGN_SUCCESS_SUBTYPE
+
 
 class ClaudeSDKProvider(BaseProvider):
     """Claude Code SDK-based provider implementation.
@@ -85,11 +111,26 @@ class ClaudeSDKProvider(BaseProvider):
             extra_args=extra_args,
         )
 
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        collector.add(block.text)
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            collector.add(block.text)
+        except Exception as e:
+            # Swallow only the benign "error result: success" escalation, and
+            # only when the turn produced real output. Everything else (real
+            # SDK errors, CLINotFoundError, empty-output benign quirk) re-raises
+            # to the typed handlers in _do_invoke().
+            if _is_benign_success_error(e) and collector.text.strip():
+                logger.warning(
+                    "Claude SDK reported a non-zero exit with subtype 'success' "
+                    "after a completed turn (known CLI/SDK 0.2.x quirk); treating "
+                    "%d chars of collected output as success.",
+                    len(collector.text),
+                )
+            else:
+                raise
 
         if collector.is_empty:
             raise ProviderError("No response received from SDK")
@@ -156,9 +197,7 @@ class ClaudeSDKProvider(BaseProvider):
                 )
             )
         except CLINotFoundError as e:
-            raise ProviderError(
-                "Claude Code not found. Is 'claude' installed and in PATH?"
-            ) from e
+            raise ProviderError("Claude Code not found. Is 'claude' installed and in PATH?") from e
         except ProcessError as e:
             exit_code = e.exit_code if e.exit_code is not None else 1
             stderr = e.stderr or ""
@@ -211,9 +250,7 @@ class ClaudeSDKProvider(BaseProvider):
         logger.warning("Terminating orphan claude process PID %d", pid)
         success = terminate_process(pid)
         if not success:
-            logger.warning(
-                "Failed to terminate claude process PID %d — may be orphaned", pid
-            )
+            logger.warning("Failed to terminate claude process PID %d — may be orphaned", pid)
 
     def parse_output(self, result: ProviderResult) -> str:
         """Extract response text from provider result."""
