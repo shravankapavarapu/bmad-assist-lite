@@ -6,7 +6,7 @@
 >   current code + the June 2026 forensics).
 > - **Part B** — parallel/merge robustness (post-merge quality-gate spurious blocks) — NEW; not in the
 >   original report.
-> - **Part C** — the unifying architecture (shared gate runner) that ties A's OPT-4 and B together.
+> - **Part C** — the unifying architecture (shared gate runner) that ties A's parallel-gate work and B together.
 >
 > Status legend: ✅ done · ❌ not built (verified) · ⚠️ stale/changed · ❓ not re-verified this pass.
 
@@ -16,17 +16,17 @@
 
 | Item | Original status (Feb) | Verified code state (Jun 19) | Lands in |
 |------|----------------------|------------------------------|----------|
-| **OPT-1** per-phase model routing | APPROVED — biggest win | ❌ **not built** — no `phase_overrides`; `MasterProviderConfig` has one model/effort for all phases (`core/config.py:31`) | Part A · top lever |
-| **OPT-4** parallel QG commands | APPROVED | ❌ **not built** — sequential `for entry in commands` loop (`quality_gate.py:248`) | Part A + Part C |
-| **OPT-8** skip `create_story` if `.md` exists | APPROVED | ❌ **not built** (also tracked as the "cheap fix" in SESSION-HANDOFF §2) | Part A |
+| **Per-phase model routing** | APPROVED — biggest win | ❌ **not built** — no `phase_overrides`; `MasterProviderConfig` has one model/effort for all phases (`core/config.py:31`) | Part A · top lever |
+| **Parallel QG commands** | APPROVED | ❌ **not built** — sequential `for entry in commands` loop (`quality_gate.py:248`) | Part A + Part C |
+| **Skip `create_story` if `.md` exists** | APPROVED | ❌ **not built** (also tracked as the "cheap fix" in SESSION-HANDOFF §2) | Part A |
 | **FIX-QG** (story file + retries + instructions) | proposed (separate doc) | ✅ **DONE** — `fix-quality-gate/workflow.yaml` FULL_LOADs the story file; `quality_gate.py:273` defaults `max_retries=2` | resolved |
-| **OPT-2** skip validation phases | needs data; logging shipped | logging shipped on branch `debug/opt-2-validation-impact` (9 commits, **not cherry-picked to main**); decision pending | Part A · Tier 3 |
-| **OPT-5** Context7 doc slimming | APPROVED (speed) | ⚠️ **premise stale** — June forensics measured Context7 at ~6s/run (one cached fetch). Token-cost/quality lever, **not a speed lever** | Part A · deprioritized |
-| **OPT-6** cache toolchain detection | APPROVED | ❓ not re-verified | Part A · minor |
-| **OPT-7** skip build in per-story QG | APPROVED | ❓ not re-verified | Part A · minor |
+| **Drop validation phases** | needs data; logging shipped | logging shipped on branch `debug/opt-2-validation-impact` (9 commits, **not cherry-picked to main**); decision pending | Part A · Tier 3 |
+| **Context7 doc slimming** | APPROVED (speed) | ⚠️ **premise stale** — June forensics measured Context7 at ~6s/run (one cached fetch). Token-cost/quality lever, **not a speed lever** | Part A · deprioritized |
+| **Cache toolchain detection** | APPROVED | ❓ not re-verified | Part A · minor |
+| **Skip build in per-story QG** | APPROVED | ❓ not re-verified | Part A · minor |
 | **#1** post-merge QG robustness | (not in original report) | 🟡 root-caused, fix pending | Part B + Part C |
 
-**Headline:** the two highest-leverage perf items (OPT-1, OPT-4) are still unbuilt and were
+**Headline:** the two highest-leverage perf items (per-phase model routing, parallel QG commands) are still unbuilt and were
 *independently re-confirmed* by the June forensics. FIX-QG is done — drop it from the backlog.
 
 ---
@@ -74,8 +74,8 @@ Deep forensics on two later runs (3 parallel sub-agents over logs + a structural
   - The ~13 SDK `connect` tracebacks are harmless missing-`opentelemetry` (DEBUG, 0 retries, **0s lost**).
 
 → **Tuning the harness reclaims seconds. The hour is real LLM work.** So the fix is **structural** (which
-model/effort per phase, how much redundant work each phase does), not infrastructural. This is why OPT-5/6
-(harness-level) are deprioritized and OPT-1 (model routing) is the lever that matters.
+model/effort per phase, how much redundant work each phase does), not infrastructural. This is why Context7 slimming and toolchain-cache
+(harness-level) are deprioritized and per-phase model routing is the lever that matters.
 
 ### Where the hour goes (per story ≈ 50–56 min; apples-to-apples 8.5/8.6)
 
@@ -95,19 +95,19 @@ model/effort per phase, how much redundant work each phase does), not infrastruc
 1. **Uniform Opus @ effort=max on all 7 master phases.** The intended "Opus only for
    dev/code_review_synthesis/fix; Sonnet elsewhere" routing **was never built** —
    `MasterProviderConfig` (`core/config.py:31`) has ONE model/effort pair; `loop/handlers/base.py`
-   returns it for every phase. No per-phase routing mechanism exists. **Highest-leverage gap. → OPT-1.**
+   returns it for every phase. No per-phase routing mechanism exists. **Highest-leverage gap. → per-phase model routing.**
 2. **Redundant in-turn runtime verification.** Full lint/typecheck/build/test runs **inside dev_story's
    Opus turn** (`workflows/dev-story/instructions.xml` step 6), **again inside code_review_synthesis's
    Opus turn** (`workflows/code-review-synthesis/instructions.xml:37-47` step 6), then **again
    deterministically** in quality_gate → 3–4 full suite runs/story, two buried in Opus@max turns.
 3. **No `max_turns` cap** (`providers/claude_sdk.py` options block) → dev_story loops unbounded → 20-min
    timeouts with truncated partial output.
-4. **Validation phases** (~10 min/story combined) — removable via `loop.story` config. **→ OPT-2.**
-5. **Quality-gate commands run sequentially** (`quality_gate.py:248`) — independent, parallelizable. **→ OPT-4.**
+4. **Validation phases** (~10 min/story combined) — removable via `loop.story` config. **→ drop validation phases.**
+5. **Quality-gate commands run sequentially** (`quality_gate.py:248`) — independent, parallelizable. **→ parallel QG commands.**
 
 ## A.4 Optimizations (reconciled)
 
-### OPT-1 — Per-phase model routing  ❌ NOT BUILT — **top priority**
+### Per-phase model routing  ❌ NOT BUILT — **top priority**
 **Decision:** route by **MODEL, not effort** — keep `effort=max` globally (user preference). Opus stays on
 `dev_story`, `code_review_synthesis`, `fix_quality_gate`; Sonnet for `create_story`,
 `validate_story_synthesis`, `retrospective`.
@@ -134,21 +134,21 @@ providers:
 **Est. savings:** ~10–15 min per 5 stories (create_story 3→1 min, validate_story_synthesis 3→1 min each).
 **Isolated** — touches config + one resolution point, none of the gate code. Can ship independently/first.
 
-### OPT-4 — Parallel quality-gate commands  ❌ NOT BUILT
+### Parallel quality-gate commands  ❌ NOT BUILT
 Replace the sequential loop at `quality_gate.py:248` with concurrent execution
 (`concurrent.futures.ThreadPoolExecutor` — reuse the pattern already in `code_review.py:136`). Commands are
 truly independent (lint/typecheck/build/test); preserve original order in the failure report;
 `command_timeout` stays per-command. **Est. savings ~20–30s/run × ~8 runs ≈ 3–4 min.**
 → **Build this as part of the shared gate runner (Part C), not a one-off.**
 
-### OPT-2 — Skip validation phases  NEEDS DATA (logging shipped, not cherry-picked)
+### Drop validation phases  NEEDS DATA (logging shipped, not cherry-picked)
 Drop `validate_story` + `validate_story_synthesis` from `loop.story` (config-only) — the single biggest cut
 (~20 min combined across a story pair), but a **quality tradeoff** that needs data first. Diff-logging
 instrumentation to gather that data exists on branch `debug/opt-2-validation-impact` (9 commits, **not yet
 cherry-picked to main** — see SESSION-HANDOFF "Branch" notes). **Next action: cherry-pick the logging, run a
 few stories, review `synthesis-diff-validate-*.patch` files, then decide.**
 
-### OPT-8 — Skip `create_story` when `.md` exists  ❌ NOT BUILT
+### Skip `create_story` when `.md` exists  ❌ NOT BUILT
 No skip-if-exists anywhere (`CreateStoryHandler` → `BaseHandler.execute()` → `create-story/instructions.xml`
 all unconditional). Every run re-invokes Opus and rewrites the story `.md`, re-rolling the flaky CLI on a
 heavy phase. Add a guard in `CreateStoryHandler.execute()`: if `{story_key}.md` exists & non-empty AND
@@ -156,17 +156,17 @@ sprint-status is `ready-for-dev` or beyond → return `PhaseResult.ok({"skipped"
 (Also unlocks the optional batch `create-stories --epic N` command.) **Note:** verify the story-file naming
 between `quality_gate`'s `story-{epic}.{story}.md` resolution and what create-story writes.
 
-### OPT-5 — Context7 doc slimming  ⚠️ PREMISE STALE
+### Context7 doc slimming  ⚠️ PREMISE STALE
 Original framing was "40k tokens of irrelevant docs = a time sink." June forensics: Context7 is **~6s/run,
 cached** — **not a wall-clock lever.** Reframe as a **token-cost / prompt-quality** improvement (story-specific
 query refinement, lower `max_tokens_per_lib`/`max_libs`). Pursue only if token cost or prompt dilution is the
 goal, not speed.
 
-### OPT-6 — Cache toolchain detection  ❓ minor
+### Cache toolchain detection  ❓ minor
 `@lru_cache` on `core/toolchain.py:detect_toolchain()` and cache `shutil.which("gemini")` in
 `providers/gemini.py`. ~10–30s total. Low priority; verify whether already done.
 
-### OPT-7 — Skip build in per-story QG  ❓ minor
+### Skip build in per-story QG  ❓ minor
 Config-only: drop `build` from per-story `quality_gate` (it runs in `epic_quality_gate` anyway). ~10–15s/run.
 Partially overlaps root-cause #2. Low priority.
 
@@ -225,43 +225,43 @@ and **red tests**, story marked blocked. Open:
 
 # Part C — Unifying architecture: the shared gate runner
 
-**Why A (OPT-4) and B belong together:** gate commands now run in **three** places — per-story `quality_gate`
+**Why A (parallel QG commands) and B belong together:** gate commands now run in **three** places — per-story `quality_gate`
 (`quality_gate.py:248`), post-merge QG (`parallel/merger.py`), and `epic_quality_gate`. Each open item modifies
 that same command-running path:
-- **OPT-4** wants those commands run **in parallel**.
+- **Parallel execution** wants those commands run **in parallel**.
 - **B.2 (1)** wants deps **bootstrapped** before running them.
 - **B.2 (2)** wants each result **classified** as `pass | real_failure | env_failure`.
 
 Three call sites needing the same upgraded behavior → **Rule of Three is satisfied.** Extract a shared
 **gate runner**:
-- runs a list of gate commands **concurrently** (delivers OPT-4),
+- runs a list of gate commands **concurrently** (delivers parallel gate execution),
 - returns a typed result per command classified `pass | real_failure | env_failure`
   ("command not found" / "node_modules missing" → `env_failure`),
 - optionally ensures the working tree is bootstrapped first,
 - is reused by per-story, post-merge, and epic gate phases for **consistent** behavior.
 
-One abstraction delivers OPT-4's parallelism **and** B's env-vs-real classification **and** uniform gate
-behavior everywhere. **OPT-1 (model routing) sits outside this** — it's config + one resolution point and
+One abstraction delivers parallel gate execution **and** B's env-vs-real classification **and** uniform gate
+behavior everywhere. **Per-phase model routing sits outside this** — it's config + one resolution point and
 touches none of the gate code, so it ships independently.
 
 ---
 
 ## Implementation sequencing (2026-06-19)
 
-1. **OPT-1 — per-phase model routing.** Isolated, biggest single speed win, low risk. **Start here.**
+1. **Per-phase model routing.** Isolated, biggest single speed win, low risk. **Start here.**
 2. **Extract the shared gate runner** (Part C) with parallelism + `pass|real|env` classification → delivers
-   OPT-4 and the foundation for Part B.
+   parallel QG commands and the foundation for Part B.
 3. **B.2 (1) — base-repo / canary bootstrap** on top of the runner.
 4. **B.3 — conflict-resolution robustness** (preserve branch on failure; roll-back-or-park decisions).
-5. **Cheap follow-ons:** OPT-8 skip-if-exists; OPT-2 (cherry-pick logging → gather data → decide); OPT-6/7 if
+5. **Cheap follow-ons:** create_story skip-if-exists; drop validation phases (cherry-pick logging → gather data → decide); cache-toolchain + skip-build-in-QG if
    still unbuilt.
 
 ### Combined impact (June baseline ≈ 50–56 min/story)
 | Stack | Effect |
 |-------|--------|
-| OPT-1 + OPT-4 | ~7–9 min/story, low risk |
+| Per-phase model routing + parallel QG commands | ~7–9 min/story, low risk |
 | + remove in-turn verification from code_review_synthesis (root cause #2) | ~4–6 min/story — MEASURE failure-rate shift first |
-| + OPT-2 drop validation phases | ~10 min/story — quality tradeoff, needs data → back toward historical 30–35 min |
+| + drop validation phases | ~10 min/story — quality tradeoff, needs data → back toward historical 30–35 min |
 | + `max_turns` cap on dev_story | bounds the 20-min runaway + truncated-dev cascade |
 
 ---
@@ -280,7 +280,7 @@ saves:
 - `.bmad-assist-lite/cache/synthesis-diff-review-{id}.patch`
 - `.bmad-assist-lite/cache/synthesis-response-review-{id}.md`
 
-**How to use for OPT-2:** after a run, if most `synthesis-diff-validate-*.patch` files show no changes, the
+**How to use (validation-phase decision):** after a run, if most `synthesis-diff-validate-*.patch` files show no changes, the
 validation synthesis isn't earning its ~10 min — supports dropping it. If they show real changes, compare
 against `code_review` findings to check for redundancy before cutting.
 

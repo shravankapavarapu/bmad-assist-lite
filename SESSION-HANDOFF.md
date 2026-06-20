@@ -15,9 +15,9 @@
 | 2 | Performance + quality-gate robustness feature (future work) | 📋 **PLANNED — consolidated in `docs/performance-optimization-plan.md`. Discuss next session.** |
 
 > 🗓️ **NEXT SESSION — discuss performance improvements first.** Before picking what to implement, review the
-> **reports/artifacts from the previous run**: timing breakdown, `synthesis-diff-*.patch` (OPT-2 signal),
+> **reports/artifacts from the previous run**: timing breakdown, `synthesis-diff-*.patch` (validation-phase signal),
 > `post-merge-qg-failures-*.md` (Part B evidence), and the quality-gate outcomes. Decide scope/sequencing
-> from that data, then start (recommended first step: OPT-1 per-phase model routing — isolated, biggest win).
+> from that data, then start (recommended first step: per-phase model routing — isolated, biggest win).
 
 ---
 
@@ -58,7 +58,7 @@ provider** (like `CodexProvider`/`CursorProvider` already are — paperclip-styl
 `claude --print - --output-format stream-json`, prompt over stdin). Reference:
 [[reference_sdk_02x_performance_features]].
 
-> Related cheap fix (also tracked as **OPT-8** in the perf report): `create_story` has no skip-if-exists, so
+> Related cheap fix (also tracked as **create_story skip-if-exists** in the perf report): `create_story` has no skip-if-exists, so
 > every run re-rolls the flaky CLI on a heavy phase. Skipping when the `.md` exists & is non-empty cuts a full
 > Opus phase + truncation exposure.
 
@@ -70,17 +70,17 @@ provider** (like `CodexProvider`/`CursorProvider` already are — paperclip-styl
 (refreshed 2026-06-19; reconciled against verified code state). Summary of what lives there:
 
 - **Part A — per-story wall-clock.** Root cause is structural (96–98% is real LLM work), not infra. Top levers:
-  **OPT-1** per-phase model routing (Sonnet for create_story + validate_story_synthesis; keep Opus@max for
-  dev/synthesis/fix — biggest win, isolated) and **OPT-4** parallel QG commands. Plus OPT-2 (drop validation
-  phases — needs data), OPT-8 (skip create_story if `.md` exists). FIX-QG already ✅ shipped.
+  **Per-phase model routing** (Sonnet for create_story + validate_story_synthesis; keep Opus@max for
+  dev/synthesis/fix — biggest win, isolated) and **parallel QG commands**. Plus drop validation
+  phases (needs data), create_story skip-if-exists. FIX-QG already ✅ shipped.
 - **Part B — post-merge QG robustness.** Spurious blocks because the **base repo is never bootstrapped**
   (missing `node_modules` → gates fail in ~1s → "failed gates: unknown"). Fixes: bootstrap base/canary at run
   start + classify env-vs-real failures. Plus open conflict-resolution / merge-rollback design questions.
-- **Part C — shared gate runner.** The architecture that unifies OPT-4 + Part B (one runner: parallel
+- **Part C — shared gate runner.** The architecture that unifies parallel QG commands + Part B (one runner: parallel
   execution + `pass|real|env` classification, reused across per-story / post-merge / epic gates).
 
-**Recommended sequencing:** OPT-1 (independent, first) → extract shared gate runner → base-repo/canary
-bootstrap → conflict-resolution robustness → cheap follow-ons (OPT-8, OPT-2 data, OPT-6/7).
+**Recommended sequencing:** per-phase model routing (independent, first) → extract shared gate runner → base-repo/canary
+bootstrap → conflict-resolution robustness → cheap follow-ons (create_story skip-if-exists, validation-phase data, cache-toolchain + skip-build-in-QG).
 
 ---
 
