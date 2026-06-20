@@ -25,6 +25,7 @@ from bmad_assist_lite.providers._windows import is_pid_alive, terminate_process
 from bmad_assist_lite.providers.base import (
     BaseProvider,
     ProviderResult,
+    resolve_cli_path,
     validate_settings_file,
 )
 from bmad_assist_lite.providers.result_collector import ResultCollector
@@ -88,6 +89,24 @@ class ClaudeSDKProvider(BaseProvider):
         """Return True if the model is a known Claude model."""
         return model in SUPPORTED_MODELS or model.startswith("claude-")
 
+    def _resolve_cli_path(self) -> str | None:
+        """Resolve the system Claude Code CLI path, best-effort.
+
+        Pointing the SDK at the system ``claude`` CLI (via
+        ``ClaudeAgentOptions.cli_path``) avoids the older ``claude.exe`` the SDK
+        ships in its ``_bundled`` directory, which has exhibited long-turn
+        output truncation. Resolution is best-effort: if no system CLI is found,
+        returns ``None`` so the SDK falls back to its bundled binary rather than
+        failing the invocation.
+        """
+        try:
+            cli_path = resolve_cli_path(self.provider_name)
+            logger.debug("Using system Claude CLI for SDK: %s", cli_path)
+            return cli_path
+        except ProviderError:
+            logger.debug("No system 'claude' CLI resolved; SDK will use its bundled binary.")
+            return None
+
     async def _invoke_async_with_collector(
         self,
         prompt: str,
@@ -109,6 +128,7 @@ class ClaudeSDKProvider(BaseProvider):
             cwd=cwd,
             tools=allowed_tools if allowed_tools is not None else None,
             extra_args=extra_args,
+            cli_path=self._resolve_cli_path(),
         )
 
         try:

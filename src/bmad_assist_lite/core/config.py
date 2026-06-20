@@ -87,6 +87,7 @@ class CliPathsConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    claude: str | None = Field(None, description="Absolute path to claude binary")
     codex: str | None = Field(None, description="Absolute path to codex binary")
     cursor: str | None = Field(None, description="Absolute path to cursor/agent binary")
     gemini: str | None = Field(None, description="Absolute path to gemini binary")
@@ -206,9 +207,7 @@ class LoopConfig(BaseModel):
             "quality_gate",
         ]
     )
-    epic_teardown: list[str] = Field(
-        default_factory=lambda: ["epic_quality_gate", "retrospective"]
-    )
+    epic_teardown: list[str] = Field(default_factory=lambda: ["epic_quality_gate", "retrospective"])
 
 
 DEFAULT_LOOP_CONFIG = LoopConfig()

@@ -689,6 +689,66 @@ class TestProviderProperties:
 
 
 # ============================================================================
+# TestCliPathResolution — cli_path wiring (system CLI vs bundled binary)
+# ============================================================================
+
+
+class TestCliPathResolution:
+    """Test that the system Claude CLI is wired into ClaudeAgentOptions.cli_path.
+
+    Pointing the SDK at the system ``claude`` binary avoids the older bundled
+    ``_bundled/claude.exe`` (which has shown long-turn output truncation).
+    """
+
+    @patch("bmad_assist_lite.providers.claude_sdk.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_resolved_cli_path_passed_to_options(
+        self, mock_query: MagicMock, mock_resolve: MagicMock
+    ) -> None:
+        """A resolved system CLI path is forwarded as ClaudeAgentOptions.cli_path."""
+        mock_resolve.return_value = "/usr/local/bin/claude"
+        mock_query.return_value = make_fake_query([make_msg(["ok"])])
+
+        provider = ClaudeSDKProvider()
+        provider.invoke("test")
+
+        mock_resolve.assert_called_once_with("claude")
+        options = mock_query.call_args.kwargs["options"]
+        assert options.cli_path == "/usr/local/bin/claude"
+
+    @patch("bmad_assist_lite.providers.claude_sdk.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_unresolved_cli_path_falls_back_to_none(
+        self, mock_query: MagicMock, mock_resolve: MagicMock
+    ) -> None:
+        """When no system CLI is found, cli_path is None (SDK uses bundled binary)."""
+        mock_resolve.side_effect = ProviderError("claude not found")
+        mock_query.return_value = make_fake_query([make_msg(["ok"])])
+
+        provider = ClaudeSDKProvider()
+        result = provider.invoke("test")
+
+        # Invocation still succeeds — resolution failure must not abort the turn.
+        assert result.timed_out is False
+        options = mock_query.call_args.kwargs["options"]
+        assert options.cli_path is None
+
+    @patch("bmad_assist_lite.providers.claude_sdk.resolve_cli_path")
+    def test_helper_returns_resolved_path(self, mock_resolve: MagicMock) -> None:
+        """_resolve_cli_path() returns the resolved path on success."""
+        mock_resolve.return_value = "/opt/claude"
+        provider = ClaudeSDKProvider()
+        assert provider._resolve_cli_path() == "/opt/claude"
+
+    @patch("bmad_assist_lite.providers.claude_sdk.resolve_cli_path")
+    def test_helper_returns_none_on_provider_error(self, mock_resolve: MagicMock) -> None:
+        """_resolve_cli_path() swallows ProviderError and returns None."""
+        mock_resolve.side_effect = ProviderError("not found")
+        provider = ClaudeSDKProvider()
+        assert provider._resolve_cli_path() is None
+
+
+# ============================================================================
 # TestEmptyResponse — No SDK response (edge case)
 # ============================================================================
 

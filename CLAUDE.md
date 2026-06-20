@@ -175,6 +175,7 @@ providers:
     - provider: claude
       model: sonnet
   cli_paths:  # Override CLI binary paths (useful when venv strips PATH)
+    claude: "C:/Users/you/.local/bin/claude.exe"  # system CLI (avoids SDK's bundled binary)
     codex: "C:/path/to/codex.exe"
     cursor: "/home/user/.local/bin/agent"  # cursor-agent or agent binary
     gemini: "C:/path/to/gemini.cmd"

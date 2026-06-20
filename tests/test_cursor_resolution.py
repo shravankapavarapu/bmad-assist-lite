@@ -55,8 +55,10 @@ class TestCursorCliPathsConfig:
         load_config(config_data)
 
         # Mock Path.is_file() to return True for the configured path
-        with patch.object(Path, "is_file", return_value=True), \
-             patch("bmad_assist_lite.providers.base.shutil.which") as mock_which:
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch("bmad_assist_lite.providers.base.shutil.which") as mock_which,
+        ):
             result = resolve_cli_path("cursor")
 
             assert result == str(Path(configured_path))
@@ -104,6 +106,7 @@ class TestCursorBinaryPreference:
 
     def test_cursor_agent_preferred_over_agent(self) -> None:
         """AC #2: cursor-agent is preferred when both exist on PATH."""
+
         def mock_which(name: str) -> str | None:
             return {
                 "cursor-agent": "/usr/bin/cursor-agent",
@@ -117,6 +120,7 @@ class TestCursorBinaryPreference:
 
     def test_only_agent_on_path_is_accepted(self) -> None:
         """When only 'agent' is on PATH, it is returned."""
+
         def mock_which(name: str) -> str | None:
             if name == "agent":
                 return "/usr/bin/agent"
@@ -129,8 +133,10 @@ class TestCursorBinaryPreference:
 
     def test_neither_on_path_falls_through(self) -> None:
         """When neither binary is on PATH, falls through to known locations."""
-        with patch("bmad_assist_lite.providers.base.shutil.which", return_value=None), \
-             patch("bmad_assist_lite.providers.base._KNOWN_CLI_PATHS", {"cursor": []}):
+        with (
+            patch("bmad_assist_lite.providers.base.shutil.which", return_value=None),
+            patch("bmad_assist_lite.providers.base._KNOWN_CLI_PATHS", {"cursor": []}),
+        ):
             with pytest.raises(ProviderError, match="cursor CLI not found"):
                 resolve_cli_path("cursor")
 
@@ -167,10 +173,12 @@ class TestCursorKnownLocations:
         def fake_is_file(self: Path) -> bool:
             return self == cursor_agent_path
 
-        with patch("bmad_assist_lite.providers.base.shutil.which", return_value=None), \
-             patch("bmad_assist_lite.providers.base._KNOWN_CLI_PATHS", {"cursor": known_paths}), \
-             patch("bmad_assist_lite.providers.base.sys") as mock_sys, \
-             patch.object(Path, "is_file", fake_is_file):
+        with (
+            patch("bmad_assist_lite.providers.base.shutil.which", return_value=None),
+            patch("bmad_assist_lite.providers.base._KNOWN_CLI_PATHS", {"cursor": known_paths}),
+            patch("bmad_assist_lite.providers.base.sys") as mock_sys,
+            patch.object(Path, "is_file", fake_is_file),
+        ):
             mock_sys.platform = "linux"
 
             result = resolve_cli_path("cursor")
@@ -196,10 +204,12 @@ class TestCursorKnownLocations:
         def fake_is_file(self: Path) -> bool:
             return self == agent_path
 
-        with patch("bmad_assist_lite.providers.base.shutil.which", return_value=None), \
-             patch("bmad_assist_lite.providers.base._KNOWN_CLI_PATHS", {"cursor": known_paths}), \
-             patch("bmad_assist_lite.providers.base.sys") as mock_sys, \
-             patch.object(Path, "is_file", fake_is_file):
+        with (
+            patch("bmad_assist_lite.providers.base.shutil.which", return_value=None),
+            patch("bmad_assist_lite.providers.base._KNOWN_CLI_PATHS", {"cursor": known_paths}),
+            patch("bmad_assist_lite.providers.base.sys") as mock_sys,
+            patch.object(Path, "is_file", fake_is_file),
+        ):
             mock_sys.platform = "linux"
 
             result = resolve_cli_path("cursor")
@@ -208,8 +218,10 @@ class TestCursorKnownLocations:
 
     def test_no_known_location_files_raises_provider_error(self) -> None:
         """No config override, no PATH hit, no known location → ProviderError."""
-        with patch("bmad_assist_lite.providers.base.shutil.which", return_value=None), \
-             patch("bmad_assist_lite.providers.base._KNOWN_CLI_PATHS", {"cursor": []}):
+        with (
+            patch("bmad_assist_lite.providers.base.shutil.which", return_value=None),
+            patch("bmad_assist_lite.providers.base._KNOWN_CLI_PATHS", {"cursor": []}),
+        ):
             with pytest.raises(ProviderError, match="providers.cli_paths.cursor"):
                 resolve_cli_path("cursor")
 
@@ -369,6 +381,70 @@ class TestCursorProviderRegistry:
 
         # _cleanup runs without error when no process is active
         provider._cleanup()  # Should not raise
+
+
+# ============================================================================
+# TestClaudeCliResolution — config override + known-path fallback for claude
+# ============================================================================
+
+
+class TestClaudeCliResolution:
+    """claude follows the same cli_paths override + known-location pattern.
+
+    Lets a project point the Claude Agent SDK at the system ``claude`` binary
+    (via ClaudeAgentOptions.cli_path) instead of the older bundled one.
+    """
+
+    @pytest.mark.no_auto_config
+    def test_config_override_returns_configured_claude_path(self) -> None:
+        """Configured cli_paths.claude is returned without consulting PATH."""
+        configured_path = "/opt/claude/claude"
+        config_data = {
+            "providers": {
+                "master": {"provider": "claude", "model": "opus"},
+                "cli_paths": {"claude": configured_path},
+            },
+        }
+        _reset_config()
+        load_config(config_data)
+
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch("bmad_assist_lite.providers.base.shutil.which") as mock_which,
+        ):
+            result = resolve_cli_path("claude")
+
+            assert result == str(Path(configured_path))
+            mock_which.assert_not_called()
+
+    @pytest.mark.no_auto_config
+    def test_claude_config_field_accepted(self) -> None:
+        """cli_paths.claude is a recognized config field (not silently dropped)."""
+        configured_path = "C:/Users/x/.local/bin/claude.exe"
+        config_data = {
+            "providers": {
+                "master": {"provider": "claude", "model": "opus"},
+                "cli_paths": {"claude": configured_path},
+            },
+        }
+        _reset_config()
+        config = load_config(config_data)
+
+        assert config.providers.cli_paths.claude == configured_path
+
+    def test_claude_resolves_via_path(self) -> None:
+        """resolve_cli_path('claude') falls through to PATH when no override set."""
+        with patch("bmad_assist_lite.providers.base.shutil.which") as mock_which:
+            mock_which.return_value = "/usr/bin/claude"
+
+            result = resolve_cli_path("claude")
+
+        assert result == "/usr/bin/claude"
+        mock_which.assert_called_with("claude")
+
+    def test_known_cli_paths_has_claude_entry(self) -> None:
+        """_KNOWN_CLI_PATHS contains a 'claude' key for the venv-strips-PATH case."""
+        assert "claude" in _KNOWN_CLI_PATHS
 
 
 # ============================================================================

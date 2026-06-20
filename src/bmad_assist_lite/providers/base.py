@@ -67,6 +67,21 @@ _PROVIDER_BINARY_NAMES: dict[str, tuple[str, ...]] = {
 # Known install locations per platform, checked when shutil.which() fails.
 # Keyed by provider name; values are lists of candidate directories per platform.
 _KNOWN_CLI_PATHS: dict[str, list[Path]] = {
+    "claude": (
+        # Claude Code's native installer places the binary in ~/.local/bin on
+        # all platforms; %APPDATA%\npm covers an npm-global install on Windows.
+        [
+            Path.home() / ".local" / "bin",
+            Path(os.environ.get("APPDATA", "")) / "npm",
+        ]
+        if sys.platform == "win32"
+        else [
+            Path.home() / ".local" / "bin",
+            Path("/usr/local/bin"),
+            Path.home() / ".npm-global" / "bin",
+            Path.home() / ".npm" / "bin",
+        ]
+    ),
     "codex": (
         [
             Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "OpenAI" / "Codex" / "bin",
@@ -429,9 +444,7 @@ class BaseProvider(ABC):
             )
             return result
         except TimeoutError:
-            return self._handle_timeout(
-                collector, resolved_timeout, model, command, start_time
-            )
+            return self._handle_timeout(collector, resolved_timeout, model, command, start_time)
         finally:
             try:
                 self._cleanup()
@@ -612,8 +625,7 @@ class BaseProvider(ABC):
                 return
 
             logger.info(
-                "Grace period: stream still active, %.1fs elapsed of %ds, "
-                "chunks=%d",
+                "Grace period: stream still active, %.1fs elapsed of %ds, chunks=%d",
                 time.monotonic() - start,
                 grace_seconds,
                 collector.chunk_count,
