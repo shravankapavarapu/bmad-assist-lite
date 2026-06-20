@@ -14,37 +14,37 @@ This report consolidates a fully code-verified backlog of ~90 candidate features
 
 The backlog splits cleanly into three pools:
 
-- **Shipped and verified (~35 items):** The entire Cursor provider epic (11.1–11.6), the Codex provider (10.1–10.7), the whole parallel-execution subsystem (orchestrator, dependency graph, worktree manager, merge queue, state persistence, crash recovery, graceful shutdown, bootstrap/canary, CLI commands, logging/reporting), the SIGTERM→SIGKILL escalation, the `cli_path` lever, FIX-QG context+retries, and the `(optional)` context-requirement convention. These are done; a few carry minor documented caveats (e.g., summary-report time-saved suppression, non-canary bootstrap output surfacing).
+- **Shipped and verified (~35 items):** The entire Cursor provider epic (11.1–11.6), the Codex provider (10.1–10.7), the whole parallel-execution subsystem (orchestrator, dependency graph, worktree manager, merge queue, state persistence, crash recovery, graceful shutdown, bootstrap/canary, CLI commands, logging/reporting), the SIGTERM→SIGKILL escalation, the `cli_path` lever, the fix-quality-gate context+retries, and the `(optional)` context-requirement convention. These are done; a few carry minor documented caveats (e.g., summary-report time-saved suppression, non-canary bootstrap output surfacing).
 - **Researched but not built (~40 items):** The entire session-reuse epic (SessionManager, SessionCapable protocol, replay strategy, native resume wiring, crash-recovery via session IDs, and ~6 future API providers), the `agentic_dev` composite-phase epic, MCP tool integration, JSON-schema tool_use for Evidence Score, PostToolUse hooks, CI/CD pipelines, and most Phase 2/3 vision items.
-- **Partially built — performance + robustness levers and related caveats (~18 items, per Appendix C):** OPT-1 through OPT-8, the shared gate runner (Part C), env-vs-real failure classification (Part B), bootstrap-before-post-merge-QG, conflict-resolution and merge-rollback robustness, several forensic bugs surfaced by the 2026-06-13 run, plus Codex hardening/config caveats and a few devex partials.
+- **Partially built — performance + robustness levers and related caveats (~18 items, per Appendix C):** the per-story performance levers (per-phase model routing, parallel quality-gate commands, cached toolchain/CLI detection, create_story skip-if-exists, validation-phase removal, skip-build-in-per-story-QG), the shared gate runner (Part C), env-vs-real failure classification (Part B), bootstrap-before-post-merge-QG, conflict-resolution and merge-rollback robustness, several forensic bugs surfaced by the 2026-06-13 run, plus Codex hardening/config caveats and a few devex partials.
 
 ### Headline findings
 
-1. **Per-story wall-clock is dominated by uniform Opus@max routing.** `MasterProviderConfig` (`core/config.py:31`) carries one model/effort pair for all seven master phases; `BaseHandler.get_model()` (`loop/handlers/base.py:93-95`) returns it unconditionally — no phase override exists anywhere in `src/`. June forensics attribute ~79% of run time to Opus calls. This is the single highest-leverage move (OPT-1) and the implementation is isolated.
+1. **Per-story wall-clock is dominated by uniform Opus@max routing.** `MasterProviderConfig` (`core/config.py:31`) carries one model/effort pair for all seven master phases; `BaseHandler.get_model()` (`loop/handlers/base.py:93-95`) returns it unconditionally — no phase override exists anywhere in `src/`. June forensics attribute ~79% of run time to Opus calls. This is the single highest-leverage move (per-phase model routing) and the implementation is isolated.
 2. **The 2026-06-13 epic-11 run was effectively a toolchain-misconfiguration disaster, not a code-quality one.** Quality gates ran `pnpm`/`tsc`/`vitest` against a pure-Python repo (no `package.json`), failing every gate with `ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND`, burning ~5 hours of LLM time, and marking the whole epic blocked. The detect_toolchain code is correct; the failure is workflow design (LLM-inferred commands) plus a missing env-vs-real failure classifier.
-3. **Three independent gate-command loops exist** (`quality_gate.py:248`, `merger.py:837`, `epic_quality_gate.py:96`), all sequential, with duplicated command-resolution logic (`quality_gate._get_commands` vs `merger._resolve_qg_commands` at `merger.py:692`) and no failure classification. This satisfies the Rule of Three for extracting a shared gate runner (Part C), which simultaneously delivers OPT-4 parallelism, env-vs-real classification (Part B), and base-repo bootstrap.
-4. **Session reuse is thoroughly researched, partially scaffolded, and entirely unwired.** `ProviderResult.provider_session_id` (`base.py:371`) exists and is populated by Gemini (`gemini.py:372`) and Cursor (`cursor.py:521`), but never read by any handler. The Claude SDK provider does not even capture it. The research is sound but deferred — and OPT-1 outranks it on ROI per the performance plan.
+3. **Three independent gate-command loops exist** (`quality_gate.py:248`, `merger.py:837`, `epic_quality_gate.py:96`), all sequential, with duplicated command-resolution logic (`quality_gate._get_commands` vs `merger._resolve_qg_commands` at `merger.py:692`) and no failure classification. This satisfies the Rule of Three for extracting a shared gate runner (Part C), which simultaneously delivers parallel gate-command execution, env-vs-real classification (Part B), and base-repo bootstrap.
+4. **Session reuse is thoroughly researched, partially scaffolded, and entirely unwired.** `ProviderResult.provider_session_id` (`base.py:371`) exists and is populated by Gemini (`gemini.py:372`) and Cursor (`cursor.py:521`), but never read by any handler. The Claude SDK provider does not even capture it. The research is sound but deferred — and per-phase model routing outranks it on ROI per the performance plan.
 5. **Multiple forensic bugs in parallel-merge robustness strand real work or hide causes:** conflict-resolution timeout deletes branches+worktrees (losing passing work); post-merge QG failures leave the base broken with no rollback; a bare `Exit code 1` blocks an entire epic with no captured child stdout/stderr; the base repo is never bootstrapped before post-merge QG.
 
 ### The 3–5 highest-leverage moves
 
 | Rank | Move | Why | Effort/Risk |
 |---|---|---|---|
-| 1 | **OPT-1 per-phase model routing** (Sonnet for create_story/validate_synthesis/retrospective; keep Opus@max for dev/synthesis/fix) | Top wall-clock lever (~10–15 min per 5 stories); isolated to config + one resolution point | small / low |
-| 2 | **Shared gate runner (Part C)** delivering OPT-4 parallelism + env-vs-real classification (Part B) + base-repo bootstrap | Fixes the spurious-block disaster *and* parallelizes gates *and* unifies three duplicated loops | medium / low |
+| 1 | **Per-phase model routing** (Sonnet for create_story/validate_synthesis/retrospective; keep Opus@max for dev/synthesis/fix) | Top wall-clock lever (~10–15 min per 5 stories); isolated to config + one resolution point | small / low |
+| 2 | **Shared gate runner (Part C)** delivering parallel gate-command execution + env-vs-real classification (Part B) + base-repo bootstrap | Fixes the spurious-block disaster *and* parallelizes gates *and* unifies three duplicated loops | medium / low |
 | 3 | **Toolchain pre-detection + validation injected into prompts** | Root cause of the 5-hour wasted run; stops LLM-hallucinated `pnpm` commands | medium / medium |
-| 4 | **OPT-6 cache toolchain/CLI lookups** + **OPT-8 skip create_story if exists** | Cheap, isolated quick wins (~10–30s + ~6–8 min on resume) | small / low |
+| 4 | **Cache toolchain/CLI lookups** + **skip create_story when the file exists** | Cheap, isolated quick wins (~10–30s + ~6–8 min on resume) | small / low |
 | 5 | **Conflict-resolution / post-merge-QG robustness** (preserve branches on failure; rollback or commit-handling decision) | Prevents stranded passing work and broken base branches in parallel runs | medium / medium |
 
 ---
 
 ## 2. Methodology & Provenance
 
-This report is the output of a multi-agent reconciliation pass. For each candidate feature, an agent was given the feature description, a list of *claims to verify*, and the live codebase, and produced a status verdict with file:line evidence, an effort/risk estimate, dependencies, and a recommendation. The verdicts were then cross-checked against the documented project memory and the performance plan, and **stale claims were explicitly corrected** (see Appendix B). Spot re-verification on the final pass confirmed the load-bearing corrections (OPT-1 single-model routing, OPT-8 dual-naming resolution, merger prompt builder, session-id population) against current source on `feature/cursor-cli`. An independent completeness & correctness critic pass (run after the main synthesis) re-verified all six load-bearing code claims against current source, confirmed roadmap-sequencing consistency, and drove the minor count/coverage corrections folded into this version.
+This report is the output of a multi-agent reconciliation pass. For each candidate feature, an agent was given the feature description, a list of *claims to verify*, and the live codebase, and produced a status verdict with file:line evidence, an effort/risk estimate, dependencies, and a recommendation. The verdicts were then cross-checked against the documented project memory and the performance plan, and **stale claims were explicitly corrected** (see Appendix B). Spot re-verification on the final pass confirmed the load-bearing corrections (per-phase model routing's single-model finding, the create_story dual-naming resolution, the merger prompt builder, session-id population) against current source on `feature/cursor-cli`. An independent completeness & correctness critic pass (run after the main synthesis) re-verified all six load-bearing code claims against current source, confirmed roadmap-sequencing consistency, and drove the minor count/coverage corrections folded into this version.
 
 ### Sources reconciled
 
-1. **`docs/performance-optimization-plan.md`** (refreshed 2026-06-19) — the consolidated Part A (per-story wall-clock), Part B (post-merge QG robustness), Part C (shared gate runner) plan. Single source of truth for OPT-1..8.
+1. **`docs/performance-optimization-plan.md`** (refreshed 2026-06-19) — the consolidated Part A (per-story wall-clock), Part B (post-merge QG robustness), Part C (shared gate runner) plan. Single source of truth for the performance levers.
 2. **`_bmad-output/reports/session-reuse-architecture.md`** (2026-03-31, "Research complete — FEASIBLE") and **`multi-provider-session-architecture.md`** (2026-04-01, "Research complete") — the session-reuse epic.
 3. **`_bmad-output/reports/agentic-worktree-execution-plan.md`** — the `agentic_dev` composite-phase plan.
 4. **`_bmad-output/reports/enterprise-architecture-assessment.md`** — MCP integration, hooks, JSON-schema tool_use, CI/CD, prompt ordering, deterministic auto-fix.
@@ -56,7 +56,7 @@ This report is the output of a multi-agent reconciliation pass. For each candida
 
 - **High confidence** on built/not-built status: backed by direct file:line citations and test references.
 - **Medium confidence** on effort/savings estimates: derived from the performance plan's forensic timing (e.g., dev_story 11–20 min, code_review_synthesis 9–14 min, Context7 ~6s) plus reasoning, not from controlled benchmarks. Several NFR targets (orchestrator overhead <1%, worktree create <30s) are *asserted but unmeasured* (see item `parallel-performance-baseline-measurements`).
-- **Open uncertainty** flagged explicitly in §6: the value of validation phases (OPT-2 needs data), the Gemini `--resume` contradiction between two reports, and several merge-rollback design questions.
+- **Open uncertainty** flagged explicitly in §6: the value of validation phases (needs data), the Gemini `--resume` contradiction between two reports, and several merge-rollback design questions.
 
 ---
 
@@ -64,24 +64,24 @@ This report is the output of a multi-agent reconciliation pass. For each candida
 
 Grouped by category. Status legend: **B** = built, **P** = partial, **NB** = not built, **S** = superseded, plus inline notes for corrected/stale claims.
 
-### 3.1 Performance levers (OPT-1..8 and related)
+### 3.1 Performance levers
 
 | ID | Status | Key evidence (file:line) | Effort/Risk | Recommendation |
 |---|---|---|---|---|
-| per-phase-model-routing (OPT-1) | **NB** | `core/config.py:31-56` MasterProviderConfig single model/effort; `loop/handlers/base.py:93-95` get_model returns master.model unconditionally; zero `phase_override` in `src/` (re-verified) | small / low | **Build first.** Add `PhaseOverrideConfig` + `phase_overrides` on `ProvidersConfig`; resolve in `get_model()`. Route Sonnet to create_story/validate_synthesis/retrospective; keep Opus@max on dev/synthesis/fix. |
-| parallel-quality-gate-commands (OPT-4) | **NB** | `quality_gate.py:248`, `epic_quality_gate.py:96`, `merger.py:837` all sequential; `code_review.py:136` shows reusable ThreadPoolExecutor; `command_runner.py:57` per-command timeout | medium / low | Build inside the shared gate runner (Part C), not as a one-off. ~3–4 min/run total. |
-| opt2-drop-validation-phases | **P** (corrected) | `core/config.py:199-210` loop.story is mutable; `validate_story_synthesis.py:150-152` writes `synthesis-diff-validate-*.patch`; ~6–8 debug-logging commits on `debug/opt-2-validation-impact` not on main | small / medium | **Gather data first.** Cherry-pick diff-logging, run a few stories, inspect patch sizes; cut only if consistently trivial. *Corrected: phases are fully built/enabled, not "not built"; multi config is now Gemini 3.1 Pro + Sonnet, not Codex+Opus.* |
-| opt5-context7-doc-slimming | **P** | `config.py:160-169` exposes max_libs/max_tokens; `resolver.py:323-356` does story-specific filtering for table-source epics; auto-detect path uses generic query (`resolver.py:116`) | medium / low | **Reframe as token-cost, not speed** (Context7 ~6s, one-time). Table-source query refinement shipped; auto-detect refinement low priority. |
-| opt6-cache-toolchain-detection | **NB** | No `lru_cache` anywhere; `toolchain.py:104-117` plain fn; `resolve_cli_path()` `base.py:130-190` no memoization | small / low | **Quick win.** `@lru_cache` on `detect_toolchain` and `resolve_cli_path`; both pure. ~10–30s/run. Note: invalidate/skip cache in parallel worktrees where cwd differs per story. |
-| opt7-skip-build-in-per-story-qg | **NB / reframe** | Build comes from story-file Quality Gates table (`create-story/template.md:41`), not config (`bmad-assist-lite.yaml` has no build); epic QG runs build (`epic_quality_gate.py:88`) | small / low | **Defer/reframe.** Not config-only as claimed; real issue is build running 3–4x/story across dev/synthesis/QG/epic. Address via Part C + removing in-turn verification. |
-| opt8-skip-create-story-if-exists | **NB** | `create_story.py:15-82` no execute() override; `base.py:125-151` unconditional; `quality_gate._resolve_story_path()` (`quality_gate.py:137-160`) already resolves both `story-{e}.{s}.md` and `{e}-{s}-*.md` glob (re-verified) | small / low | **Build.** Guard `CreateStoryHandler.execute()` on file-exists + sprint-status≥ready-for-dev. *Corrected: the naming-mismatch claim is FALSE — quality_gate already resolves both patterns.* |
+| per-phase-model-routing | **NB** | `core/config.py:31-56` MasterProviderConfig single model/effort; `loop/handlers/base.py:93-95` get_model returns master.model unconditionally; zero `phase_override` in `src/` (re-verified) | small / low | **Build first.** Add `PhaseOverrideConfig` + `phase_overrides` on `ProvidersConfig`; resolve in `get_model()`. Route Sonnet to create_story/validate_synthesis/retrospective; keep Opus@max on dev/synthesis/fix. |
+| parallel-quality-gate-commands | **NB** | `quality_gate.py:248`, `epic_quality_gate.py:96`, `merger.py:837` all sequential; `code_review.py:136` shows reusable ThreadPoolExecutor; `command_runner.py:57` per-command timeout | medium / low | Build inside the shared gate runner (Part C), not as a one-off. ~3–4 min/run total. |
+| drop-validation-phases | **P** (corrected) | `core/config.py:199-210` loop.story is mutable; `validate_story_synthesis.py:150-152` writes `synthesis-diff-validate-*.patch`; ~6–8 debug-logging commits on `debug/opt-2-validation-impact` not on main | small / medium | **Gather data first.** Cherry-pick diff-logging, run a few stories, inspect patch sizes; cut only if consistently trivial. *Corrected: phases are fully built/enabled, not "not built"; multi config is now Gemini 3.1 Pro + Sonnet, not Codex+Opus.* |
+| context7-doc-slimming | **P** | `config.py:160-169` exposes max_libs/max_tokens; `resolver.py:323-356` does story-specific filtering for table-source epics; auto-detect path uses generic query (`resolver.py:116`) | medium / low | **Reframe as token-cost, not speed** (Context7 ~6s, one-time). Table-source query refinement shipped; auto-detect refinement low priority. |
+| cache-toolchain-detection | **NB** | No `lru_cache` anywhere; `toolchain.py:104-117` plain fn; `resolve_cli_path()` `base.py:130-190` no memoization | small / low | **Quick win.** `@lru_cache` on `detect_toolchain` and `resolve_cli_path`; both pure. ~10–30s/run. Note: invalidate/skip cache in parallel worktrees where cwd differs per story. |
+| skip-build-in-per-story-qg | **NB / reframe** | Build comes from story-file Quality Gates table (`create-story/template.md:41`), not config (`bmad-assist-lite.yaml` has no build); epic QG runs build (`epic_quality_gate.py:88`) | small / low | **Defer/reframe.** Not config-only as claimed; real issue is build running 3–4x/story across dev/synthesis/QG/epic. Address via Part C + removing in-turn verification. |
+| skip-create-story-if-exists | **NB** | `create_story.py:15-82` no execute() override; `base.py:125-151` unconditional; `quality_gate._resolve_story_path()` (`quality_gate.py:137-160`) already resolves both `story-{e}.{s}.md` and `{e}-{s}-*.md` glob (re-verified) | small / low | **Build.** Guard `CreateStoryHandler.execute()` on file-exists + sprint-status≥ready-for-dev. *Corrected: the naming-mismatch claim is FALSE — quality_gate already resolves both patterns.* |
 | max-turns-cap-dev-story | **NB** | `claude_sdk.py:120-132` extra_args carries only `effort`; no `max_turns`; `bmad-assist-lite.yaml:41-43` dev_story timeout 1200 | small / low | **Fallback lever.** Verify cli_path mitigation prevents truncation first; implement max_turns only if runaway recurs. |
 | position-aware-prompt-ordering | **NB** | `compiler/output.py:83-90` FILE_ORDER_PATTERNS doesn't prioritize story file (sorts last); instructions already last | medium / medium | Build to counter lost-in-the-middle: AC/task-list first, architecture middle, instructions last. Measure evidence-score variance before/after. |
 | section-level-epic-extraction-all-phases | **P** | `context_filter.py:260-327` filter_epic_to_story works; called only in create_story/validate_story/code_review (not dev_story, synthesis, fix_qg, retrospective) | medium / low | **Add `filter_epic_to_story()` to dev_story** as immediate win; defer synthesis/non-story phases (may not benefit). |
 | structured-fact-extraction-sprint-status | **NB / stale premise** | Synthesis workflows do NOT load sprint-status today (`validate-story-synthesis/workflow.yaml`, `code-review-synthesis/workflow.yaml` no sprint pattern) | small / low | **Clarify need first.** Premise is false — sprint-status isn't passed to synthesis. Build only if dependency/blocked context is actually wanted. |
 | toolchain-detection-python-vs-js | **P** | `epic-11-qa-report.md` shows pnpm against no-`package.json`; `toolchain.py:104-117` logic correct; workflows ask LLM to "determine commands"; `quality_gate.py:164-170` prioritizes story-file table over auto-detect | medium / medium | **Root cause of the 5-hour wasted run.** Pre-compute toolchain at epic load, inject as explicit context, validate story Quality Gates against detected commands. |
-| run-code-review-parallel-with-qg | **NB** | `runner.py:145-300` strictly sequential phases; within-phase parallelism only for validators | large / high | **Defer.** Cross-phase overlap is high-complexity for ~1–2 min; OPT-4 is higher ROI and isolated. |
-| shared-cache-symlink-worktree-coldstart | **NB** | `bootstrap.py:41-160` full copy per worktree, no symlink/cache | large / medium | Phase 2. Defer behind OPT-1/OPT-4/Part B. |
+| run-code-review-parallel-with-qg | **NB** | `runner.py:145-300` strictly sequential phases; within-phase parallelism only for validators | large / high | **Defer.** Cross-phase overlap is high-complexity for ~1–2 min; parallel gate-command execution is higher ROI and isolated. |
+| shared-cache-symlink-worktree-coldstart | **NB** | `bootstrap.py:41-160` full copy per worktree, no symlink/cache | large / medium | Phase 2. Defer behind per-phase model routing / parallel gate commands / Part B. |
 | context7-serial-fetch-latency | **P** | `resolver.py:286-306` serial per-library fetch; library IDs not cached (only final docs) | medium / low | **Deprioritize.** ~6s cold-start; table path sidesteps search. Async only if 15+ libs without table. |
 
 ### 3.2 Parallel / merge robustness
@@ -108,7 +108,7 @@ The session-reuse research is comprehensive and feasible, but **no SessionManage
 
 | ID | Status | Effort/Risk | Recommendation |
 |---|---|---|---|
-| persistent-claude-session-across-master-phases | **NB** | medium / low | Defer. Top-level epic (~6–8 min/story, ~4.7x token reduction). Build after OPT-1/Part C. Option A (SDK resume) recommended. |
+| persistent-claude-session-across-master-phases | **NB** | medium / low | Defer. Top-level epic (~6–8 min/story, ~4.7x token reduction). Build after per-phase model routing / Part C. Option A (SDK resume) recommended. |
 | claude-sdk-session-id-support | **P** (corrected) | small / low | **Foundational; build when epic starts.** Gemini/Cursor already model the pattern; only Claude SDK lacks capture. SDK v0.1.34+ supports `resume` + `ResultMessage.session_id`. *Corrected: status "partial" not "not built" — field + 2/4 providers done.* |
 | session-manager-layer | **NB** | large / medium | Defer until after gate-runner clarifies orchestration patterns. |
 | session-capable-protocol | **NB** | small / low | A simpler path (session_id param + handler tracking) may beat the proposed protocol. |
@@ -194,7 +194,7 @@ The session-reuse research is comprehensive and feasible, but **no SessionManage
 
 | ID | Status | Notes |
 |---|---|---|
-| batch-create-stories-command | **NB** | Follow-on to OPT-8; may be redundant if `run --epic N` auto-skips. |
+| batch-create-stories-command | **NB** | Follow-on to create_story skip-if-exists; may be redundant if `run --epic N` auto-skips. |
 | claude-rules-path-specific | **NB** | Split monolithic CLAUDE.md into `.claude/rules/`. Pure org change; verify Claude Code supports path-scoped rules. |
 | skills-context-fork | **NB** | Add `context: fork` to 5–8 high-output BMAD skills (45 skills, zero use it). |
 | cicd-pr-review-pipeline | **NB** | No `.github/workflows/`. Large; understand merge-queue first. |
@@ -207,7 +207,7 @@ The session-reuse research is comprehensive and feasible, but **no SessionManage
 | worktree-integration-test-fixtures | **P** | Real-git tests exist for auto-commit (`test_git.py`); worktree ops fully mocked. **Drop from v1** — git is mature. |
 | parallel-performance-baseline-measurements | **P** | NFR9/10 tested (DAG <1s, status <2s); NFR6/7/8 (overhead, create, cleanup) asserted but untested. Add 3 timing tests. |
 | web-dashboard-parallel / automatic-unblock-detection / multi-epic-parallel / distributed-execution / smart-concurrency-tuning / merge-conflict-learning | **NB** | Phase 2/3 vision items; defer. |
-| fix-quality-gate-context-and-retries (FIX-QG) | **B** | `fix-quality-gate/workflow.yaml` FULL_LOAD story; `max_retries=2` (`config.py:183`); retry context (`fix_quality_gate.py:50-70`). Shipped commit e17542c. |
+| fix-quality-gate-context-and-retries | **B** | `fix-quality-gate/workflow.yaml` FULL_LOAD story; `max_retries=2` (`config.py:183`); retry context (`fix_quality_gate.py:50-70`). Shipped commit e17542c. |
 
 ---
 
@@ -215,7 +215,7 @@ The session-reuse research is comprehensive and feasible, but **no SessionManage
 
 These are structural moves where the *how* matters more than the *whether*. Presented as trade-offs.
 
-### 4.1 Per-phase model routing (OPT-1) — the cheap structural win
+### 4.1 Per-phase model routing — the cheap structural win
 
 **Move:** Add `PhaseOverrideConfig` + `phase_overrides` dict on `ProvidersConfig`; resolve the per-phase model at the single point in `BaseHandler.get_model()` (fall back to master).
 
@@ -224,7 +224,7 @@ These are structural moves where the *how* matters more than the *whether*. Pres
 
 ### 4.2 Shared gate runner (Part C) — the unifying refactor
 
-**Move:** Extract `core/gate_runner.py` consumed by all three gate sites (`quality_gate.py:248`, `merger.py:837`, `epic_quality_gate.py:96`). It (a) runs commands concurrently (OPT-4), (b) returns per-command results classified `pass | real_failure | env_failure` (Part B), and (c) optionally bootstraps the working tree first (base-repo bootstrap).
+**Move:** Extract `core/gate_runner.py` consumed by all three gate sites (`quality_gate.py:248`, `merger.py:837`, `epic_quality_gate.py:96`). It (a) runs commands concurrently, (b) returns per-command results classified `pass | real_failure | env_failure` (Part B), and (c) optionally bootstraps the working tree first (base-repo bootstrap).
 
 - **Rule of Three is satisfied:** three duplicated sequential loops + two duplicated command-resolution paths (`quality_gate._get_commands` vs `merger._resolve_qg_commands` at `merger.py:692`).
 - **Trade-offs:**
@@ -237,7 +237,7 @@ These are structural moves where the *how* matters more than the *whether*. Pres
 
 **Move:** Pre-compute `detect_toolchain()` at epic load, inject commands as explicit YAML/JSON context into create_story/dev_story prompts, and validate story-file Quality Gates against detected commands.
 
-- **Trade-off:** The current design trusts the LLM to infer commands from project artifacts (flexible, but the proven failure mode — `pnpm` against Python). Programmatic injection is more rigid but deterministic. The detect code is *already correct and tested*; the fix is wiring, not logic. Pairs naturally with the env/real classifier (both parse the same toolchain signals). Combining this with OPT-6 (`@lru_cache` on `detect_toolchain`) means the epic-load pre-detection and the per-story gate runs share one cached result.
+- **Trade-off:** The current design trusts the LLM to infer commands from project artifacts (flexible, but the proven failure mode — `pnpm` against Python). Programmatic injection is more rigid but deterministic. The detect code is *already correct and tested*; the fix is wiring, not logic. Pairs naturally with the env/real classifier (both parse the same toolchain signals). Combining this with cached toolchain detection (`@lru_cache` on `detect_toolchain`) means the epic-load pre-detection and the per-story gate runs share one cached result.
 
 ### 4.4 Session reuse — the deferred big lever
 
@@ -247,7 +247,7 @@ These are structural moves where the *how* matters more than the *whether*. Pres
   - *Two-tier abstraction (SessionManager + SessionCapable protocol)* as researched is elegant but heavy (large effort, 5–8 pts). A *simpler path* — `session_id` param on `_do_invoke()` + tracking in `BaseHandler` — captures most of the value with less ceremony.
   - *agentic_dev partially superseded:* session continuity solves the dev→fix_qg context loss that agentic_dev's impl-summary protocol was designed to work around. Building session reuse first makes the agentic_dev epic largely unnecessary — a genuine fork in the roadmap.
   - *Crash recovery interaction:* persisting session_id in `state.yaml` lets resume pick up with memory; but stale/expired sessions need the resume-failure fallback (graceful degrade to fresh session).
-- **Ranking:** Per the performance plan, OPT-1 outranks this on ROI per effort. Build session reuse only after OPT-1 + Part C, and only if timing data justifies the ~6–8 min/story claim.
+- **Ranking:** Per the performance plan, per-phase model routing outranks this on ROI per effort. Build session reuse only after per-phase model routing + Part C, and only if timing data justifies the ~6–8 min/story claim.
 
 ### 4.5 Conflict-resolution and merge-rollback robustness
 
@@ -271,9 +271,9 @@ Sequenced into waves. Rationale and dependencies inline. "Data-gated" items are 
 
 | Item | Effort | Rationale |
 |---|---|---|
-| **OPT-1 per-phase model routing** | small | Top wall-clock lever; isolated; unblocks Sonnet routing. **Do this first.** |
-| **OPT-6 cache toolchain/CLI lookups** | small | Pure-function `@lru_cache`; ~10–30s/run; zero risk. Becomes a dependency of Wave 1 toolchain pre-detection. |
-| **OPT-8 skip create_story if exists** | small | ~6–8 min on resume; naming already handled. |
+| **Per-phase model routing** | small | Top wall-clock lever; isolated; unblocks Sonnet routing. **Do this first.** |
+| **Cache toolchain/CLI lookups** | small | Pure-function `@lru_cache`; ~10–30s/run; zero risk. Becomes a dependency of Wave 1 toolchain pre-detection. |
+| **Skip create_story when the file exists** | small | ~6–8 min on resume; naming already handled. |
 | **opaque-exit-code child-output capture** | small | Stops fast-crash → whole-epic-block; improves diagnosability. |
 | **forensic-artifact retention** | small | Aligns cleanup with the analysis plan (currently destroys inputs). |
 | **context7 em-dash row skip** | small | Trivial parse fix; stops spurious HTTP 400. |
@@ -283,8 +283,8 @@ Sequenced into waves. Rationale and dependencies inline. "Data-gated" items are 
 
 | Item | Effort | Rationale / Dependencies |
 |---|---|---|
-| **Shared gate runner (Part C)** delivering **OPT-4 parallelism** + **env-vs-real classification (Part B)** + **base-repo bootstrap** | medium | Rule of Three met. Fixes the 5-hour spurious-block disaster, parallelizes gates, and is the foundation for deterministic auto-fix + structured errors + `blocked_env` status. **Highest structural payoff.** |
-| **Toolchain pre-detection + prompt injection + Quality-Gate validation** | medium | Root cause of the wasted run; pairs with the classifier (same signal parsing). Depends on Wave 0 OPT-6 cache to avoid re-detecting per story. |
+| **Shared gate runner (Part C)** delivering **parallel gate-command execution** + **env-vs-real classification (Part B)** + **base-repo bootstrap** | medium | Rule of Three met. Fixes the 5-hour spurious-block disaster, parallelizes gates, and is the foundation for deterministic auto-fix + structured errors + `blocked_env` status. **Highest structural payoff.** |
+| **Toolchain pre-detection + prompt injection + Quality-Gate validation** | medium | Root cause of the wasted run; pairs with the classifier (same signal parsing). Depends on Wave 0 cached toolchain detection to avoid re-detecting per story. |
 | **section-level epic extraction in dev_story** | medium | Quick token win once classifier work is in flight. |
 
 ### Wave 2 — Robustness in parallel merge (1–2 weeks)
@@ -302,9 +302,9 @@ Sequenced into waves. Rationale and dependencies inline. "Data-gated" items are 
 
 | Item | Effort | Gate |
 |---|---|---|
-| **OPT-2 drop validation phases** | small (config) | **Data-gated:** cherry-pick diff logging, run stories, inspect patch sizes. |
+| **Drop validation phases** | small (config) | **Data-gated:** cherry-pick diff logging, run stories, inspect patch sizes. |
 | **Remove redundant in-turn verification from code_review_synthesis** | medium | **Data-gated:** measure post-merge QG failure-rate shift first. |
-| **Session reuse epic** (Wave 3a: Claude SDK session_id capture → config block → handler wiring → crash-recovery persistence → resume-failure fallback) | medium→large | Build only if OPT-1 hasn't already met latency goals. Resolve Gemini --resume contradiction (Wave 0) first. Largely supersedes agentic_dev. |
+| **Session reuse epic** (Wave 3a: Claude SDK session_id capture → config block → handler wiring → crash-recovery persistence → resume-failure fallback) | medium→large | Build only if per-phase model routing hasn't already met latency goals. Resolve Gemini --resume contradiction (Wave 0) first. Largely supersedes agentic_dev. |
 | **Position-aware prompt ordering** | medium | Measure evidence-score variance before/after. |
 | **Synthesis iterative refinement loop** | medium | Define gap thresholds operationally first. |
 
@@ -314,7 +314,7 @@ MCP tool integration, JSON-schema tool_use for Evidence Score, PostToolUse hooks
 
 ### What must come first and why
 
-**OPT-1 first** because it is the single biggest wall-clock lever, is fully isolated (config + one resolution point), carries low risk, and unblocks nothing else (so it can ship in parallel with Wave 0). **The shared gate runner (Wave 1) second** because it is the keystone: it converts a one-off OPT-4 into a reusable abstraction that simultaneously resolves the most damaging production failure (spurious env blocks), the toolchain mismatch's downstream effects, and the prerequisites for half a dozen robustness items. **Wave 2 robustness depends on Wave 1's classifier** (`blocked_env`, deterministic auto-fix both consume the gate runner's classification), so it must follow. **Session reuse (Wave 3) is gated on OPT-1's measured impact** — if OPT-1 already meets latency goals, the large session-reuse epic may not earn its cost.
+**Per-phase model routing first** because it is the single biggest wall-clock lever, is fully isolated (config + one resolution point), carries low risk, and unblocks nothing else (so it can ship in parallel with Wave 0). **The shared gate runner (Wave 1) second** because it is the keystone: it converts a one-off parallel-gate change into a reusable abstraction that simultaneously resolves the most damaging production failure (spurious env blocks), the toolchain mismatch's downstream effects, and the prerequisites for half a dozen robustness items. **Wave 2 robustness depends on Wave 1's classifier** (`blocked_env`, deterministic auto-fix both consume the gate runner's classification), so it must follow. **Session reuse (Wave 3) is gated on per-phase model routing's measured impact** — if it already meets latency goals, the large session-reuse epic may not earn its cost.
 
 ---
 
@@ -324,7 +324,7 @@ MCP tool integration, JSON-schema tool_use for Evidence Score, PostToolUse hooks
 
 1. **Conflict-resolution failure: park or block?** On Claude-CLI conflict-resolution timeout, should the failed story be parked (run continues, base may be inconsistent) or block the whole run? Currently it blocks-and-deletes (losing work). From the epic-8 "fable" run.
 2. **Post-merge QG failure: roll back or leave broken?** Rolling back keeps the base green but discards merged work; leaving it leaves red tests on the base. Plus: where should post-merge fixes be committed, and how verified before leaving the merge in place?
-3. **Do validation phases earn their time (OPT-2)?** Evidence scores were consistently low/PASS with tiny synthesis diffs; need the diff-logging data (on `debug/opt-2-validation-impact`) before cutting ~10–20 min/story of quality signal.
+3. **Do validation phases earn their time?** Evidence scores were consistently low/PASS with tiny synthesis diffs; need the diff-logging data (on `debug/opt-2-validation-impact`) before cutting ~10–20 min/story of quality signal.
 4. **Does Gemini CLI support `--resume`?** The two session-reuse reports directly contradict each other (one day apart). Effort and feasibility of gemini-resume-support hinge entirely on this — verify against the CLI before any work.
 5. **Build session reuse or agentic_dev?** They largely overlap on solving cross-phase context loss. Session reuse is more elegant and supersedes the impl-summary protocol; agentic_dev reduces invocation count. Pick one path.
 6. **Should post-merge QG and epic QG coexist long-term?** Both run full suites (defense-in-depth vs redundant cost). Track overlap data before removing either.
@@ -335,12 +335,12 @@ MCP tool integration, JSON-schema tool_use for Evidence Score, PostToolUse hooks
 - **NFR targets are unmeasured:** orchestrator overhead <1%, worktree create <30s, cleanup <10s are asserted, not benchmarked. Add the three timing tests before claiming compliance.
 - **`cli_path` truncation cure is unproven:** The 147-char truncation quirk is intermittent and didn't fire in either validation run, so the cli_path lever is "no regression" not "proven cure." `max_turns` remains the documented fallback.
 - **Claude SDK PID orphan risk is a real SDK limitation, not fixable in-tree** without a subprocess+NDJSON provider rewrite — mitigated by the grace-period timeout + `finally`-block cleanup, but a hard kill mid-phase can orphan `claude.exe`.
-- **OPT-6 cache correctness under parallel cwd switching:** `@lru_cache` on `detect_toolchain`/`resolve_cli_path` is safe only if the cache key includes the working directory; parallel worktrees run distinct cwds, so a naive no-arg cache could return the wrong toolchain. Key on the resolved path.
+- **Cached toolchain detection correctness under parallel cwd switching:** `@lru_cache` on `detect_toolchain`/`resolve_cli_path` is safe only if the cache key includes the working directory; parallel worktrees run distinct cwds, so a naive no-arg cache could return the wrong toolchain. Key on the resolved path.
 - **Spike S5 gates the whole Cursor premise** and can only be run on the Linux box (`agent --list-models` confirming composer-2.5 on the Pro key).
 
 ### Honest uncertainty
 
-Savings figures (OPT-1 ~10–15 min/5 stories; session reuse ~6–8 min/story; gates ~3–4 min) come from forensic timing + reasoning, not controlled A/B benchmarks. Treat them as directional. The forensic run was on a misconfigured (Python-vs-JS) toolchain, so some timing is contaminated by environmental failures — another reason Wave 1's classifier is needed before trusting future timing data.
+Savings figures (per-phase model routing ~10–15 min/5 stories; session reuse ~6–8 min/story; gates ~3–4 min) come from forensic timing + reasoning, not controlled A/B benchmarks. Treat them as directional. The forensic run was on a misconfigured (Python-vs-JS) toolchain, so some timing is contaminated by environmental failures — another reason Wave 1's classifier is needed before trusting future timing data.
 
 ---
 
@@ -350,7 +350,7 @@ Savings figures (OPT-1 ~10–15 min/5 stories; session reuse ~6–8 min/story; g
 
 | Source | Date / status | Items primarily derived | Reliability note |
 |---|---|---|---|
-| `docs/performance-optimization-plan.md` | 2026-06-19, refreshed | OPT-1..8, Part B (post-merge QG robustness), Part C (shared gate runner), conflict/rollback design questions | Single source of truth for perf; reconciled to verified code state. |
+| `docs/performance-optimization-plan.md` | 2026-06-19, refreshed | The performance levers, Part B (post-merge QG robustness), Part C (shared gate runner), conflict/rollback design questions | Single source of truth for perf; reconciled to verified code state. |
 | `session-reuse-architecture.md` | 2026-03-31, "FEASIBLE" | Native Claude resume, SessionManager, crash recovery, prompt-precompilation supersession | 2.5+ months old; predates current perf planning. Contradicts the multi-provider doc on Gemini. |
 | `multi-provider-session-architecture.md` | 2026-04-01, "Research complete" | SessionCapable protocol, replay strategy, future API providers (OpenAI/Gemini/Mistral/Ollama/OpenCode/GLM), industry convergence | Thorough; claims Gemini `--resume` (disputed). |
 | `agentic-worktree-execution-plan.md` | (undated in backlog) | agentic_dev epic (handler, plumbing, templates, internal QG loop, impl-summary, tests, Zone 1 decision) | Detailed 160-line plan; partially superseded by session reuse. |
@@ -363,12 +363,12 @@ Savings figures (OPT-1 ~10–15 min/5 stories; session reuse ~6–8 min/story; g
 
 | Item | Original claim | Correction |
 |---|---|---|
-| opt8-skip-create-story-if-exists | Naming mismatch between quality_gate and create-story | **FALSE** — `quality_gate._resolve_story_path()` (`quality_gate.py:137-160`) already handles both `story-{e}.{s}.md` and `{e}-{s}-*.md`. Re-verified on final pass. |
-| opt2-drop-validation-phases | "not built; 9 commits not cherry-picked" | **PARTIAL** — phases fully built/enabled; ~6–8 (not 9) debug commits on branch; multi config now Gemini 3.1 Pro + Sonnet (not Codex+Opus); synthesis-diff files ARE produced on main. |
+| skip-create-story-if-exists | Naming mismatch between quality_gate and create-story | **FALSE** — `quality_gate._resolve_story_path()` (`quality_gate.py:137-160`) already handles both `story-{e}.{s}.md` and `{e}-{s}-*.md`. Re-verified on final pass. |
+| drop-validation-phases | "not built; 9 commits not cherry-picked" | **PARTIAL** — phases fully built/enabled; ~6–8 (not 9) debug commits on branch; multi config now Gemini 3.1 Pro + Sonnet (not Codex+Opus); synthesis-diff files ARE produced on main. |
 | claude-sdk-session-id-support | Implied not built | **PARTIAL** — `provider_session_id` field exists (`base.py:371`); Gemini (`gemini.py:372`) + Cursor (`cursor.py:521`) fully implement; only Claude SDK missing. SDK v0.1.34+ has the infra. Re-verified. |
 | claude-sdk-cli-path-not-applied | Override "was not applied/configured" | **BUILT** — wiring exists and was validated (2.1.181 in real run); bundled used only because config unset. Graceful fallback by design. |
 | claude-sdk-no-pid-tracking-orphan-risk | Orphan-risk bug | **STALE** — SDK API limitation, not a codebase bug; downgraded to DEBUG; documented fallback is provider rewrite. |
-| opt7-skip-build-in-per-story-qg | "config-only change" | **MISLEADING** — build comes from story-file Quality Gates table, not config; requires template/create_story changes. |
+| skip-build-in-per-story-qg | "config-only change" | **MISLEADING** — build comes from story-file Quality Gates table, not config; requires template/create_story changes. |
 | post-merge-qg-rollback-commit-handling | Commit fails with "nothing to commit" | **MITIGATED** — `git status --porcelain` pre-check exists; a race window remains. |
 | bootstrap-base-repo-canary-before-postmerge-qg | Canary doesn't validate at run start | **STALE** — canary DOES validate (`bootstrap_worktree(validate=True)`); the gap is the *base repo* never bootstrapping. |
 | structured-fact-extraction-sprint-status | Full sprint-status passed to synthesis | **FALSE PREMISE** — synthesis workflows don't load sprint-status at all. |
@@ -383,8 +383,8 @@ Savings figures (OPT-1 ~10–15 min/5 stories; session reuse ~6–8 min/story; g
 
 ### Appendix C — Status tally
 
-- **Built / already-done:** ~35 (entire Cursor + Codex provider epics, full parallel subsystem core, SIGKILL escalation, cli_path lever, FIX-QG, `(optional)` convention, several "decision/constraint" items).
-- **Partial (gaps or caveats):** ~18 (OPT-2/5, section-level extraction, all Part B robustness items, Codex hardening/config/bugs, cursor S4, config hygiene, test markers, forensic retention, NFR baselines).
-- **Not built:** ~40 (entire session-reuse epic + future API providers, entire agentic_dev epic, OPT-1/4/6/7/8, MCP, JSON-schema tool_use, hooks, CI/CD, prompt ordering, refinement loop, devex polish, Phase 2/3 vision).
+- **Built / already-done:** ~35 (entire Cursor + Codex provider epics, full parallel subsystem core, SIGKILL escalation, cli_path lever, fix-quality-gate context+retries, `(optional)` convention, several "decision/constraint" items).
+- **Partial (gaps or caveats):** ~18 (drop-validation-phases / context7-doc-slimming, section-level extraction, all Part B robustness items, Codex hardening/config/bugs, cursor S4, config hygiene, test markers, forensic retention, NFR baselines).
+- **Not built:** ~40 (entire session-reuse epic + future API providers, entire agentic_dev epic, per-phase model routing / parallel gate commands / cached toolchain detection / skip-build-in-QG / create_story skip-if-exists, MCP, JSON-schema tool_use, hooks, CI/CD, prompt ordering, refinement loop, devex polish, Phase 2/3 vision).
 - **Superseded:** 2 (prompt pre-compilation; windows-only skip markers approach).
 - **Stale claims corrected:** 17 distinct items across 18 Appendix-B rows (one row bundles agentic-dev-unified-handler + implementation-summary-protocol).
