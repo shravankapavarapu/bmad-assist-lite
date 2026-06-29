@@ -380,9 +380,19 @@ def bootstrap_worktree(
         BootstrapResult indicating overall success or first failure.
 
     """
+    from bmad_assist_lite.core.toolchain import detect_install_command
+
+    # Resolve setup commands: explicit config or auto-detected install
+    setup_commands = list(config.setup_commands)
+    if not setup_commands:
+        auto_cmd = detect_install_command(project_root)
+        if auto_cmd:
+            logger.info("[BOOTSTRAP] No setup_commands configured — auto-detected: %s", auto_cmd)
+            setup_commands = [auto_cmd]
+
     # No-op when unconfigured
     has_copy = bool(config.copy_to_worktree)
-    has_setup = bool(config.setup_commands)
+    has_setup = bool(setup_commands)
     has_validation = config.validation_command is not None
 
     if not has_copy and not has_setup and not has_validation:
@@ -414,7 +424,7 @@ def bootstrap_worktree(
     if has_setup:
         logger.info("[BOOTSTRAP] Phase 2/3: Running setup commands")
         setup_result = run_setup_commands(
-            commands=config.setup_commands,
+            commands=setup_commands,
             worktree_path=worktree_path,
             timeout=config.bootstrap_timeout,
         )

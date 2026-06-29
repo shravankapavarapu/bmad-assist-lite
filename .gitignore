@@ -20,6 +20,7 @@ venv/
 /_bmad
 /.claude/commands/bmad*
 /.claude/skills/bmad*
+/.agents/
 settings.local.json
 
 # bmad-assist-lite runtime artifacts
@@ -35,6 +36,9 @@ bmad-assist-lite.yaml
 /_bmad-output/implementation-artifacts/story-validations/
 
 /_bmad-output/planning-artifacts/implementation-readiness-report-*.md
+
+# Session handoff scratch notes — not checked in
+SESSION-HANDOFF.md
 
 # OS
 .DS_Store

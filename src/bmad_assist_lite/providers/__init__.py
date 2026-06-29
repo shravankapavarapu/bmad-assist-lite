@@ -3,6 +3,7 @@
 Provider Registry:
     - ClaudeSDKProvider: Claude integration using claude-agent-sdk
     - CodexProvider: Codex CLI subprocess provider
+    - CursorProvider: Cursor CLI subprocess provider
     - GeminiProvider: Gemini CLI subprocess provider
 
 Registry Functions:
@@ -30,15 +31,18 @@ from .base import (
 if TYPE_CHECKING:
     from .claude_sdk import ClaudeSDKProvider as ClaudeSDKProvider
     from .codex import CodexProvider as CodexProvider
+    from .cursor import CursorProvider as CursorProvider
     from .gemini import GeminiProvider as GeminiProvider
 
 __all__ = [
     "BaseProvider",
     "ClaudeSDKProvider",
     "CodexProvider",
+    "CursorProvider",
     "ExitStatus",
     "GeminiProvider",
     "ProviderResult",
+    "_reset_registry",
     "get_provider",
     "list_providers",
     "register_provider",
@@ -54,6 +58,7 @@ __all__ = [
 _lazy_imports = {
     "ClaudeSDKProvider": ".claude_sdk",
     "CodexProvider": ".codex",
+    "CursorProvider": ".cursor",
     "GeminiProvider": ".gemini",
 }
 
@@ -76,12 +81,14 @@ _REGISTRY: dict[str, type[BaseProvider]] = {}
 def _init_default_providers() -> None:
     from .claude_sdk import ClaudeSDKProvider
     from .codex import CodexProvider
+    from .cursor import CursorProvider
     from .gemini import GeminiProvider
 
     _REGISTRY.update(
         {
             "claude": ClaudeSDKProvider,
             "codex": CodexProvider,
+            "cursor": CursorProvider,
             "gemini": GeminiProvider,
         }
     )
@@ -105,6 +112,16 @@ def list_providers() -> frozenset[str]:
     if not _REGISTRY:
         _init_default_providers()
     return frozenset(_REGISTRY.keys())
+
+
+def _reset_registry() -> None:
+    """Clear the provider registry for test isolation.
+
+    Tests should call this rather than mutating ``_REGISTRY`` directly.
+    After clearing, the next ``get_provider()`` or ``list_providers()`` call
+    will re-initialize defaults via ``_init_default_providers()``.
+    """
+    _REGISTRY.clear()
 
 
 def register_provider(name: str, provider_class: type[BaseProvider]) -> None:

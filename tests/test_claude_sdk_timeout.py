@@ -21,7 +21,11 @@ from claude_agent_sdk import ProcessError as SDKProcessError
 
 from bmad_assist_lite.core.exceptions import ProviderError, ProviderTimeoutError
 from bmad_assist_lite.providers.base import BaseProvider, ProviderResult
-from bmad_assist_lite.providers.claude_sdk import SUPPORTED_MODELS, ClaudeSDKProvider
+from bmad_assist_lite.providers.claude_sdk import (
+    SUPPORTED_MODELS,
+    ClaudeSDKProvider,
+    _is_benign_success_error,
+)
 from bmad_assist_lite.providers.result_collector import ResultCollector
 
 # ============================================================================
@@ -185,9 +189,7 @@ class TestTimeoutPropagation:
     """Test that timeout propagates to base class for grace period handling."""
 
     @patch("bmad_assist_lite.providers.claude_sdk.query")
-    def test_timeout_with_enough_text_returns_partial(
-        self, mock_query: MagicMock
-    ) -> None:
+    def test_timeout_with_enough_text_returns_partial(self, mock_query: MagicMock) -> None:
         """Timeout with 500+ chars → partial result via base class (AC #3)."""
         large_text = "x" * 600
 
@@ -207,9 +209,7 @@ class TestTimeoutPropagation:
         assert len(result.stdout) >= 500
 
     @patch("bmad_assist_lite.providers.claude_sdk.query")
-    def test_timeout_with_no_response_raises_error(
-        self, mock_query: MagicMock
-    ) -> None:
+    def test_timeout_with_no_response_raises_error(self, mock_query: MagicMock) -> None:
         """Timeout with no response → ProviderTimeoutError (AC #5)."""
 
         async def stalling_query(**kwargs: object):  # type: ignore[no-untyped-def]
@@ -223,9 +223,7 @@ class TestTimeoutPropagation:
             provider.invoke("test", timeout=1)
 
     @patch("bmad_assist_lite.providers.claude_sdk.query")
-    def test_timeout_error_propagates_to_base_class(
-        self, mock_query: MagicMock
-    ) -> None:
+    def test_timeout_error_propagates_to_base_class(self, mock_query: MagicMock) -> None:
         """TimeoutError propagates from _do_invoke to base class invoke()."""
 
         async def stalling_query(**kwargs: object):  # type: ignore[no-untyped-def]
@@ -253,11 +251,14 @@ class TestCleanup:
         provider = ClaudeSDKProvider()
         provider._current_pid = 12345
 
-        with patch(
-            "bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=True
-        ) as mock_alive, patch(
-            "bmad_assist_lite.providers.claude_sdk.terminate_process", return_value=True
-        ) as mock_term:
+        with (
+            patch(
+                "bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=True
+            ) as mock_alive,
+            patch(
+                "bmad_assist_lite.providers.claude_sdk.terminate_process", return_value=True
+            ) as mock_term,
+        ):
             provider._cleanup()
 
         mock_alive.assert_called_once_with(12345)
@@ -269,19 +270,16 @@ class TestCleanup:
         provider = ClaudeSDKProvider()
         provider._current_pid = 12345
 
-        with patch(
-            "bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=False
-        ), patch(
-            "bmad_assist_lite.providers.claude_sdk.terminate_process"
-        ) as mock_term:
+        with (
+            patch("bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=False),
+            patch("bmad_assist_lite.providers.claude_sdk.terminate_process") as mock_term,
+        ):
             provider._cleanup()
 
         mock_term.assert_not_called()
         assert provider._current_pid is None
 
-    def test_cleanup_logs_warning_when_no_pid(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_cleanup_logs_warning_when_no_pid(self, caplog: pytest.LogCaptureFixture) -> None:
         """_cleanup() logs DEBUG when PID is None (AC #4, Task 6.7)."""
         provider = ClaudeSDKProvider()
         provider._current_pid = None
@@ -291,7 +289,8 @@ class TestCleanup:
 
         assert "No PID tracked" in caplog.text
         debug_records = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if r.levelno == logging.DEBUG and "No PID tracked" in r.message
         ]
         assert len(debug_records) == 1
@@ -301,10 +300,9 @@ class TestCleanup:
         provider = ClaudeSDKProvider()
         provider._current_pid = 12345
 
-        with patch(
-            "bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=True
-        ), patch(
-            "bmad_assist_lite.providers.claude_sdk.terminate_process", return_value=False
+        with (
+            patch("bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=True),
+            patch("bmad_assist_lite.providers.claude_sdk.terminate_process", return_value=False),
         ):
             # Should not raise
             provider._cleanup()
@@ -312,9 +310,7 @@ class TestCleanup:
         assert provider._current_pid is None
 
     @patch("bmad_assist_lite.providers.claude_sdk.query")
-    def test_cleanup_exception_caught_by_base_class(
-        self, mock_query: MagicMock
-    ) -> None:
+    def test_cleanup_exception_caught_by_base_class(self, mock_query: MagicMock) -> None:
         """Base class wraps _cleanup() in try/except — exceptions don't mask results."""
         messages = [make_msg(["ok"])]
         mock_query.return_value = make_fake_query(messages)
@@ -322,11 +318,12 @@ class TestCleanup:
         provider = ClaudeSDKProvider()
         provider._current_pid = 12345
 
-        with patch(
-            "bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=True
-        ), patch(
-            "bmad_assist_lite.providers.claude_sdk.terminate_process",
-            side_effect=OSError("access denied"),
+        with (
+            patch("bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=True),
+            patch(
+                "bmad_assist_lite.providers.claude_sdk.terminate_process",
+                side_effect=OSError("access denied"),
+            ),
         ):
             # invoke() succeeds despite _cleanup() raising OSError,
             # because base class wraps _cleanup() in try/except
@@ -341,10 +338,9 @@ class TestCleanup:
         provider = ClaudeSDKProvider()
         provider._current_pid = 99999
 
-        with patch(
-            "bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=True
-        ), patch(
-            "bmad_assist_lite.providers.claude_sdk.terminate_process", return_value=True
+        with (
+            patch("bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=True),
+            patch("bmad_assist_lite.providers.claude_sdk.terminate_process", return_value=True),
         ):
             provider._cleanup()
 
@@ -397,6 +393,106 @@ class TestSDKErrorWrapping:
             yield  # pragma: no cover
 
         mock_query.return_value = failing_query()
+
+        provider = ClaudeSDKProvider()
+        with pytest.raises(ProviderError, match="Unexpected SDK error"):
+            provider.invoke("test")
+
+
+# ============================================================================
+# TestBenignSuccessEscalation — SDK 0.2.x "error result: success" quirk
+# ============================================================================
+
+
+async def query_yield_then_raise(
+    messages: list[AssistantMessage | FakeOtherMessage],
+    exc: Exception,
+):
+    """Async generator that yields messages then raises — mirrors the 0.2.x SDK.
+
+    The 0.2.x read task converts a benign non-zero CLI exit into a stream
+    {"type": "error"} message, which receive_messages re-raises as a bare
+    Exception AFTER the turn's AssistantMessages have already been streamed.
+    """
+    for msg in messages:
+        yield msg
+    raise exc
+
+
+class TestBenignSuccessPredicate:
+    """Unit tests for the _is_benign_success_error signal matcher."""
+
+    def test_exact_success_matches(self) -> None:
+        """The literal benign escalation string matches."""
+        exc = Exception("Claude Code returned an error result: success")
+        assert _is_benign_success_error(exc) is True
+
+    def test_trailing_whitespace_tolerated(self) -> None:
+        """Surrounding whitespace does not break the match."""
+        exc = Exception("Claude Code returned an error result: success  ")
+        assert _is_benign_success_error(exc) is True
+
+    def test_real_error_subtype_does_not_match(self) -> None:
+        """A genuine error subtype must not be swallowed."""
+        exc = Exception("Claude Code returned an error result: error_max_turns")
+        assert _is_benign_success_error(exc) is False
+
+    def test_joined_error_messages_do_not_match(self) -> None:
+        """Joined error messages (errors array) must not be swallowed."""
+        exc = Exception("Claude Code returned an error result: tool failed; rate limited")
+        assert _is_benign_success_error(exc) is False
+
+    def test_unrelated_exception_does_not_match(self) -> None:
+        """An unrelated exception is not the benign escalation."""
+        assert _is_benign_success_error(RuntimeError("kaboom")) is False
+
+    def test_prefix_must_lead_the_message(self) -> None:
+        """The marker must start the message, not appear mid-string."""
+        exc = Exception("wrapped: Claude Code returned an error result: success")
+        assert _is_benign_success_error(exc) is False
+
+
+class TestBenignSuccessEscalation:
+    """Behavioral tests for swallowing the benign escalation in _do_invoke()."""
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_benign_success_with_text_returns_success(
+        self, mock_query: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Benign 'error result: success' after real output → success result."""
+        mock_query.return_value = query_yield_then_raise(
+            [make_msg(["real ", "output"])],
+            Exception("Claude Code returned an error result: success"),
+        )
+
+        provider = ClaudeSDKProvider()
+        with caplog.at_level(logging.WARNING):
+            result = provider.invoke("test")
+
+        assert result.timed_out is False
+        assert result.exit_code == 0
+        assert result.stdout == "real output"
+        assert "known CLI/SDK 0.2.x quirk" in caplog.text
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_benign_success_without_text_raises(self, mock_query: MagicMock) -> None:
+        """Benign escalation with no collected output → does not silently succeed."""
+        mock_query.return_value = query_yield_then_raise(
+            [],
+            Exception("Claude Code returned an error result: success"),
+        )
+
+        provider = ClaudeSDKProvider()
+        with pytest.raises(ProviderError, match="Unexpected SDK error"):
+            provider.invoke("test")
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_genuine_error_result_with_text_still_raises(self, mock_query: MagicMock) -> None:
+        """A real error subtype is never swallowed, even with partial output."""
+        mock_query.return_value = query_yield_then_raise(
+            [make_msg(["partial work"])],
+            Exception("Claude Code returned an error result: error_max_turns"),
+        )
 
         provider = ClaudeSDKProvider()
         with pytest.raises(ProviderError, match="Unexpected SDK error"):
@@ -496,9 +592,7 @@ class TestPIDTracking:
         provider = ClaudeSDKProvider()
         provider._current_pid = 42
 
-        with patch(
-            "bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=False
-        ):
+        with patch("bmad_assist_lite.providers.claude_sdk.is_pid_alive", return_value=False):
             provider._cleanup()
 
         assert provider._current_pid is None
@@ -532,9 +626,7 @@ class TestSettingsValidation:
     """Test settings file validation in _do_invoke()."""
 
     @patch("bmad_assist_lite.providers.claude_sdk.query")
-    def test_settings_file_validated(
-        self, mock_query: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_settings_file_validated(self, mock_query: MagicMock, tmp_path: Path) -> None:
         """Settings file is validated before invocation."""
         settings_file = tmp_path / "settings.json"
         settings_file.write_text("{}")
@@ -594,6 +686,66 @@ class TestProviderProperties:
         """ClaudeSDKProvider is a BaseProvider subclass."""
         provider = ClaudeSDKProvider()
         assert isinstance(provider, BaseProvider)
+
+
+# ============================================================================
+# TestCliPathResolution — cli_path wiring (system CLI vs bundled binary)
+# ============================================================================
+
+
+class TestCliPathResolution:
+    """Test that the system Claude CLI is wired into ClaudeAgentOptions.cli_path.
+
+    Pointing the SDK at the system ``claude`` binary avoids the older bundled
+    ``_bundled/claude.exe`` (which has shown long-turn output truncation).
+    """
+
+    @patch("bmad_assist_lite.providers.claude_sdk.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_resolved_cli_path_passed_to_options(
+        self, mock_query: MagicMock, mock_resolve: MagicMock
+    ) -> None:
+        """A resolved system CLI path is forwarded as ClaudeAgentOptions.cli_path."""
+        mock_resolve.return_value = "/usr/local/bin/claude"
+        mock_query.return_value = make_fake_query([make_msg(["ok"])])
+
+        provider = ClaudeSDKProvider()
+        provider.invoke("test")
+
+        mock_resolve.assert_called_once_with("claude")
+        options = mock_query.call_args.kwargs["options"]
+        assert options.cli_path == "/usr/local/bin/claude"
+
+    @patch("bmad_assist_lite.providers.claude_sdk.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_unresolved_cli_path_falls_back_to_none(
+        self, mock_query: MagicMock, mock_resolve: MagicMock
+    ) -> None:
+        """When no system CLI is found, cli_path is None (SDK uses bundled binary)."""
+        mock_resolve.side_effect = ProviderError("claude not found")
+        mock_query.return_value = make_fake_query([make_msg(["ok"])])
+
+        provider = ClaudeSDKProvider()
+        result = provider.invoke("test")
+
+        # Invocation still succeeds — resolution failure must not abort the turn.
+        assert result.timed_out is False
+        options = mock_query.call_args.kwargs["options"]
+        assert options.cli_path is None
+
+    @patch("bmad_assist_lite.providers.claude_sdk.resolve_cli_path")
+    def test_helper_returns_resolved_path(self, mock_resolve: MagicMock) -> None:
+        """_resolve_cli_path() returns the resolved path on success."""
+        mock_resolve.return_value = "/opt/claude"
+        provider = ClaudeSDKProvider()
+        assert provider._resolve_cli_path() == "/opt/claude"
+
+    @patch("bmad_assist_lite.providers.claude_sdk.resolve_cli_path")
+    def test_helper_returns_none_on_provider_error(self, mock_resolve: MagicMock) -> None:
+        """_resolve_cli_path() swallows ProviderError and returns None."""
+        mock_resolve.side_effect = ProviderError("not found")
+        provider = ClaudeSDKProvider()
+        assert provider._resolve_cli_path() is None
 
 
 # ============================================================================

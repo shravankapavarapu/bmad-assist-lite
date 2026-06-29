@@ -3,7 +3,11 @@
 import json
 import sys
 
-from bmad_assist_lite.core.toolchain import ToolchainCommands, detect_toolchain
+from bmad_assist_lite.core.toolchain import (
+    ToolchainCommands,
+    detect_install_command,
+    detect_toolchain,
+)
 
 
 class TestDetectToolchain:
@@ -147,3 +151,44 @@ class TestDetectToolchain:
         (tmp_path / ".venv").mkdir()
         result = detect_toolchain(tmp_path)
         assert result.lint == "ruff check src/"
+
+
+class TestDetectInstallCommand:
+    """Tests for detect_install_command."""
+
+    def test_pnpm_project(self, tmp_path):
+        """pnpm-lock.yaml triggers pnpm install --frozen-lockfile."""
+        (tmp_path / "pnpm-lock.yaml").write_text("")
+        (tmp_path / "package.json").write_text(json.dumps({"name": "foo"}))
+        assert detect_install_command(tmp_path) == "pnpm install --frozen-lockfile"
+
+    def test_yarn_project(self, tmp_path):
+        """yarn.lock triggers yarn install."""
+        (tmp_path / "yarn.lock").write_text("")
+        (tmp_path / "package.json").write_text(json.dumps({"name": "foo"}))
+        assert detect_install_command(tmp_path) == "yarn install"
+
+    def test_npm_project(self, tmp_path):
+        """No lock file defaults to npm install."""
+        (tmp_path / "package.json").write_text(json.dumps({"name": "foo"}))
+        assert detect_install_command(tmp_path) == "npm install"
+
+    def test_python_project(self, tmp_path):
+        """pyproject.toml triggers pip install -e ."""
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'foo'\n")
+        assert detect_install_command(tmp_path) == "pip install -e ."
+
+    def test_rust_project(self, tmp_path):
+        """Cargo.toml triggers cargo build."""
+        (tmp_path / "Cargo.toml").write_text("[package]\nname = 'foo'\n")
+        assert detect_install_command(tmp_path) == "cargo build"
+
+    def test_empty_project(self, tmp_path):
+        """Empty project returns None."""
+        assert detect_install_command(tmp_path) is None
+
+    def test_node_preferred_over_python(self, tmp_path):
+        """Node.js is preferred when both package.json and pyproject.toml exist."""
+        (tmp_path / "package.json").write_text(json.dumps({"name": "foo"}))
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'foo'\n")
+        assert detect_install_command(tmp_path) == "npm install"

@@ -13,6 +13,66 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR_NAME = "cache"
 BMAD_DIR_NAME = ".bmad-assist-lite"
+CURSOR_DENY_CONFIG_MARKER_NAME = "cursor-deny-config.marker"
+
+
+def _cleanup_cursor_deny_config(cache_dir: Path, cleaned: list[str]) -> None:
+    """Remove orphaned Cursor deny-config file and marker from a crashed invocation.
+
+    Reads the marker file to find the deny-config path, removes both files,
+    and appends cleaned paths to ``cleaned``. Never raises — crash recovery
+    must not itself crash.
+
+    Args:
+        cache_dir: Path to ``.bmad-assist-lite/cache/`` directory.
+        cleaned: Accumulator list for cleaned file paths.
+
+    """
+    marker_path = cache_dir / CURSOR_DENY_CONFIG_MARKER_NAME
+    if not marker_path.exists():
+        return
+
+    try:
+        deny_config_path_str = marker_path.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError) as e:
+        logger.warning("Failed to read cursor deny-config marker: %s", e)
+        # Remove the unreadable marker itself
+        try:
+            marker_path.unlink(missing_ok=True)
+            cleaned.append(str(marker_path))
+        except OSError:
+            pass
+        return
+
+    # Remove the deny-config file at the path recorded in the marker
+    if deny_config_path_str:
+        deny_config_path = Path(deny_config_path_str)
+        # Validate the marker-referenced path before deleting:
+        # 1. Must be an absolute path (relative paths are untrusted)
+        # 2. Must end with .cursor/cli.json (expected deny-config location)
+        if not deny_config_path.is_absolute() or deny_config_path.name != "cli.json":
+            logger.warning(
+                "Cursor deny-config marker contains unexpected path: %s — skipping deletion",
+                deny_config_path,
+            )
+        else:
+            try:
+                if deny_config_path.exists():
+                    deny_config_path.unlink()
+                    cleaned.append(str(deny_config_path))
+                    logger.info("Cleaned orphaned cursor deny-config: %s", deny_config_path)
+            except OSError as e:
+                logger.warning(
+                    "Failed to clean cursor deny-config %s: %s", deny_config_path, e
+                )
+
+    # Remove the marker itself
+    try:
+        marker_path.unlink(missing_ok=True)
+        cleaned.append(str(marker_path))
+        logger.info("Cleaned cursor deny-config marker: %s", marker_path)
+    except OSError as e:
+        logger.warning("Failed to clean cursor deny-config marker: %s", e)
 
 
 def cleanup_for_phase(phase: Phase, project_path: Path) -> list[str]:
@@ -39,6 +99,9 @@ def cleanup_for_phase(phase: Phase, project_path: Path) -> list[str]:
             except OSError as e:
                 logger.warning("Failed to clean %s: %s", tmp_file, e)
 
+    # Cursor deny-config crash recovery: remove orphaned deny-config + marker
+    _cleanup_cursor_deny_config(cache_dir, cleaned)
+
     # Phase-specific warnings
     if phase == Phase.DEV_STORY:
         logger.warning("Resuming from DEV_STORY phase — check for uncommitted git changes")
@@ -47,7 +110,7 @@ def cleanup_for_phase(phase: Phase, project_path: Path) -> list[str]:
 
 
 # Files/directories that persist across stories (do NOT delete)
-_KEEP_FILENAMES = {"story-queue.yaml", "epic-libs.yaml"}
+_KEEP_FILENAMES = {"story-queue.yaml", "epic-libs.yaml", CURSOR_DENY_CONFIG_MARKER_NAME}
 _KEEP_DIRS = {"lib-docs"}
 
 

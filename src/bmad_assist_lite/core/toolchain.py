@@ -115,3 +115,29 @@ def detect_toolchain(project_root: Path) -> ToolchainCommands:
 
     logger.info("No toolchain detected for %s", project_root)
     return ToolchainCommands()
+
+
+def detect_install_command(project_root: Path) -> str | None:
+    """Auto-detect the dependency install command for a project.
+
+    Detection order: Node.js (package.json) > Python (pyproject.toml) > Rust (Cargo.toml).
+    Returns None if no known project type is detected.
+    """
+    if (project_root / "package.json").exists():
+        pm = _detect_package_manager(project_root)
+        cmd = f"{pm} install --frozen-lockfile" if pm == "pnpm" else f"{pm} install"
+        logger.info("Auto-detected install command: %s", cmd)
+        return cmd
+
+    if (project_root / "pyproject.toml").exists():
+        cmd = "pip install -e ."
+        logger.info("Auto-detected install command: %s", cmd)
+        return cmd
+
+    if (project_root / "Cargo.toml").exists():
+        cmd = "cargo build"
+        logger.info("Auto-detected install command: %s", cmd)
+        return cmd
+
+    logger.info("No install command detected for %s", project_root)
+    return None

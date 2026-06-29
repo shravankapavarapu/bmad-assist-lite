@@ -521,18 +521,96 @@ def init(
         typer.echo(f"Config already exists: {config_path}")
         return
 
-    # Create default config
-    default_config = """\
-# bmad-assist-lite configuration
+    # Detect project toolchain for quality_gate and parallel defaults
+    from bmad_assist_lite.core.toolchain import detect_install_command, detect_toolchain
+
+    toolchain = detect_toolchain(project)
+    install_cmd = detect_install_command(project)
+
+    # Build quality_gate section — active if detected, commented out otherwise
+    if toolchain.lint or toolchain.typecheck or toolchain.test:
+        qg_lines = ["quality_gate:"]
+        if toolchain.lint:
+            qg_lines.append(f'  lint: "{toolchain.lint}"')
+        if toolchain.typecheck:
+            qg_lines.append(f'  typecheck: "{toolchain.typecheck}"')
+        if toolchain.build:
+            qg_lines.append(f'  build: "{toolchain.build}"')
+        if toolchain.test:
+            qg_lines.append(f'  test: "{toolchain.test}"')
+        qg_lines.append("  command_timeout: 120     # per-command timeout in seconds")
+        quality_gate_block = "\n".join(qg_lines)
+    else:
+        quality_gate_block = """\
+# Fallback quality gate commands (auto-detected from build system if omitted).
+# quality_gate:
+#   lint: "ruff check src/"
+#   typecheck: "mypy src/"
+#   test: "pytest -q --tb=short --no-header"
+#   command_timeout: 120     # per-command timeout in seconds"""
+
+    # Build parallel section — use detected install command if available
+    if install_cmd:
+        parallel_block = f"""\
+# Parallel story execution via git worktrees.
+# parallel:
+#   max_concurrency: 3               # max concurrent stories (1-5)
+#   stagger_delay: 10.0              # seconds between spawns
+#   copy_to_worktree:                # files/dirs to copy into each worktree
+#     - ".env"
+#     - "bmad-assist-lite.yaml"
+#   setup_commands:                   # sequential shell commands run in each worktree
+#     - "{install_cmd}"
+#   validation_command: null          # smoke test command (e.g., "pytest -q -x")
+#   bootstrap_timeout: 120           # per-command timeout in seconds for setup/validation"""
+    else:
+        parallel_block = """\
+# Parallel story execution via git worktrees.
+# parallel:
+#   max_concurrency: 3               # max concurrent stories (1-5)
+#   stagger_delay: 10.0              # seconds between spawns
+#   copy_to_worktree:                # files/dirs to copy into each worktree
+#     - ".env"
+#     - "bmad-assist-lite.yaml"
+#   setup_commands: []                # sequential shell commands run in each worktree
+#   validation_command: null          # smoke test command (e.g., "pytest -q -x")
+#   bootstrap_timeout: 120           # per-command timeout in seconds for setup/validation"""
+
+    detected_label = ""
+    if toolchain.lint or install_cmd:
+        parts = []
+        if toolchain.lint:
+            # Infer language from the detected commands
+            if "ruff" in (toolchain.lint or ""):
+                parts.append("Python")
+            elif "cargo" in (toolchain.lint or ""):
+                parts.append("Rust")
+            else:
+                parts.append("Node.js")
+        elif install_cmd:
+            if "pip" in install_cmd:
+                parts.append("Python")
+            elif "cargo" in install_cmd:
+                parts.append("Rust")
+            else:
+                parts.append("Node.js")
+        detected_label = f" (detected: {', '.join(parts)} project)"
+
+    default_config = f"""\
+# bmad-assist-lite configuration{detected_label}
 providers:
   master:
-    provider: claude
-    model: claude-opus-4-6   # Pin Opus 4.6. To use 4.7, set `model: claude-opus-4-7` and add `effort: max` (4.7-only thinking effort: low|medium|high|xhigh|max).
+    provider: claude          # claude, gemini, codex, cursor
+    model: claude-opus-4-6    # Pin Opus 4.6. To use 4.7, set `model: claude-opus-4-7` and add `effort: max`.
   multi:
     - provider: gemini
       model: gemini-3.1-pro-preview
     - provider: claude
       model: sonnet
+  # cli_paths:               # Override CLI binary paths (useful when venv strips PATH)
+  #   codex: "C:/path/to/codex.exe"
+  #   gemini: "C:/path/to/gemini.cmd"
+  #   cursor: "C:/path/to/cursor-agent.exe"
 
 loop:
   story:
@@ -554,13 +632,19 @@ timeouts:
 paths:
   output_folder: _bmad-output
 
+{quality_gate_block}
+
+# Auto-commit story changes after quality gate pass/fail.
+# auto_commit:
+#   enabled: true            # default
+
 # Uncomment to enable library documentation fetching from Context7.
-# Fetches up-to-date API docs for detected project dependencies and injects
-# them into dev-story and code-review-synthesis prompts.
 # context_docs:
 #   enabled: true
 #   max_libs: 8              # max libraries to fetch docs for
 #   max_tokens_per_lib: 5000 # max tokens of docs per library
+
+{parallel_block}
 """
     config_path.write_text(default_config)
     typer.echo(f"Created config: {config_path}")

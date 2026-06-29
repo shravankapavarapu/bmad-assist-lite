@@ -34,8 +34,8 @@
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-03-23
-last_updated: 2026-03-18
+generated: 2026-06-14
+last_updated: 2026-06-29
 project: bmad-assist-lite-parallel-stories
 project_key: NOKEY
 tracking_system: file-system
@@ -123,3 +123,12 @@ development_status:
   10-5-configuration-and-docs: done
   10-6-e2e-testing-and-hardening: done
   10-7-epic-documentation-sync: done
+
+  # Epic 11: Cursor Provider — Composer 2.5 as Master LLM on Linux
+  epic-11: done
+  11-1-sigkill-escalation: done
+  11-2-cursor-resolution-and-config: done
+  11-3-cursor-provider-core: done
+  11-4-readonly-mode-deny-config: done
+  11-5-linux-deployment-docs: done
+  11-6-epic-documentation-sync: done

@@ -30,8 +30,25 @@ __all__ = [
 ]
 
 
+# XML 1.0 permits only these characters (the Char production):
+#   #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+# Content captured from tools or written by LLMs (test output with ANSI escape
+# codes, NUL bytes, form feeds, etc.) can carry control characters that are
+# illegal in XML 1.0 *even inside CDATA*. ElementTree then rejects the whole
+# document as "not well-formed (invalid token)", which is what broke
+# fix_quality_gate after a synthesis report with such a character was written
+# into the story file. Strip them before embedding any dynamic content.
+_INVALID_XML_CHARS_RE = _re.compile("[^\x09\x0a\x0d\x20-퟿-�\U00010000-\U0010ffff]")
+
+
+def _sanitize_xml_chars(value: str) -> str:
+    """Remove characters that are illegal in XML 1.0 (e.g. ANSI/control codes)."""
+    return _INVALID_XML_CHARS_RE.sub("", value)
+
+
 def _escape_xml_attr(value: str) -> str:
     """Escape string for use in XML attribute value."""
+    value = _sanitize_xml_chars(value)
     return (
         value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
     )
@@ -39,6 +56,7 @@ def _escape_xml_attr(value: str) -> str:
 
 def _escape_xml_text(value: str) -> str:
     """Escape string for use as XML text content."""
+    value = _sanitize_xml_chars(value)
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
@@ -46,6 +64,7 @@ def _wrap_cdata(content: str) -> str:
     """Wrap content in CDATA section."""
     if not content:
         return ""
+    content = _sanitize_xml_chars(content)
     if "]]>" in content:
         parts = content.split("]]>")
         return "<![CDATA[" + "]]]]><![CDATA[>".join(parts) + "]]>"
@@ -221,7 +240,9 @@ def generate_output(
         if is_markdown:
             parts.append(f"<instructions>{_wrap_cdata(compiled.instructions)}</instructions>")
         else:
-            parts.append(f"<instructions>{compiled.instructions}</instructions>")
+            parts.append(
+                f"<instructions>{_sanitize_xml_chars(compiled.instructions)}</instructions>"
+            )
     else:
         parts.append("<instructions></instructions>")
 
