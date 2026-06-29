@@ -55,4 +55,8 @@ htmlcov/
 #ENV file: 
 .env
 
+docs/performance-improvement/sessions
+docs/performance-improvement/goal.txt
+docs/performance-improvement/transcript
+
 nul
