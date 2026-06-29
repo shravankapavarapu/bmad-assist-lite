@@ -34,8 +34,13 @@ bmad-assist-lite.yaml
 
 /_bmad-output/implementation-artifacts/code-reviews/
 /_bmad-output/implementation-artifacts/story-validations/
+# Generated story spec files (sprint-status.yaml is kept tracked)
+/_bmad-output/implementation-artifacts/*.md
 
 /_bmad-output/planning-artifacts/implementation-readiness-report-*.md
+
+# Session handoff scratch notes — not checked in
+SESSION-HANDOFF.md
 
 # OS
 .DS_Store
