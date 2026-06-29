@@ -338,6 +338,17 @@ class CodexProvider(BaseProvider):
             effective_model,
         ]
 
+        # Sandbox enforcement (OS-level, not prompt-level). Codex's tool
+        # restriction prompt is advisory only — the model can ignore it — so we
+        # also constrain the CLI sandbox that governs model-generated shell
+        # commands. Read-only phases (validators/reviewers) get a read-only
+        # sandbox that blocks BOTH workspace writes and network access, which
+        # prevents an unintended ``git fetch``/clone from reaching the worktree.
+        # Write phases are confined to ``workspace-write`` (no network, no escape
+        # outside the working root). See providers.base.READ_ONLY_TOOLS.
+        sandbox_mode = "read-only" if allowed_tools is not None else "workspace-write"
+        command.extend(["--sandbox", sandbox_mode])
+
         # Add --output-schema and --output-last-message for structured output
         if _REVIEW_SCHEMA_PATH.is_file():
             temp_dir = (
@@ -372,8 +383,18 @@ class CodexProvider(BaseProvider):
 
         env = os.environ.copy()
         if cwd is not None:
-            env["GIT_WORK_TREE"] = str(cwd)
-            env["GIT_DIR"] = str(cwd / ".git")
+            # Only set PWD; the subprocess cwd is passed to Popen(cwd=...) below,
+            # which is what Codex uses to resolve the repo.
+            #
+            # DO NOT set GIT_WORK_TREE / GIT_DIR here. Those env vars are global to
+            # every git invocation Codex makes, including its OWN internal plumbing
+            # (notably the plugin "curated-sync", which runs `git reset --hard` +
+            # `git clean -fdx`). Pointing GIT_WORK_TREE at the worktree redirects
+            # that `git clean -fdx` onto the worktree and DELETES its untracked /
+            # ignored files (the .bmad-assist-lite/cache output dir, _bmad-output,
+            # potentially .env). GIT_DIR was also wrong for a worktree anyway, where
+            # `.git` is a pointer file, not a directory. Codex reads the repo fine
+            # from cwd, so these overrides are both unnecessary and destructive.
             env["PWD"] = str(cwd)
 
         try:

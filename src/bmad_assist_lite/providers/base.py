@@ -53,6 +53,13 @@ COMMON_TOOL_NAMES: frozenset[str] = frozenset(
     {"Edit", "Write", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Read"}
 )
 
+# Read-only tool set for multi-LLM validator/reviewer phases (validate_story,
+# code_review). Deliberately excludes Bash and all write tools so that parallel
+# read-only phases cannot run shell commands or mutate the workspace. This is the
+# multi-LLM safety constraint expressed as a single shared allowlist, so the
+# validator and reviewer handlers cannot drift apart.
+READ_ONLY_TOOLS: tuple[str, ...] = ("Read", "Glob", "Grep")
+
 # Provider→binary-name mapping: ordered tuples of binary names to try per provider.
 # After this refactor, resolve_cli_path()'s cli_name parameter is effectively a
 # **provider name** (not a binary name), and _KNOWN_CLI_PATHS keys likewise shift

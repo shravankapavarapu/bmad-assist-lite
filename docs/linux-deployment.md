@@ -95,6 +95,47 @@ Verify the installation:
 python -c "import bmad_assist_lite; print('OK')"
 ```
 
+### 1.6 Enable Unprivileged User Namespaces (Codex Sandbox Requirement)
+
+**Required if you use the Codex provider** (as master, validator, or reviewer). The Codex
+CLI sandboxes model-generated shell commands with **bubblewrap (`bwrap`)**, which needs
+**unprivileged user namespaces**. Ubuntu 24.04+ restricts these by default via AppArmor
+(`kernel.apparmor_restrict_unprivileged_userns = 1`), so Codex's sandbox aborts at startup with:
+
+```
+bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+```
+
+When this happens, every shell command the Codex model runs fails. As a multi-LLM
+validator/reviewer this is **silent**: Codex returns empty or "blocked / workspace not
+readable" reviews, the structured `--output-last-message` JSON is never produced, the
+Evidence Score fails to parse, and **Codex's vote is dropped while the API call is still
+billed**. A run can report a clean `PASS` that was really decided by the other validators alone.
+
+Diagnose:
+
+```bash
+cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns   # 1 = restricted (will break Codex)
+codex sandbox -c 'sandbox_mode="read-only"' -- ls            # should print a listing, not a bwrap error
+```
+
+Fix (persistent). On a **dedicated build VM** this is the pragmatic option; note it re-enables
+unprivileged user namespaces host-wide (a known local attack surface), so make it a deliberate choice:
+
+```bash
+echo 'kernel.apparmor_restrict_unprivileged_userns = 0' | sudo tee /etc/sysctl.d/99-codex-userns.conf
+sudo sysctl --system
+```
+
+Verify the fix (read-only sandbox should run shell **and** still block writes):
+
+```bash
+codex sandbox -c 'sandbox_mode="read-only"' -- ls            # runs
+codex sandbox -c 'sandbox_mode="read-only"' -- touch X       # "Read-only file system" (good)
+```
+
+This box applied it on 2026-06-28 (`/etc/sysctl.d/99-codex-userns.conf`).
+
 ---
 
 ## 2. Spike Checklist
@@ -416,3 +457,32 @@ The `--trust` flag is automatically included in all headless invocations by the 
 - Do NOT add `--trust` manually when running CLI commands outside the provider harness for testing/debugging
 - Be aware of its security implications: `--trust` allows the CLI to execute actions without confirmation prompts
 - Within the bmad-assist-lite provider, this is safe because the provider controls the subprocess lifecycle, timeout enforcement, and cleanup
+
+### Codex Validators Return Empty / Drop Their Vote
+
+Symptoms (from a parallel/worktree run):
+
+```
+WARNING ...providers.codex: Failed to read structured output from .../codex-review-*.json
+        ([Errno 2] No such file or directory), will use stdout fallback
+WARNING ...validation.evidence_score: Failed to parse Evidence Score from Validator-1:
+        no findings, clean passes, or score found
+```
+
+The Codex validator produced nothing usable, its Evidence Score was dropped, and the phase
+proceeded on the remaining validators — but the Codex API call was still billed. Two distinct
+root causes, both fixed/documented here:
+
+1. **Broken sandbox (host).** Codex's bubblewrap sandbox can't start because unprivileged user
+   namespaces are restricted — see [1.6](#16-enable-unprivileged-user-namespaces-codex-sandbox-requirement).
+   Until the sysctl is set, every shell command Codex runs fails and it returns "blocked" reviews.
+
+2. **`git clean -fdx` wiping the worktree (code, fixed).** The Codex provider used to export
+   `GIT_WORK_TREE`/`GIT_DIR` into the subprocess environment. Those are global to *every* git
+   call Codex makes — including its internal plugin "curated-sync" (`git reset --hard` +
+   `git clean -fdx`) — so that clean ran against the **worktree** and deleted its untracked /
+   ignored files (the `.bmad-assist-lite/cache/` output dir, `_bmad-output/`, potentially `.env`),
+   making the structured-output file vanish mid-run. Fixed in `providers/codex.py` by no longer
+   setting `GIT_WORK_TREE`/`GIT_DIR` (Codex resolves the repo from the subprocess `cwd`). If you
+   see Codex deleting untracked files in a worktree, confirm that env injection has not been
+   reintroduced.

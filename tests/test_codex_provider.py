@@ -170,6 +170,58 @@ class TestInvocation:
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
     @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_sandbox_read_only_when_tools_restricted(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+    ) -> None:
+        """Read-only phases (allowed_tools set) get --sandbox read-only."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
+        process = create_mock_process(stdout_content=stream, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CodexProvider()
+        provider.invoke(
+            "test prompt",
+            allowed_tools=["Read", "Glob", "Grep"],
+            timeout=300,
+        )
+
+        command = mock_popen.call_args[0][0]
+        assert "--sandbox" in command
+        sandbox_idx = command.index("--sandbox")
+        assert command[sandbox_idx + 1] == "read-only"
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_sandbox_workspace_write_when_unrestricted(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+    ) -> None:
+        """Write phases (allowed_tools None) get --sandbox workspace-write."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
+        process = create_mock_process(stdout_content=stream, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CodexProvider()
+        provider.invoke("test prompt", timeout=300)
+
+        command = mock_popen.call_args[0][0]
+        assert "--sandbox" in command
+        sandbox_idx = command.index("--sandbox")
+        assert command[sandbox_idx + 1] == "workspace-write"
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
     def test_model_flag_uses_explicit_model(
         self,
         mock_popen: MagicMock,

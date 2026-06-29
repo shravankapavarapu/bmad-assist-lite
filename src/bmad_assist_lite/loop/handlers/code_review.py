@@ -11,7 +11,7 @@ from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
-from bmad_assist_lite.providers.base import write_progress
+from bmad_assist_lite.providers.base import READ_ONLY_TOOLS, write_progress
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +118,10 @@ class CodeReviewHandler(BaseHandler):
                 loop = asyncio.get_event_loop()
                 timeout = get_phase_timeout(self.config, self.phase_name)
 
-                # Read-only tools: multi-LLM safety constraint
-                read_only_tools = ["Read", "Glob", "Grep", "Bash"]
+                # Read-only tools: multi-LLM safety constraint. Bash is
+                # excluded so reviewers cannot run shell commands (e.g. git)
+                # during parallel review. See READ_ONLY_TOOLS in providers.base.
+                read_only_tools = list(READ_ONLY_TOOLS)
 
                 def _make_invoker(
                     p: Any, m: str, t: int, e: str | None
