@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from bmad_assist_lite.core.exceptions import StateError
+from bmad_assist_lite.core.phase_metrics import phase_metrics_context
 from bmad_assist_lite.core.state import Phase, State
 from bmad_assist_lite.loop.types import PhaseHandler, PhaseResult
 from bmad_assist_lite.providers.base import write_progress
@@ -76,6 +77,10 @@ def execute_phase(state: State) -> PhaseResult:
     """Execute a single workflow phase and return its result.
 
     Never raises exceptions - all errors returned as PhaseResult.fail().
+
+    Per-phase metrics are collected for the duration of the handler and written
+    to a durable record on exit. The duration reported there is the same number
+    logged here, so the record and the log cannot drift apart.
     """
     start_time = time.perf_counter()
 
@@ -89,40 +94,44 @@ def execute_phase(state: State) -> PhaseResult:
 
     logger.info("Starting phase: %s", phase_name)
 
-    try:
-        handler = get_handler(phase)
-    except StateError as e:
+    with phase_metrics_context(story_id=state.current_story, phase=phase_name) as metrics:
+        try:
+            handler = get_handler(phase)
+        except StateError as e:
+            duration_ms = int((time.perf_counter() - start_time) * 1000)
+            metrics.set_duration_ms(duration_ms)
+            logger.error("Phase %s dispatch failed: %s", phase_name, e)
+            result = PhaseResult.fail(str(e))
+            return replace(result, outputs={**result.outputs, "duration_ms": duration_ms})
+
+        try:
+            handler_result = handler(state)
+            if not isinstance(handler_result, PhaseResult):
+                raise TypeError(
+                    f"Handler returned {type(handler_result).__name__}, expected PhaseResult"
+                )
+        except Exception as e:
+            duration_ms = int((time.perf_counter() - start_time) * 1000)
+            metrics.set_duration_ms(duration_ms)
+            logger.error("Phase %s handler failed: %s", phase_name, e, exc_info=True)
+            result = PhaseResult.fail(f"Handler error: {e}")
+            return replace(result, outputs={**result.outputs, "duration_ms": duration_ms})
+
         duration_ms = int((time.perf_counter() - start_time) * 1000)
-        logger.error("Phase %s dispatch failed: %s", phase_name, e)
-        result = PhaseResult.fail(str(e))
-        return replace(result, outputs={**result.outputs, "duration_ms": duration_ms})
+        metrics.set_duration_ms(duration_ms)
+        duration_str = _format_duration(duration_ms)
+        status_icon = "\u2714" if handler_result.success else "\u2718"
+        write_progress(f"  {status_icon} Phase completed in {duration_str}")
 
-    try:
-        handler_result = handler(state)
-        if not isinstance(handler_result, PhaseResult):
-            raise TypeError(
-                f"Handler returned {type(handler_result).__name__}, expected PhaseResult"
-            )
-    except Exception as e:
-        duration_ms = int((time.perf_counter() - start_time) * 1000)
-        logger.error("Phase %s handler failed: %s", phase_name, e, exc_info=True)
-        result = PhaseResult.fail(f"Handler error: {e}")
-        return replace(result, outputs={**result.outputs, "duration_ms": duration_ms})
+        logger.info(
+            "Phase %s completed: success=%s duration=%dms",
+            phase_name,
+            handler_result.success,
+            duration_ms,
+        )
 
-    duration_ms = int((time.perf_counter() - start_time) * 1000)
-    duration_str = _format_duration(duration_ms)
-    status_icon = "\u2714" if handler_result.success else "\u2718"
-    write_progress(f"  {status_icon} Phase completed in {duration_str}")
-
-    logger.info(
-        "Phase %s completed: success=%s duration=%dms",
-        phase_name,
-        handler_result.success,
-        duration_ms,
-    )
-
-    new_outputs = {**handler_result.outputs, "duration_ms": duration_ms}
-    return replace(handler_result, outputs=new_outputs)
+        new_outputs = {**handler_result.outputs, "duration_ms": duration_ms}
+        return replace(handler_result, outputs=new_outputs)
 
 
 def _format_duration(ms: int) -> str:

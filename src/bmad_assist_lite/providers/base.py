@@ -542,27 +542,87 @@ class BaseProvider(ABC):
         collector = ResultCollector()
         command: tuple[str, ...] = (self.provider_name, model or "default")
         start_time = time.monotonic()
+        result: ProviderResult | None = None
+        timed_out = False
 
         try:
-            result = self._do_invoke(
-                prompt,
-                collector=collector,
-                model=model,
-                timeout=resolved_timeout,
-                settings_file=settings_file,
-                cwd=cwd,
-                allowed_tools=allowed_tools,
-                effort=effort,
-                color_index=color_index,
-            )
+            try:
+                result = self._do_invoke(
+                    prompt,
+                    collector=collector,
+                    model=model,
+                    timeout=resolved_timeout,
+                    settings_file=settings_file,
+                    cwd=cwd,
+                    allowed_tools=allowed_tools,
+                    effort=effort,
+                    color_index=color_index,
+                )
+            except TimeoutError:
+                timed_out = True
+                result = self._handle_timeout(
+                    collector, resolved_timeout, model, command, start_time
+                )
             return result
-        except TimeoutError:
-            return self._handle_timeout(collector, resolved_timeout, model, command, start_time)
         finally:
             try:
                 self._cleanup()
             except Exception:
                 logger.warning("_cleanup() raised an exception", exc_info=True)
+            # Hand the call's measurements to whichever phase is open. This is the
+            # one hook that sees every provider call, including the multi-LLM
+            # fan-out, because every provider reaches the CLI through this method.
+            # A raised timeout never builds a ProviderResult, so the flag is taken
+            # from the control flow rather than from the (absent) result — losing
+            # it would let the most expensive phase in a run leave no trace.
+            self._record_call_metrics(
+                model=model or self.default_model,
+                result=result,
+                timed_out=timed_out,
+                start_time=start_time,
+            )
+
+    def _record_call_metrics(
+        self,
+        *,
+        model: str | None,
+        result: "ProviderResult | None",
+        timed_out: bool,
+        start_time: float,
+    ) -> None:
+        """Report this invocation's metrics to the open phase, if any.
+
+        Purely additive instrumentation: it reads the result, never changes it,
+        and swallows its own failures. It runs on every phase's hot path, so a
+        raise here would be able to end a multi-hour run.
+
+        Args:
+            model: Model identifier for the call.
+            result: The provider result, or None when the call raised.
+            timed_out: True when the provider's timeout fired.
+            start_time: Monotonic timestamp taken at the start of invoke().
+
+        """
+        try:
+            from bmad_assist_lite.core.phase_metrics import record_provider_call
+
+            record_provider_call(
+                model=model,
+                duration_ms=(
+                    result.duration_ms
+                    if result is not None
+                    else int((time.monotonic() - start_time) * 1000)
+                ),
+                api_duration_ms=getattr(result, "api_duration_ms", None),
+                input_tokens=getattr(result, "input_tokens", None),
+                output_tokens=getattr(result, "output_tokens", None),
+                cache_read_tokens=getattr(result, "cache_read_tokens", None),
+                cache_creation_tokens=getattr(result, "cache_creation_tokens", None),
+                total_cost_usd=getattr(result, "total_cost_usd", None),
+                timed_out=timed_out or bool(getattr(result, "timed_out", False)),
+            )
+        except Exception:
+            logger.warning("Failed to record provider call metrics", exc_info=True)
 
     @abstractmethod
     def _do_invoke(
