@@ -593,7 +593,18 @@ def self_review_warning(config: Config, phase: str | None = None) -> str | None:
         for mc in config.providers.multi
         if mc.provider == master.provider and mc.model == master.model
     ]
-    if duplicates:
+    # A duplicate is only a self-verification problem when NO independent reviewer exists.
+    # If at least one reviewer differs from the master, the independent check is present and
+    # the duplicate is deliberate model parity (BMAD-METHOD v6.11 asks review subagents to run
+    # at the session's capability) — warning there is alarm fatigue, and a warning that fires
+    # on a good config trains operators to ignore the one that matters. This matches the
+    # docstring's stated contract, which the previous implementation did not honour.
+    independents = [
+        mc
+        for mc in config.providers.multi
+        if not (mc.provider == master.provider and mc.model == master.model)
+    ]
+    if duplicates and not independents:
         return (
             f"{where}`providers.multi` contains a reviewer identical to the master "
             f"({master.provider}/{master.model}), so the model that wrote the work is also "

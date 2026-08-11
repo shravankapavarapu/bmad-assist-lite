@@ -506,3 +506,55 @@ class TestInitTemplateShipsAReviewer:
             if line.strip() and not line.strip().startswith("#")
         ]
         assert not any("codex" in line.lower() for line in active_lines)
+
+class TestSelfReviewWarningDoesNotOverFire:
+    """A duplicate reviewer is only self-verification when NO independent one exists.
+
+    Regression guard. The warning previously fired whenever ANY `providers.multi` entry
+    matched the master, even alongside a genuinely independent reviewer — so a config
+    pairing an independent model with a same-capability duplicate (BMAD-METHOD v6.11 asks
+    review subagents to run at the session's capability) was flagged as a violation.
+
+    That is alarm fatigue: a warning that fires on a good config trains operators to ignore
+    the one that matters. The docstring already promised "Returns None when an independent
+    reviewer is configured"; the implementation did not honour it.
+    """
+
+    def _config(self, multi):
+        from bmad_assist_lite.core.config import load_config
+
+        return load_config(
+            {
+                "providers": {
+                    "master": {"provider": "claude", "model": "claude-opus-5"},
+                    "multi": multi,
+                }
+            }
+        )
+
+    def test_independent_reviewer_alongside_a_duplicate_is_silent(self):
+        from bmad_assist_lite.core.config import self_review_warning
+
+        config = self._config(
+            [
+                {"provider": "claude", "model": "claude-fable-5"},
+                {"provider": "claude", "model": "claude-opus-5"},
+            ]
+        )
+        assert self_review_warning(config) is None
+
+    def test_duplicate_alone_still_warns(self):
+        from bmad_assist_lite.core.config import self_review_warning
+
+        config = self._config([{"provider": "claude", "model": "claude-opus-5"}])
+        warning = self_review_warning(config)
+        assert warning is not None
+        assert "multi" in warning.lower()
+
+    def test_empty_multi_still_warns(self):
+        from bmad_assist_lite.core.config import load_config, self_review_warning
+
+        config = load_config(
+            {"providers": {"master": {"provider": "claude", "model": "claude-opus-5"}}}
+        )
+        assert self_review_warning(config) is not None
