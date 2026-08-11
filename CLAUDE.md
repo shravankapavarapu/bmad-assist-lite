@@ -221,4 +221,10 @@ parallel:
 # Auto-commit story changes after quality gate pass/fail
 auto_commit:
   enabled: true  # default
+
+# Retain forensic artifacts (synthesis-diff-*, qa-failures-*) across story
+# transitions by archiving them into cache/forensics/<story_id>/
+forensics:
+  enabled: true      # false = pre-retention behaviour (artifacts swept with the cache)
+  max_stories: 20    # retention cap; oldest story archives evicted first
 ```
