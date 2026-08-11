@@ -134,6 +134,23 @@ _KNOWN_CLI_PATHS: dict[str, list[Path]] = {
 _GRACE_POLL_INTERVAL: float = 2.0
 
 
+def is_hermetic() -> bool:
+    """Return True when the run must decline the target project's MCP servers.
+
+    Reads ``providers.hermetic``. The read is defensive in the same way
+    :func:`resolve_cli_path`'s config lookup is: a provider may be constructed
+    before any config is loaded (tests, plugin probes), and "no config" means
+    "not hermetic" rather than an error. Never raises.
+    """
+    try:
+        from bmad_assist_lite.core.config import get_config
+
+        return bool(get_config().providers.hermetic)
+    except Exception:
+        logger.debug("No config available for providers.hermetic; treating run as non-hermetic.")
+        return False
+
+
 def resolve_cli_path(cli_name: str) -> str:
     """Resolve the full path to a CLI binary.
 

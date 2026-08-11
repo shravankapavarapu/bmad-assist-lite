@@ -205,6 +205,20 @@ class ProviderConfig(BaseModel):
     phase_models: PhaseModelsConfig | None = Field(
         default=None, description="Per-phase master-model overrides (routable phases only)"
     )
+    hermetic: bool = Field(
+        default=False,
+        description=(
+            "Run without the target project's MCP servers. bmad-assist-lite uses no MCP "
+            "itself, but it invokes provider CLIs in the target project's working "
+            "directory, so the CLI starts whatever that project's .mcp.json declares — "
+            "the documented source of un-reaped server pile-ups and host contention "
+            "during long runs. On Claude this maps to the SDK's strict_mcp_config "
+            "(CLI flag --strict-mcp-config); since mcp_servers is never populated, the "
+            "result is no MCP servers at all. Other providers accept and ignore it. "
+            "Defaults to False: a run that needs MCP tools during dev_story must keep "
+            "today's behaviour unless the operator opts out."
+        ),
+    )
 
 
 class TimeoutsConfig(BaseModel):

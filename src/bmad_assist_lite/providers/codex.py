@@ -28,6 +28,7 @@ from bmad_assist_lite.providers.base import (
     ExitStatus,
     ProviderResult,
     format_tag,
+    is_hermetic,
     resolve_cli_path,
     write_progress,
 )
@@ -312,6 +313,9 @@ class CodexProvider(BaseProvider):
 
         if effort:
             logger.debug("Codex ignores effort=%s (Claude-only feature)", effort)
+
+        if is_hermetic():
+            logger.debug("Codex ignores hermetic=True (Claude-only mechanism)")
 
         effective_model = model or self.default_model or "codex-mini-latest"
 
