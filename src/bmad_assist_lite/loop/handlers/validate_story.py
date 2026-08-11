@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from bmad_assist_lite.core.async_utils import run_async_in_thread
-from bmad_assist_lite.core.config import get_phase_timeout
+from bmad_assist_lite.core.config import get_phase_timeout, self_review_warning
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
@@ -27,6 +27,23 @@ class ValidateStoryHandler(BaseHandler):
     def build_context(self, state: State) -> dict[str, Any]:
         """Build template context for this phase."""
         return self._build_common_context(state)
+
+    def get_allowed_tools(self) -> list[str] | None:
+        """Restrict the master fallback validator to read-only tools.
+
+        The multi path already passes READ_ONLY_TOOLS. A validator that can
+        mutate the workspace is a defect regardless of which model it is, so
+        the empty-multi fallback through BaseHandler.execute() must match it.
+        """
+        return list(READ_ONLY_TOOLS)
+
+    def _warn_if_self_review(self) -> None:
+        """Announce a degraded validator configuration at the point of harm."""
+        warning = self_review_warning(self.config, phase=self.phase_name)
+        if warning is None:
+            return
+        logger.warning("%s", warning)
+        write_progress(f"  WARNING: {warning}")
 
     def _calculate_evidence_aggregate(
         self,
@@ -99,6 +116,7 @@ class ValidateStoryHandler(BaseHandler):
     def execute(self, state: State) -> PhaseResult:
         """Run parallel multi-LLM validation with Evidence Score aggregation."""
         try:
+            self._warn_if_self_review()
             prompt = self.render_prompt(state)
 
             # Get multi-provider configs

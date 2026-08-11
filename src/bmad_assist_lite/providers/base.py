@@ -367,7 +367,25 @@ def validate_settings_file(
 
 @dataclass(frozen=True)
 class ProviderResult:
-    """Result of a CLI provider invocation."""
+    """Result of a CLI provider invocation.
+
+    The trailing metric fields are optional per-call instrumentation. Providers
+    that cannot report a metric leave it ``None`` — never ``0``, which would
+    silently corrupt any aggregate built from these values.
+
+    Attributes:
+        api_duration_ms: Provider-reported API time, distinct from the locally
+            measured wall-clock ``duration_ms``.
+        input_tokens: Uncached prompt tokens consumed by the call. This is the
+            *remainder* after cache hits, not the full prompt size — a total
+            prompt is ``input_tokens + cache_read_tokens + cache_creation_tokens``.
+        output_tokens: Completion tokens produced by the call.
+        cache_read_tokens: Prompt tokens served from the provider's prompt cache.
+        cache_creation_tokens: Prompt tokens written into the provider's prompt
+            cache by this call.
+        total_cost_usd: Provider-reported cost of the call in USD.
+
+    """
 
     stdout: str
     stderr: str
@@ -377,6 +395,12 @@ class ProviderResult:
     command: tuple[str, ...]
     provider_session_id: str | None = None
     timed_out: bool = False
+    api_duration_ms: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    total_cost_usd: float | None = None
 
 
 class BaseProvider(ABC):
@@ -422,6 +446,8 @@ class BaseProvider(ABC):
             settings_file: Optional path to provider settings file.
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Reasoning-effort hint, forwarded to _do_invoke() verbatim.
+                Provider-specific; providers that do not support it ignore it.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
@@ -447,6 +473,7 @@ class BaseProvider(ABC):
                 settings_file=settings_file,
                 cwd=cwd,
                 allowed_tools=allowed_tools,
+                effort=effort,
                 color_index=color_index,
             )
             return result
@@ -469,6 +496,7 @@ class BaseProvider(ABC):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Provider-specific invocation that must call collector.add() as chunks arrive.
@@ -484,6 +512,9 @@ class BaseProvider(ABC):
             settings_file: Optional path to provider settings file.
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Reasoning-effort hint. Provider-specific; ignore if
+                unsupported. Implementations that cannot act on it must still
+                accept the keyword so invoke() can forward it unconditionally.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
