@@ -191,6 +191,29 @@ class AutoCommitConfig(BaseModel):
     enabled: bool = Field(default=True, description="Auto-commit after code_review_synthesis")
 
 
+class ForensicsConfig(BaseModel):
+    """Retention policy for story-scoped forensic artifacts.
+
+    ``synthesis-diff-*`` patches and ``qa-failures-*`` reports are the evidence
+    a data-gated decision about the validation phases needs, but they are
+    written into the story-scoped cache that is wiped on every story
+    transition. When enabled, the transition archives them under
+    ``.bmad-assist-lite/cache/forensics/<story_id>/`` instead of deleting them,
+    keeping at most ``max_stories`` stories' worth.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(
+        default=True, description="Archive forensic artifacts across story transitions"
+    )
+    max_stories: int = Field(
+        default=20,
+        ge=1,
+        description="Retention cap — number of stories kept, oldest evicted first",
+    )
+
+
 class LoopConfig(BaseModel):
     """Loop phase ordering configuration."""
 
@@ -231,6 +254,7 @@ class Config(BaseModel):
         default=None, description="Fallback quality gate commands"
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
+    forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)
     parallel: ParallelConfig | None = Field(
         default=None, description="Parallel story execution configuration"
     )
