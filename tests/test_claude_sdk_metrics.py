@@ -5,6 +5,9 @@ Covers:
 - Cache-read / cache-creation token capture, in both key casings
 - A stream with no ResultMessage leaves the metric fields None (never 0)
 - Malformed ``usage`` keys and values are rejected rather than coerced
+- Booleans are rejected by ``_as_int`` and ``_as_float``, pinned independently
+- ``_as_int``'s type check rejects values ``int()`` would accept ("12", 12.9)
+- Metrics survive the benign "error result: success" escalation
 - Every rejected value is warned about, so no metric goes missing silently
 - One malformed field never discards the others
 - Non-finite costs are rejected
@@ -18,6 +21,7 @@ import dataclasses
 import inspect
 import logging
 import math
+import re
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -81,6 +85,18 @@ async def make_fake_query(messages: list[Any]) -> Any:
     """Async generator yielding the given messages."""
     for msg in messages:
         yield msg
+
+
+async def make_raising_query(messages: list[Any], exc: Exception) -> Any:
+    """Async generator yielding the given messages, then raising ``exc``.
+
+    Models the SDK 0.2.x escalation: the stream delivers a complete turn —
+    assistant text *and* the terminal ``ResultMessage`` — and only then does the
+    read task raise on the non-zero process exit.
+    """
+    for msg in messages:
+        yield msg
+    raise exc
 
 
 def warning_texts(caplog: Any) -> list[str]:
@@ -154,7 +170,12 @@ class TestFullMetricCapture:
         completion = [r for r in caplog.records if "Claude SDK completed" in r.getMessage()]
         assert len(completion) == 1
         message = completion[0].getMessage()
-        assert "duration=" in message and "ms" in message
+        # Anchored on the exact key: a bare ``"duration=" in message`` is also
+        # satisfied by the substring inside ``api_duration=8500ms``, so deleting
+        # the wall-clock field entirely would still pass. The negative lookbehind
+        # makes each field assertable on its own.
+        assert re.search(r"(?<!\w)duration=\d+ms", message), message
+        assert re.search(r"(?<!\w)api_duration=8500ms", message), message
         assert "input_tokens=10" in message
         assert "output_tokens=20" in message
         assert "cache_read_tokens=30" in message
@@ -268,6 +289,240 @@ class TestMalformedUsage:
 
         assert result.input_tokens is None
         assert result.output_tokens is None
+
+
+# ============================================================================
+# TestBooleanRejection — NEG (G4): pins the bool guard in _as_int and _as_float
+# independently, so deleting either one goes RED on its own test
+# ============================================================================
+
+
+class TestBooleanRejection:
+    """``True`` is not a measurement — the bool guards are pinned one per test.
+
+    ``isinstance(True, int)`` is ``True`` in Python, so without the explicit
+    ``isinstance(value, bool)`` rejection a boolean payload is silently counted
+    as **1**: one token, or one dollar. Each guard gets its own test — a single
+    test covering both could stay green with one of them deleted.
+    """
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_bool_token_count_rejected_by_as_int(self, mock_query: MagicMock, caplog: Any) -> None:
+        """``input_tokens: True`` yields None, not a silent count of 1.
+
+        Pins the bool guard in ``_as_int`` alone: only int-typed fields are
+        asserted, so ``_as_float``'s guard cannot satisfy this test.
+        """
+        mock_query.return_value = make_fake_query(
+            [
+                make_msg(["text"]),
+                make_result_message(usage={"input_tokens": True, "output_tokens": False}),
+            ]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="bmad_assist_lite.providers.claude_sdk"):
+            result = ClaudeSDKProvider().invoke("prompt", timeout=300)
+
+        assert result.input_tokens is None
+        assert result.output_tokens is None
+        assert (
+            "Claude SDK metric 'input_tokens' is bool, not an integer; "
+            "it is unavailable for this call." in warning_texts(caplog)
+        )
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_bool_api_duration_rejected_by_as_int(self, mock_query: MagicMock, caplog: Any) -> None:
+        """``duration_api_ms: True`` yields None, not a 1ms API call."""
+        mock_query.return_value = make_fake_query(
+            [make_msg(["text"]), make_result_message(duration_api_ms=True)]  # type: ignore[arg-type]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="bmad_assist_lite.providers.claude_sdk"):
+            result = ClaudeSDKProvider().invoke("prompt", timeout=300)
+
+        assert result.api_duration_ms is None
+        assert (
+            "Claude SDK metric 'duration_api_ms' is bool, not an integer; "
+            "it is unavailable for this call." in warning_texts(caplog)
+        )
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_bool_cost_rejected_by_as_float(self, mock_query: MagicMock, caplog: Any) -> None:
+        """``total_cost_usd: True`` yields None, not a silent $1.00.
+
+        Pins the bool guard in ``_as_float`` alone: ``total_cost_usd`` is the
+        only field asserted and it never reaches ``_as_int``.
+        """
+        mock_query.return_value = make_fake_query(
+            [make_msg(["text"]), make_result_message(total_cost_usd=True)]  # type: ignore[arg-type]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="bmad_assist_lite.providers.claude_sdk"):
+            result = ClaudeSDKProvider().invoke("prompt", timeout=300)
+
+        assert result.total_cost_usd is None
+        assert (
+            "Claude SDK metric 'total_cost_usd' is bool, not numeric; "
+            "it is unavailable for this call." in warning_texts(caplog)
+        )
+
+
+# ============================================================================
+# TestAsIntTypeCheckIsLoadBearing — NEG (G4): distinguishes "rejected by the
+# type check" from "raised and got swallowed by the catch-all"
+# ============================================================================
+
+
+class TestAsIntTypeCheckIsLoadBearing:
+    """``_as_int`` rejects by type, and is not merely backstopped by ``except``.
+
+    ``test_usage_non_numeric_values_yield_none`` cannot tell the two apart: a
+    body mutated to a bare ``int(value)`` raises ``ValueError`` on ``"many"``,
+    which ``_extract_usage_tokens_safe`` converts into the same all-None it
+    asserts. Every case here feeds a value ``int()`` would happily *accept*, and
+    asserts the specific WARNING the type-check path emits — so the only way to
+    pass is for the type check itself to be present.
+    """
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_numeric_string_token_count_rejected(self, mock_query: MagicMock, caplog: Any) -> None:
+        """``"12"`` is rejected even though ``int("12")`` would succeed."""
+        mock_query.return_value = make_fake_query(
+            [
+                make_msg(["text"]),
+                make_result_message(usage={"input_tokens": "12", "output_tokens": 20}),
+            ]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="bmad_assist_lite.providers.claude_sdk"):
+            result = ClaudeSDKProvider().invoke("prompt", timeout=300)
+
+        assert result.input_tokens is None
+        assert result.output_tokens == 20
+        assert (
+            "Claude SDK metric 'input_tokens' is str, not an integer; "
+            "it is unavailable for this call." in warning_texts(caplog)
+        )
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_fractional_float_token_count_rejected_not_truncated(
+        self, mock_query: MagicMock, caplog: Any
+    ) -> None:
+        """``12.9`` is rejected, not truncated to ``12`` by an ``int()`` coercion."""
+        mock_query.return_value = make_fake_query(
+            [
+                make_msg(["text"]),
+                make_result_message(usage={"input_tokens": 10, "output_tokens": 12.9}),
+            ]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="bmad_assist_lite.providers.claude_sdk"):
+            result = ClaudeSDKProvider().invoke("prompt", timeout=300)
+
+        assert result.output_tokens is None
+        assert result.input_tokens == 10
+        assert (
+            "Claude SDK metric 'output_tokens' is float, not an integer; "
+            "it is unavailable for this call." in warning_texts(caplog)
+        )
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_fractional_float_api_duration_rejected_not_truncated(
+        self, mock_query: MagicMock, caplog: Any
+    ) -> None:
+        """A fractional ``duration_api_ms`` is rejected by type, not floored."""
+        mock_query.return_value = make_fake_query(
+            [make_msg(["text"]), make_result_message(duration_api_ms=12.9)]  # type: ignore[arg-type]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="bmad_assist_lite.providers.claude_sdk"):
+            result = ClaudeSDKProvider().invoke("prompt", timeout=300)
+
+        assert result.api_duration_ms is None
+        assert (
+            "Claude SDK metric 'duration_api_ms' is float, not an integer; "
+            "it is unavailable for this call." in warning_texts(caplog)
+        )
+
+
+# ============================================================================
+# TestBenignSuccessKeepsMetrics — NEG (G4): the escape hatch must not drop the
+# ResultMessage. This quirk fires on long/expensive turns — the ones we most
+# want measured.
+# ============================================================================
+
+
+class TestBenignSuccessKeepsMetrics:
+    """A swallowed "error result: success" keeps the metrics the turn produced.
+
+    The existing benign-escalation tests (``test_claude_sdk_timeout.py``) never
+    yield a ``ResultMessage``, so discarding it on this path — ``result_message
+    = None`` in the ``except`` — passes the whole suite while silently dropping
+    every metric for exactly the long, expensive calls that trip the quirk.
+    """
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_metrics_survive_benign_success_escalation(
+        self, mock_query: MagicMock, caplog: Any
+    ) -> None:
+        """Text, then a ResultMessage, then the benign raise — metrics survive."""
+        mock_query.return_value = make_raising_query(
+            [
+                make_msg(["long ", "expensive ", "turn"]),
+                make_result_message(
+                    usage={
+                        "input_tokens": 11,
+                        "output_tokens": 22,
+                        "cache_read_input_tokens": 33,
+                        "cache_creation_input_tokens": 44,
+                    },
+                    total_cost_usd=1.25,
+                    duration_api_ms=930000,
+                    session_id="sess-benign",
+                ),
+            ],
+            Exception("Claude Code returned an error result: success"),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="bmad_assist_lite.providers.claude_sdk"):
+            result = ClaudeSDKProvider().invoke("prompt", timeout=300)
+
+        # The real path was driven, not some other branch.
+        assert any("known CLI/SDK 0.2.x quirk" in text for text in warning_texts(caplog))
+        assert result.stdout == "long expensive turn"
+        assert result.exit_code == 0
+        assert result.timed_out is False
+        # ...and the envelope collected before the raise was not thrown away.
+        assert result.api_duration_ms == 930000
+        assert result.input_tokens == 11
+        assert result.output_tokens == 22
+        assert result.cache_read_tokens == 33
+        assert result.cache_creation_tokens == 44
+        assert result.total_cost_usd == 1.25
+        assert result.provider_session_id == "sess-benign"
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_benign_success_metrics_reach_the_completion_log(
+        self, mock_query: MagicMock, caplog: Any
+    ) -> None:
+        """The metrics captured on the benign path are also logged, not just returned."""
+        mock_query.return_value = make_raising_query(
+            [
+                make_msg(["text"]),
+                make_result_message(usage={"input_tokens": 11, "output_tokens": 22}),
+            ],
+            Exception("Claude Code returned an error result: success"),
+        )
+
+        with caplog.at_level(logging.INFO, logger="bmad_assist_lite.providers.claude_sdk"):
+            ClaudeSDKProvider().invoke("prompt", timeout=300)
+
+        completion = [r for r in caplog.records if "Claude SDK completed" in r.getMessage()]
+        assert len(completion) == 1
+        message = completion[0].getMessage()
+        assert re.search(r"(?<!\w)api_duration=8500ms", message), message
+        assert "input_tokens=11" in message
+        assert "output_tokens=22" in message
 
 
 # ============================================================================
