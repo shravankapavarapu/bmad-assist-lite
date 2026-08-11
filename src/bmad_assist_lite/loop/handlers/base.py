@@ -7,7 +7,7 @@ from typing import Any
 
 from bmad_assist_lite.compiler import compile_workflow
 from bmad_assist_lite.compiler.types import CompilerContext
-from bmad_assist_lite.core.config import Config, get_phase_timeout
+from bmad_assist_lite.core.config import Config, get_phase_timeout, resolve_phase_model
 from bmad_assist_lite.core.exceptions import CompilerError, ConfigError, ProviderExitCodeError
 from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.state import State
@@ -90,9 +90,13 @@ class BaseHandler(ABC):
         provider_name = self.config.providers.master.provider
         return get_provider(provider_name)
 
-    def get_model(self) -> str | None:
-        """Get the model name for provider invocation."""
-        return self.config.providers.master.model
+    def get_model(self, *, model: str | None = None, attempt: int = 1) -> str | None:
+        """Resolve the model for this phase's provider invocation.
+
+        Delegates to the single four-tier resolution point, which refuses to
+        route any phase outside the closed routable set.
+        """
+        return resolve_phase_model(self.config, self.phase_name, override=model, attempt=attempt)
 
     def get_allowed_tools(self) -> list[str] | None:
         """Tool restriction applied to the master invocation.
@@ -104,10 +108,19 @@ class BaseHandler(ABC):
         """
         return None
 
-    def invoke_provider(self, prompt: str) -> ProviderResult:
-        """Invoke the provider with the given prompt."""
+    def invoke_provider(
+        self, prompt: str, *, model: str | None = None, attempt: int = 1
+    ) -> ProviderResult:
+        """Invoke the provider with the given prompt.
+
+        Args:
+            prompt: The compiled prompt to send.
+            model: Per-invocation model override, honoured only for routable phases.
+            attempt: 1-based attempt number; a retry escalates back to the master model.
+
+        """
         provider = self.get_provider()
-        model = self.get_model()
+        model = self.get_model(model=model, attempt=attempt)
         timeout = get_phase_timeout(self.config, self.phase_name)
         allowed_tools = self.get_allowed_tools()
 

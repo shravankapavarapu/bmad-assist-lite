@@ -7,6 +7,7 @@
 
 import copy
 import logging
+import os
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -93,6 +94,106 @@ class CliPathsConfig(BaseModel):
     gemini: str | None = Field(None, description="Absolute path to gemini binary")
 
 
+# ============================================================================
+# Per-phase model routing
+# ============================================================================
+
+# The phases whose master model may be overridden. This set is CLOSED: widening
+# it requires an architecture decision record, because the excluded phases are
+# excluded on doctrine, not on convenience.
+#
+# Review, validation and implementation phases are excluded to preserve model
+# parity — BMAD-METHOD v6.11 mandates that review subagents run at the same
+# model capability as the session that produced the work. Routing a cheaper
+# model into any of them silently degrades the judgement the loop depends on.
+ROUTABLE_PHASES: frozenset[str] = frozenset(
+    {
+        "create_story",
+        "validate_story_synthesis",
+        "retrospective",
+    }
+)
+
+# LLM phases that resolve a model but must never route it: model parity.
+NON_ROUTABLE_LLM_PHASES: frozenset[str] = frozenset(
+    {
+        "validate_story",
+        "dev_story",
+        "code_review",
+        "code_review_synthesis",
+        "fix_quality_gate",
+    }
+)
+
+# Deterministic phases that invoke no LLM at all, so there is no model to route.
+NON_LLM_PHASES: frozenset[str] = frozenset(
+    {
+        "quality_gate",
+        "epic_quality_gate",
+    }
+)
+
+# Every phase this module knows how to classify. A phase absent from this set is
+# a typo in the config rather than a parity violation, and the two are reported
+# differently.
+CLASSIFIED_PHASES: frozenset[str] = ROUTABLE_PHASES | NON_ROUTABLE_LLM_PHASES | NON_LLM_PHASES
+
+PHASE_MODEL_ENV_PREFIX: str = "BMAD_ASSIST_LITE_MODEL_"
+
+
+class PhaseModelsConfig(BaseModel):
+    """Per-phase overrides for the master model.
+
+    One optional field per routable phase, mirroring :class:`TimeoutsConfig`.
+    Omitted phases inherit ``providers.master.model``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    create_story: str | None = None
+    validate_story_synthesis: str | None = None
+    retrospective: str | None = None
+
+    def get_model(
+        self,
+        phase: str,
+        *,
+        override: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str | None:
+        """Resolve the routed model for a phase, or ``None`` to inherit master.
+
+        This is the sole enforcement point for the routable-phase constraint:
+        it returns ``None`` for every phase outside ``ROUTABLE_PHASES``, whatever
+        this config holds and whoever calls it. Callers that never touch
+        ``BaseHandler`` — plugin-supplied phase handlers among them — therefore
+        inherit the constraint instead of escaping it.
+
+        Args:
+            phase: Phase name, with either underscores or hyphens.
+            override: Per-invocation model, outranked only by the environment.
+            env: Environment mapping to read; defaults to ``os.environ``.
+
+        """
+        phase_key = phase.replace("-", "_")
+        if phase_key not in ROUTABLE_PHASES:
+            return None
+
+        environ = os.environ if env is None else env
+        env_model = environ.get(f"{PHASE_MODEL_ENV_PREFIX}{phase_key.upper()}")
+        if env_model:
+            return env_model
+
+        if override is not None:
+            return override
+
+        value: str | None = getattr(self, phase_key, None)
+        return value
+
+
+_EMPTY_PHASE_MODELS = PhaseModelsConfig()
+
+
 class ProviderConfig(BaseModel):
     """Provider configuration section."""
 
@@ -101,6 +202,9 @@ class ProviderConfig(BaseModel):
     master: MasterProviderConfig
     multi: list[MultiProviderConfig] = Field(default_factory=list)
     cli_paths: CliPathsConfig = Field(default_factory=CliPathsConfig)
+    phase_models: PhaseModelsConfig | None = Field(
+        default=None, description="Per-phase master-model overrides (routable phases only)"
+    )
 
 
 class TimeoutsConfig(BaseModel):
@@ -375,16 +479,65 @@ def self_review_warning(config: Config, phase: str | None = None) -> str | None:
     return None
 
 
+def _inspect_phase_model_keys(config_data: dict[str, Any]) -> None:
+    """Classify raw ``providers.phase_models`` keys before the model is built.
+
+    Pydantic drops unknown keys silently, and a key naming a real phase is
+    indistinguishable from a typo once it has been dropped. Reading the raw
+    mapping first keeps the two apart: a key that names no phase at all is a
+    mistake and raises, while a key that names a non-routable phase is a parity
+    violation that warns and is ignored — the resolution point is what enforces
+    the constraint, so a load-time raise would only duplicate it, and it could
+    never see a plugin-registered phase anyway.
+    """
+    providers = config_data.get("providers")
+    if not isinstance(providers, dict):
+        return
+    phase_models = providers.get("phase_models")
+    if not isinstance(phase_models, dict):
+        return
+
+    unknown = [key for key in phase_models if str(key).replace("-", "_") not in CLASSIFIED_PHASES]
+    if unknown:
+        raise ConfigError(
+            f"Unknown phase(s) in providers.phase_models: {', '.join(sorted(map(str, unknown)))}. "
+            f"Valid phases: {', '.join(sorted(CLASSIFIED_PHASES))}."
+        )
+
+    for key in phase_models:
+        phase_key = str(key).replace("-", "_")
+        if phase_key in ROUTABLE_PHASES:
+            continue
+        reason = (
+            "it runs no LLM, so there is no model to route"
+            if phase_key in NON_LLM_PHASES
+            else "a cheaper model there would degrade the judgement the loop depends on"
+        )
+        logger.warning(
+            "providers.phase_models.%s is ignored: `%s` is not routable — %s. It will use "
+            "providers.master.model. The routable set is closed to preserve model parity "
+            "(BMAD-METHOD v6.11); routable phases: %s.",
+            phase_key,
+            phase_key,
+            reason,
+            ", ".join(sorted(ROUTABLE_PHASES)),
+        )
+
+
 def load_config(config_data: dict[str, Any]) -> Config:
     """Load and validate configuration from a dictionary."""
     global _config
     if not isinstance(config_data, dict):
         raise ConfigError(f"config_data must be a dict, got {type(config_data).__name__}")
     try:
+        _inspect_phase_model_keys(config_data)
         _config = Config.model_validate(config_data)
     except ValidationError as e:
         _config = None
         raise ConfigError(f"Configuration validation failed: {e}") from e
+    except ConfigError:
+        _config = None
+        raise
 
     warning = self_review_warning(_config)
     if warning is not None:
@@ -483,6 +636,53 @@ def get_phase_timeout(config: Config, phase: str) -> int:
     if config.timeouts is not None:
         return config.timeouts.get_timeout(phase)
     return config.timeout
+
+
+def resolve_phase_model(
+    config: Config,
+    phase: str,
+    *,
+    override: str | None = None,
+    attempt: int = 1,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Resolve the master model to use for a phase.
+
+    Four tiers, highest first: environment override, per-invocation argument,
+    per-phase config, inherited master model. The first three are gated on the
+    routable-phase membership test inside
+    :meth:`PhaseModelsConfig.get_model`, which is the only place that test
+    decides a model.
+
+    A retry escalates back to the master model, so a route that turns out to be
+    too cheap costs one attempt rather than a stuck phase.
+
+    Args:
+        config: The loaded configuration.
+        phase: Phase name, with either underscores or hyphens.
+        override: Per-invocation model override.
+        attempt: 1-based attempt number; anything above 1 escalates to master.
+        env: Environment mapping to read; defaults to ``os.environ``.
+
+    """
+    master = config.providers.master.model
+    phase_models = config.providers.phase_models or _EMPTY_PHASE_MODELS
+
+    routed = phase_models.get_model(phase, override=override, env=env)
+    if routed is None or routed == master:
+        return master
+
+    if attempt > 1:
+        logger.info(
+            "Phase %s: escalating from routed model %s to master model %s on attempt %d",
+            phase,
+            routed,
+            master,
+            attempt,
+        )
+        return master
+
+    return routed
 
 
 def get_loop_config(config: Config | None = None) -> LoopConfig:
