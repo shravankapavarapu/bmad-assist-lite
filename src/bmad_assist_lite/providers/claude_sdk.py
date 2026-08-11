@@ -29,6 +29,7 @@ from bmad_assist_lite.providers.base import (
     BaseProvider,
     ExitStatus,
     ProviderResult,
+    is_hermetic,
     resolve_cli_path,
     validate_settings_file,
 )
@@ -448,6 +449,13 @@ class ClaudeSDKProvider(BaseProvider):
         if effort:
             extra_args["effort"] = effort
 
+        # Hermetic runs decline the *target project's* MCP servers. The SDK
+        # turns strict_mcp_config into the CLI's --strict-mcp-config, which
+        # admits only servers passed via mcp_servers; that is never populated
+        # here, so the flag resolves to "no MCP servers at all". Left False,
+        # the CLI loads the target's .mcp.json exactly as it does today.
+        hermetic = is_hermetic()
+
         options = ClaudeAgentOptions(
             model=model,
             permission_mode="acceptEdits",
@@ -456,7 +464,10 @@ class ClaudeSDKProvider(BaseProvider):
             tools=allowed_tools if allowed_tools is not None else None,
             extra_args=extra_args,
             cli_path=self._resolve_cli_path(),
+            strict_mcp_config=hermetic,
         )
+        if hermetic:
+            logger.debug("Hermetic run: strict_mcp_config=True, project MCP servers not loaded.")
 
         result_message: ResultMessage | None = None
 

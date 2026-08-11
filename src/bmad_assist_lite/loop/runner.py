@@ -85,6 +85,24 @@ def _budget_exhausted(
     return LoopExitReason.BUDGET_EXHAUSTED
 
 
+def log_run_conditions(config: Config) -> None:
+    """Record the run conditions that change what a timing means.
+
+    A measurement whose conditions are unrecorded is not reproducible. Whether
+    the run declined the target project's MCP servers is exactly such a
+    condition: with them loaded, the CLI starts every server the target's
+    ``.mcp.json`` declares, and their contention lands in the numbers. An
+    operator reading the log afterwards must be able to tell which run they are
+    looking at without re-deriving it from a config file that may since have
+    changed.
+    """
+    logger.info(
+        "Run conditions: hermetic=%s (project MCP servers %s)",
+        config.providers.hermetic,
+        "NOT loaded" if config.providers.hermetic else "loaded as usual",
+    )
+
+
 def _auto_commit_after_synthesis(
     config: Config, project_path: Path, state: State
 ) -> None:
@@ -130,6 +148,8 @@ def run_loop(
         LoopExitReason indicating how the loop ended.
 
     """
+    log_run_conditions(config)
+
     # Get phase configuration
     story_phases = config.loop.story
     epic_teardown = config.loop.epic_teardown
