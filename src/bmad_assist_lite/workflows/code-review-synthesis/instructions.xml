@@ -25,7 +25,7 @@
 
     <step id="4" name="Apply Fixes to Source Code">
       Apply validated fixes using Edit tool.
-      Run pytest after each group of fixes.
+      After each group of fixes, run the tests covering the files that group touched.
       Revert if tests break.
     </step>
 
@@ -34,16 +34,23 @@
       Keep refactoring scope minimal and targeted.
     </step>
 
-    <step id="6" name="Runtime Verification">
+    <step id="6" name="Runtime Verification (Changed Surface)">
       Detect project toolchain from build system files (package.json, pyproject.toml,
-      pom.xml, build.gradle, Cargo.toml, Makefile) and run verification:
+      pom.xml, build.gradle, Cargo.toml, Makefile) and verify the surface you changed.
 
-      1. Lint/Type Check: Run detected lint and typecheck commands
-      2. Build: Verify project builds successfully
-      3. Test Suite: Run full test suite — all tests must pass
-      4. If failures caused by applied fixes: revert that fix, re-run verification
+      You MUST execute these commands yourself. Reporting "requires manual run", or
+      deferring execution to a later stage, is not verification — it is how broken
+      code reaches a green review.
 
-      Record all verification results for the synthesis report.
+      1. Lint/Type Check: run the detected lint and typecheck commands
+      2. Build: verify the project still builds
+      3. Tests: run the tests covering the files you touched — the tests for this task
+         and the tests that exercise the code paths those files changed. Scope the run
+         to that surface; the deterministic quality gate phase owns the whole-suite
+         verdict and runs it immediately after this phase.
+      4. If a failure was caused by an applied fix: revert that fix, re-run
+
+      Record all verification results, including the scope you ran, for the synthesis report.
     </step>
 
     <step id="7" name="Update Story File">
@@ -61,7 +68,8 @@
       - Applied fixes with before/after
       - Rejected findings with rationale
       - Reverted fixes with regression details (if any)
-      - Runtime verification results (Lint, Type Check, Build, Tests: Pass/Fail)
+      - Runtime verification results (Lint, Type Check, Build, Tests: Pass/Fail) and the
+        test scope that was actually executed
       - Final quality assessment
 
       IMPORTANT: Create the {report_dir} directory if it does not exist. Do NOT write reports to any other location.
