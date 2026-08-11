@@ -38,11 +38,17 @@ parallel_app = typer.Typer(
 )
 app.add_typer(parallel_app, name="parallel")
 
-from bmad_assist_lite.parallel.cli import parallel_run, parallel_status, parallel_unblock  # noqa: E402, I001
+from bmad_assist_lite.parallel.cli import (  # noqa: E402, I001
+    parallel_list_parked,
+    parallel_run,
+    parallel_status,
+    parallel_unblock,
+)
 
 parallel_app.command(name="run")(parallel_run)
 parallel_app.command(name="status")(parallel_status)
 parallel_app.command(name="unblock")(parallel_unblock)
+parallel_app.command(name="list-parked")(parallel_list_parked)
 
 
 def _setup_logging(verbosity: int) -> None:

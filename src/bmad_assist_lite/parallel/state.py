@@ -12,19 +12,24 @@ from enum import Enum
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from bmad_assist_lite.parallel.exceptions import ParallelError
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "GateObservation",
+    "MergeAttempt",
+    "MergeTier",
     "ParallelState",
     "StoryState",
     "StoryStatus",
     "create_initial_state",
+    "gate_verdict",
     "get_parallel_state_path",
     "load_state",
+    "merge_verdict",
     "save_state",
 ]
 
@@ -63,6 +68,135 @@ class StoryStatus(Enum):
 
 
 # ============================================================================
+# Merge protocol records
+# ============================================================================
+
+
+class MergeTier(Enum):
+    """Closed ladder of merge attempt tiers.
+
+    A merge escalates through the ladder in order and never skips a rung.
+    ``PARK`` is terminal and is the only way the ladder ends other than a
+    successful land — exhausting it never deletes anything.
+    """
+
+    CLEAN = "clean"
+    AUTO = "auto"
+    AI_RESOLVE = "ai-resolve"
+    PARK = "park"
+
+
+class MergeAttempt(BaseModel):
+    """Immutable record of one rung of the merge ladder.
+
+    This is an *observation*, not a verdict: it says what was tried, on
+    which tree, and what git said.  Whether a story counts as merged is
+    computed at read time by :func:`merge_verdict`, which asks git.
+
+    Attributes:
+        tier: Which rung of the ladder this attempt was.
+        branch: The candidate branch the attempt operated on.
+        commit_sha: Candidate tip at the time of the attempt.
+        tree_sha: Tree the attempt was computed against.  Every verdict on
+            the merge path binds to this, never to ``commit_sha``.
+        integration_sha: Integration head the attempt targeted.
+        outcome: Short machine-readable outcome token.
+        detail: Human-readable explanation.
+        duration_ms: Wall-clock duration of the attempt.
+        recorded_at: Naive-UTC timestamp.
+
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tier: MergeTier
+    branch: str
+    commit_sha: str
+    tree_sha: str
+    integration_sha: str = ""
+    outcome: str
+    detail: str = ""
+    duration_ms: int = 0
+    recorded_at: datetime = Field(default_factory=lambda: _utc_now())
+
+
+class GateObservation(BaseModel):
+    """Immutable record that a gate ran against a specific tree.
+
+    Nothing here is a verdict that outlives the tree it was computed from:
+    the record names the tree, and :func:`gate_verdict` answers "did *this*
+    tree pass?" only for a tree SHA that matches.
+
+    Attributes:
+        tree_sha: ``git rev-parse HEAD^{tree}`` at the moment the gate ran.
+        commit_sha: The commit SHA, kept for human traceability only.
+        directory: Working directory the gate executed in.
+        result: Raw observed result token (``pass`` / ``fail``).
+        classification: Failure classification, when one was made.
+        failed_gates: Names of the gates that did not pass.
+        duration_ms: Wall-clock duration of the gate run.
+        recorded_at: Naive-UTC timestamp.
+
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tree_sha: str
+    commit_sha: str = ""
+    directory: str = ""
+    result: str = "fail"
+    classification: str = ""
+    failed_gates: list[str] = []
+    duration_ms: int = 0
+    recorded_at: datetime = Field(default_factory=lambda: _utc_now())
+
+
+def gate_verdict(observations: list[GateObservation], tree_sha: str) -> str:
+    """Compute the gate verdict for a tree from recorded observations.
+
+    Verdicts are never persisted; they are derived here, at read time, from
+    observations bound to a tree SHA.  A tree with no matching observation
+    is ``unknown`` — not ``pass`` — so a rebase that changes the tree
+    invalidates the previous result automatically.
+
+    Args:
+        observations: Recorded gate observations, in any order.
+        tree_sha: The tree the caller wants a verdict for.
+
+    Returns:
+        ``"pass"``, ``"fail"`` or ``"unknown"``.
+
+    """
+    if not tree_sha:
+        return "unknown"
+    matching = [o for o in observations if o.tree_sha == tree_sha]
+    if not matching:
+        return "unknown"
+    latest = max(matching, key=lambda o: o.recorded_at)
+    return "pass" if latest.result == "pass" else "fail"
+
+
+def merge_verdict(attempts: list[MergeAttempt], landed_tree_sha: str | None) -> str:
+    """Compute whether the recorded attempts amount to a landed merge.
+
+    Args:
+        attempts: Recorded merge attempts, in any order.
+        landed_tree_sha: The tree SHA git currently reports for the
+            integration head's ancestry check, or ``None`` when git says
+            the branch did not land.
+
+    Returns:
+        ``"landed"``, ``"parked"`` or ``"pending"``.
+
+    """
+    if landed_tree_sha:
+        return "landed"
+    if any(a.tier == MergeTier.PARK for a in attempts):
+        return "parked"
+    return "pending"
+
+
+# ============================================================================
 # Story state model
 # ============================================================================
 
@@ -80,6 +214,9 @@ class StoryState(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error: str | None = None
+    merge_attempts: list[MergeAttempt] = []
+    gate_observations: list[GateObservation] = []
+    landed_commit_sha: str | None = None
 
 
 # ============================================================================

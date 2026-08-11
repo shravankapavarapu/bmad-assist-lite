@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.exceptions import ParallelError
+from bmad_assist_lite.parallel.merge_guard import DeletionDecision
 from bmad_assist_lite.parallel.merger import (
     ConflictResolutionResult,
     _build_resolution_prompt,
@@ -17,6 +18,23 @@ from bmad_assist_lite.parallel.merger import (
     merge_story,
     resolve_conflicts,
 )
+
+
+def _cleared_guard(
+    project_root: Path, branch: str, integration_ref: str = "HEAD"
+) -> DeletionDecision:
+    """Stand in for the no-data-loss guard with a cleared verdict.
+
+    These tests are about what happens once the guard has already said the
+    deletion loses nothing; the guard itself is exercised against real git
+    repositories in ``test_merge_protocol.py``.
+    """
+    return DeletionDecision(
+        branch=branch,
+        integration_ref=integration_ref,
+        safe=True,
+        reason="test fixture",
+    )
 
 # ============================================================================
 # Helpers
@@ -1032,6 +1050,10 @@ class TestMergeStoryResolutionCleanup:
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
     @patch("bmad_assist_lite.parallel.merger.resolve_conflicts")
+    @patch(
+        "bmad_assist_lite.parallel.merger.branch_deletion_decision",
+        new=_cleared_guard,
+    )
     @patch("bmad_assist_lite.parallel.merger._run_git")
     def test_worktree_cleanup_after_resolution(
         self,
@@ -1065,7 +1087,7 @@ class TestMergeStoryResolutionCleanup:
 
         merge_story("4.2", tmp_path, resolve=True, story_context="Test")
 
-        mock_cleanup.assert_called_once_with("4.2", tmp_path)
+        mock_cleanup.assert_called_once_with("4.2", tmp_path, integration_ref="HEAD")
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
     @patch("bmad_assist_lite.parallel.merger.resolve_conflicts")
@@ -1119,7 +1141,10 @@ class TestConflictResolutionTimeoutConfig:
     def test_default_timeout_value(self) -> None:
         """Verify default conflict_resolution_timeout is 120."""
         config = ParallelConfig()
-        assert config.conflict_resolution_timeout == 120
+        # ADR-0002: 600s, deliberately not the measured 120s at which
+        # resolution timed out. Resolution runs outside the merge lock,
+        # so a long budget costs latency for that story alone.
+        assert config.conflict_resolution_timeout == 600
 
     def test_custom_timeout_value(self) -> None:
         """Verify custom timeout value is accepted."""

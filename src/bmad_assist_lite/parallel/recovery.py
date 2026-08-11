@@ -13,6 +13,14 @@ import logging
 import re
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict
+
+from bmad_assist_lite.parallel.exceptions import ParallelError
+from bmad_assist_lite.parallel.git_ops import (
+    _run_git,
+    count_unmerged_commits,
+    ref_exists,
+)
 from bmad_assist_lite.parallel.state import (
     STATE_DIR,
     ParallelState,
@@ -22,6 +30,7 @@ from bmad_assist_lite.parallel.state import (
 )
 from bmad_assist_lite.parallel.worktree_manager import (
     WorktreeInfo,
+    _branch_name,
     cleanup_worktree,
     list_worktrees,
     prune_worktrees,
@@ -29,7 +38,7 @@ from bmad_assist_lite.parallel.worktree_manager import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["recover_state"]
+__all__ = ["ReconcileResult", "reconcile_merge_queue", "recover_state"]
 
 # Pattern to validate story ID format after reverse mapping from branch name.
 # Matches numeric IDs like "3.4", "10.1", etc.
@@ -306,3 +315,119 @@ def recover_state(
     )
 
     return recovered_state
+
+
+# ============================================================================
+# Merge-queue reconciliation — git is the authority for "did this land"
+# ============================================================================
+
+
+class ReconcileResult(BaseModel):
+    """Immutable result of reconciling the merge queue against disk and git.
+
+    Attributes:
+        landed: Stories git says are already on the integration head.
+        requeue: Stories whose branch still holds unlanded commits.
+        missing: Stories whose branch no longer exists and which git
+            cannot confirm as landed.
+        integration_ref: The reference reconciliation measured against.
+
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    landed: list[str] = []
+    requeue: list[str] = []
+    missing: list[str] = []
+    integration_ref: str = "HEAD"
+
+
+def _is_ancestor(project_root: Path, commit: str, integration_ref: str) -> bool:
+    """Return ``True`` when ``integration_ref`` can reach ``commit``."""
+    try:
+        result = _run_git(
+            ["merge-base", "--is-ancestor", commit, integration_ref],
+            cwd=project_root,
+            check=False,
+        )
+    except ParallelError:
+        return False
+    return result.returncode == 0
+
+
+def reconcile_merge_queue(
+    state: ParallelState,
+    project_root: Path,
+    integration_ref: str = "HEAD",
+) -> ReconcileResult:
+    """Rebuild the merge queue from disk and git rather than from memory.
+
+    The in-memory queue does not survive a crash, and a persisted "merged"
+    flag is not evidence — only git is.  For every story the run had begun
+    merging, this asks git directly whether its commits are reachable from
+    the integration head:
+
+    - reachable, or the branch is gone and the story was recorded done:
+      it **landed** and is never re-attempted, so restarting is idempotent;
+    - branch present with unmerged commits: it goes back on the queue;
+    - branch gone with no record of landing: reported as ``missing`` so it
+      surfaces rather than being silently dropped.
+
+    Args:
+        state: The persisted parallel state.
+        project_root: Path to the main git repository.
+        integration_ref: The integration head to measure against.
+
+    Returns:
+        A :class:`ReconcileResult`.
+
+    """
+    landed: list[str] = []
+    requeue: list[str] = []
+    missing: list[str] = []
+
+    for story_id, story_state in sorted(state.stories.items()):
+        if story_state.status not in (StoryStatus.MERGING, StoryStatus.DONE):
+            continue
+
+        branch = _branch_name(story_id)
+        if not ref_exists(project_root, branch):
+            # The branch is gone — cleaned up after a successful land, or
+            # lost. Git still decides: if a landed commit was recorded, ask
+            # whether the integration head reaches it.
+            landed_sha = story_state.landed_commit_sha
+            if landed_sha:
+                confirmed = _is_ancestor(project_root, landed_sha, integration_ref)
+            else:
+                # No recorded landing commit: the persisted status is the
+                # only remaining evidence, and it is weaker than git.
+                confirmed = story_state.status == StoryStatus.DONE
+            (landed if confirmed else missing).append(story_id)
+            continue
+
+        try:
+            unmerged = count_unmerged_commits(project_root, branch, integration_ref)
+        except ParallelError:
+            logger.warning(
+                "[ORCHESTRATOR] Cannot reconcile %s: %s is unreadable — re-queueing",
+                story_id,
+                branch,
+            )
+            requeue.append(story_id)
+            continue
+
+        if unmerged == 0:
+            landed.append(story_id)
+        else:
+            requeue.append(story_id)
+
+    logger.info(
+        "[ORCHESTRATOR] Merge-queue reconcile against %s: %d landed, %d re-queued, %d missing",
+        integration_ref,
+        len(landed),
+        len(requeue),
+        len(missing),
+    )
+    return ReconcileResult(
+        landed=landed, requeue=requeue, missing=missing, integration_ref=integration_ref,
+    )
