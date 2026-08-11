@@ -446,6 +446,8 @@ class BaseProvider(ABC):
             settings_file: Optional path to provider settings file.
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Reasoning-effort hint, forwarded to _do_invoke() verbatim.
+                Provider-specific; providers that do not support it ignore it.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
@@ -471,6 +473,7 @@ class BaseProvider(ABC):
                 settings_file=settings_file,
                 cwd=cwd,
                 allowed_tools=allowed_tools,
+                effort=effort,
                 color_index=color_index,
             )
             return result
@@ -493,6 +496,7 @@ class BaseProvider(ABC):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Provider-specific invocation that must call collector.add() as chunks arrive.
@@ -508,6 +512,9 @@ class BaseProvider(ABC):
             settings_file: Optional path to provider settings file.
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Reasoning-effort hint. Provider-specific; ignore if
+                unsupported. Implementations that cannot act on it must still
+                accept the keyword so invoke() can forward it unconditionally.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:

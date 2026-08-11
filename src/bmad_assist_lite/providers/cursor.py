@@ -240,6 +240,7 @@ class CursorProvider(BaseProvider):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Execute Cursor CLI with NDJSON streaming and collector integration.
@@ -257,6 +258,7 @@ class CursorProvider(BaseProvider):
             settings_file: Optional path to provider settings file (unused).
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Accepted for signature compatibility and ignored.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
@@ -268,6 +270,9 @@ class CursorProvider(BaseProvider):
 
         """
         _ = settings_file  # Cursor CLI has no settings file concept
+
+        if effort:
+            logger.debug("Cursor ignores effort=%s (Claude-only feature)", effort)
 
         effective_model = model or self.default_model or DEFAULT_CURSOR_MODEL
 
