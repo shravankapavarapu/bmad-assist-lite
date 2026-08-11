@@ -50,18 +50,20 @@ class TestLoopExitReason:
     """Tests for the LoopExitReason enum."""
 
     def test_loop_exit_reason_values(self):
-        """LoopExitReason has exactly 3 members: COMPLETED, INTERRUPTED, ERROR."""
+        """LoopExitReason has 4 members, one per distinct end of a run."""
         members = list(LoopExitReason)
-        assert len(members) == 3
+        assert len(members) == 4
         assert LoopExitReason.COMPLETED in members
         assert LoopExitReason.INTERRUPTED in members
         assert LoopExitReason.ERROR in members
+        assert LoopExitReason.BUDGET_EXHAUSTED in members
 
     def test_loop_exit_reason_string_values(self):
         """String values match expected lowercase names."""
         assert LoopExitReason.COMPLETED.value == "completed"
         assert LoopExitReason.INTERRUPTED.value == "interrupted"
         assert LoopExitReason.ERROR.value == "error"
+        assert LoopExitReason.BUDGET_EXHAUSTED.value == "budget_exhausted"
 
 
 # ---------------------------------------------------------------------------

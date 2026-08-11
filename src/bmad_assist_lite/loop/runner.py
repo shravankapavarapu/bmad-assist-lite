@@ -1,6 +1,7 @@
 """Main BMAD loop orchestration."""
 
 import logging
+import time
 from pathlib import Path
 
 from bmad_assist_lite.core.config import Config
@@ -55,6 +56,34 @@ def _print_phase_banner(phase_name: str, epic: int | str | None, story: str | No
     write_progress(separator)
 
 
+def _budget_exhausted(
+    *,
+    key: str,
+    configured: str,
+    reached: str,
+    state: State,
+    state_path: Path,
+    project_path: Path,
+) -> LoopExitReason:
+    """Stop the run cleanly on an exhausted budget, saying so on the console.
+
+    An exit code is the machine's answer; these runs are long and unattended,
+    so the log also needs the human's: which budget ran out, that this is a
+    clean stop rather than a crash, and how to continue.
+    """
+    save_state(state, state_path)
+    trigger_sync(state, project_path)
+
+    logger.info("Run budget exhausted: %s=%s (reached %s)", key, configured, reached)
+    write_progress(f"\n{'━' * 45}")
+    write_progress(f"  RUN BUDGET EXHAUSTED: {key} = {configured} (reached {reached})")
+    write_progress("  This is a clean stop, not a failure. State has been saved.")
+    write_progress("  Continue where it stopped:  bmad-assist-lite run --resume")
+    write_progress(f"  Or raise `{key}` in bmad-assist-lite.yaml to go further in one run.")
+    write_progress("━" * 45)
+    return LoopExitReason.BUDGET_EXHAUSTED
+
+
 def _auto_commit_after_synthesis(
     config: Config, project_path: Path, state: State
 ) -> None:
@@ -99,6 +128,13 @@ def run_loop(
     # Get phase configuration
     story_phases = config.loop.story
     epic_teardown = config.loop.epic_teardown
+
+    # Run-level budget (both optional; None = unlimited, today's behaviour)
+    max_stories = config.loop.max_stories
+    max_runtime = config.loop.max_runtime
+    run_started = time.monotonic()
+    stories_started = 0
+    budget_last_story: str | None = None
 
     # Initialize
     reset_shutdown()
@@ -152,6 +188,34 @@ def run_loop(
 
                 if state.current_phase is None:
                     break
+
+                # Wall-clock budget: checked every phase, so it also bounds a
+                # run that ping-pongs inside one story rather than advancing.
+                elapsed = time.monotonic() - run_started
+                if max_runtime is not None and elapsed >= max_runtime:
+                    return _budget_exhausted(
+                        key="loop.max_runtime",
+                        configured=f"{max_runtime:g}s",
+                        reached=f"{elapsed:.1f}s",
+                        state=state,
+                        state_path=state_path,
+                        project_path=project_path,
+                    )
+
+                # Iteration budget: counted as stories entered, checked before
+                # any phase of the new story runs, so the stop is clean.
+                if state.current_story is not None and state.current_story != budget_last_story:
+                    budget_last_story = state.current_story
+                    stories_started += 1
+                    if max_stories is not None and stories_started > max_stories:
+                        return _budget_exhausted(
+                            key="loop.max_stories",
+                            configured=str(max_stories),
+                            reached=f"{stories_started} stories",
+                            state=state,
+                            state_path=state_path,
+                            project_path=project_path,
+                        )
 
                 # Print phase banner (hide story for epic-level teardown phases)
                 current_phase_name = state.current_phase.value if state.current_phase else ""

@@ -184,6 +184,11 @@ loop:
   story: [create_story, validate_story, validate_story_synthesis,
           dev_story, code_review, code_review_synthesis, quality_gate]
   epic_teardown: [epic_quality_gate, retrospective]
+  # Run-level budget — both optional, both default to null (unlimited).
+  # On exhaustion the loop saves state, prints which budget ran out and how to
+  # continue, and exits with code 3 (distinct from 1 = failed, 130 = interrupted).
+  max_stories: null   # stop after N stories; resume with `run --resume`
+  max_runtime: null   # stop after N wall-clock seconds
 
 timeouts:
   default: 300

@@ -19,6 +19,12 @@ import yaml
 
 from bmad_assist_lite import __version__
 
+# Exit codes are a public CLI contract: 0 = completed, 1 = failed,
+# 130 = interrupted, and this one for "a run budget stopped the run cleanly".
+# It is deliberately distinct from 1 so an unattended run's non-zero exit can
+# be told apart from a crash without reading the log.
+BUDGET_EXHAUSTED_EXIT_CODE = 3
+
 app = typer.Typer(
     name="bmad-assist-lite",
     help="Lightweight BMAD methodology automation with Multi-LLM orchestration.",
@@ -267,6 +273,9 @@ def run(
 
         if exit_reason == LoopExitReason.COMPLETED:
             typer.echo("\nEpic teardown completed successfully!")
+        elif exit_reason == LoopExitReason.BUDGET_EXHAUSTED:
+            typer.echo("\nRun budget exhausted — stopped cleanly. Use --resume to continue.")
+            raise typer.Exit(BUDGET_EXHAUSTED_EXIT_CODE)
         elif exit_reason == LoopExitReason.INTERRUPTED:
             typer.echo("\nTeardown interrupted.", err=True)
             raise typer.Exit(130)
@@ -492,6 +501,9 @@ def run(
 
     if exit_reason == LoopExitReason.COMPLETED:
         typer.echo("\nAll epics completed successfully!")
+    elif exit_reason == LoopExitReason.BUDGET_EXHAUSTED:
+        typer.echo("\nRun budget exhausted — stopped cleanly. Use --resume to continue.")
+        raise typer.Exit(BUDGET_EXHAUSTED_EXIT_CODE)
     elif exit_reason == LoopExitReason.INTERRUPTED:
         typer.echo("\nLoop interrupted. Use --resume to continue.")
         raise typer.Exit(130)
@@ -931,3 +943,7 @@ def fetch_docs(
             typer.echo(f"  - {name}")
     else:
         typer.echo("No library documentation found or fetched.")
+
+
+if __name__ == "__main__":
+    app()

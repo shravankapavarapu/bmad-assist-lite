@@ -28,8 +28,13 @@ The three ``archive + cap`` families are story-id-suffixed, so an exact-name
 allowlist can never retain them. They are moved into
 ``cache/forensics/<story_id>/`` on the transition, which keeps the
 "cache is story-scoped" invariant intact while making the evidence durable and
-greppable. Growth is bounded by ``forensics.max_stories``; setting
-``forensics.enabled: false`` restores the pre-retention sweep exactly.
+greppable. Growth is bounded by ``forensics.max_stories``.
+
+``forensics.enabled: false`` stops archiving: from that point on the three
+families are swept with the rest of the story-scoped cache, exactly as they
+were before retention existed. It does **not** delete an archive that already
+exists — ``forensics/`` stays on the keep list whatever the flag says, and no
+setting in this module removes it. Prune it by hand if you want the space back.
 """
 
 import logging
@@ -286,7 +291,10 @@ def clear_story_cache(project_path: Path) -> int:
 
     Forensic artifacts (``synthesis-diff-*``, ``qa-failures-*``) are archived
     into ``cache/forensics/<story_id>/`` rather than deleted, under the
-    ``forensics`` retention cap. See the module docstring's policy table.
+    ``forensics`` retention cap. With ``forensics.enabled: false`` they are
+    swept like any other story-scoped file, but the existing
+    ``cache/forensics/`` archive is left untouched either way.
+    See the module docstring's policy table.
 
     Returns the number of files deleted (archived artifacts are not deletions).
     """
@@ -295,10 +303,13 @@ def clear_story_cache(project_path: Path) -> int:
         return 0
 
     forensics = _resolve_forensics_config()
-    keep_dirs = set(_KEEP_DIRS)
+    # ``forensics/`` is kept unconditionally: the flag gates COLLECTION, not
+    # retention. Gating the keep on the flag would make disabling archiving
+    # rmtree the archive already on disk — a destructive reading of a switch
+    # nobody flips to delete data.
+    keep_dirs = {*_KEEP_DIRS, FORENSICS_DIR_NAME}
     if forensics.enabled:
         _archive_forensic_artifacts(cache_dir, forensics.max_stories)
-        keep_dirs.add(FORENSICS_DIR_NAME)
 
     deleted = 0
     for item in cache_dir.iterdir():
