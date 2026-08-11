@@ -215,10 +215,26 @@ class ForensicsConfig(BaseModel):
 
 
 class LoopConfig(BaseModel):
-    """Loop phase ordering configuration."""
+    """Loop phase ordering and run-level budget configuration.
+
+    Both budgets are optional and default to ``None`` = unlimited, so an
+    existing config keeps today's unbounded behaviour on upgrade. They exist
+    because an unbounded run is expensive: a run that stops on a budget exits
+    with its own code and can be continued with ``--resume``.
+    """
 
     model_config = ConfigDict(frozen=True)
 
+    max_stories: int | None = Field(
+        default=None,
+        ge=1,
+        description="Stop the run after this many stories (None = unlimited)",
+    )
+    max_runtime: float | None = Field(
+        default=None,
+        gt=0,
+        description="Stop the run after this many wall-clock seconds (None = unlimited)",
+    )
     story: list[str] = Field(
         default_factory=lambda: [
             "create_story",

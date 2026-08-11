@@ -3,8 +3,10 @@ instructions: instructions.md
 
 input_file_patterns:
   epics_file:
-    pattern: "**/epic-{epic_num}.md"
+    sharded: "{project-root}/**/epic-{epic_num}.md"
+    pattern: "{project-root}/**/epic-{epic_num}-*.md"
     strategy: FULL_LOAD
+    required: true
 
 variables:
   mission: "Epic {epic_num} retrospective"

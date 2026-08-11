@@ -476,10 +476,10 @@ class TestForensicRetentionCap:
 
 
 class TestForensicRetentionReversal:
-    """``forensics.enabled: false`` restores today's behaviour exactly."""
+    """``forensics.enabled: false`` stops archiving — it never deletes an archive."""
 
     def test_disabled_flag_deletes_forensic_artifacts(self, tmp_path: Path) -> None:
-        """With retention off, the artifacts are swept as before (reversibility)."""
+        """With retention off, un-archived artifacts are swept as before."""
         from bmad_assist_lite.loop.cleanup import FORENSICS_DIR_NAME, clear_story_cache
 
         _load_forensics_config(enabled=False)
@@ -497,6 +497,38 @@ class TestForensicRetentionReversal:
         assert not (cache_dir / FORENSICS_DIR_NAME).exists()
         assert deleted == 4
         assert (cache_dir / "story-queue.yaml").exists()
+
+    def test_disabled_flag_preserves_an_existing_archive(self, tmp_path: Path) -> None:
+        """LOAD-BEARING: turning archiving OFF must not destroy what was archived ON.
+
+        Disabling a retention flag is a request to stop collecting evidence,
+        never a request to delete the evidence already collected.
+        """
+        from bmad_assist_lite.loop.cleanup import FORENSICS_DIR_NAME, clear_story_cache
+
+        _load_forensics_config(enabled=True)
+        cache_dir = _make_cache(tmp_path)
+        forensics_root = cache_dir / FORENSICS_DIR_NAME
+        _write_forensics(cache_dir, "1.1")
+        clear_story_cache(tmp_path)
+        archived_before = sorted(p.name for p in (forensics_root / "1.1").iterdir())
+        assert archived_before, "precondition: story 1.1 was archived"
+
+        _load_forensics_config(enabled=False)
+        new_artifacts = _write_forensics(cache_dir, "1.2")
+        clear_story_cache(tmp_path)
+
+        # The existing archive survives, byte for byte.
+        assert forensics_root.is_dir(), "the archive was destroyed by disabling the flag"
+        assert sorted(p.name for p in (forensics_root / "1.1").iterdir()) == archived_before
+        assert (forensics_root / "1.1" / "qa-failures-1.1.md").read_text(
+            encoding="utf-8"
+        ) == "qa content for 1.1"
+
+        # ...and archiving genuinely stopped: nothing new was added.
+        assert {d.name for d in forensics_root.iterdir()} == {"1.1"}
+        for path in new_artifacts.values():
+            assert not path.exists()
 
     def test_config_without_forensics_section_still_loads(self) -> None:
         """The field is additive — a config with no ``forensics`` key is valid (G8)."""
