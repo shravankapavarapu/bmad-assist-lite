@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from bmad_assist_lite.core.gate_runner import GateClassification, classify_exit_code
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.providers._windows import get_subprocess_kwargs, terminate_process
 
@@ -28,6 +29,11 @@ class BootstrapResult(BaseModel):
     Immutable result object communicating success/failure of bootstrap
     phases. This is the primary error communication mechanism — exceptions
     are not used for expected bootstrap failures.
+
+    ``classification`` uses the tool's single failure vocabulary (see
+    ``core.gate_runner``). Copy and setup failures are environment failures by
+    definition; a *validation* command runs project code and is classified from
+    its exit code, so a real code failure is never mislabelled ``env``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -36,6 +42,7 @@ class BootstrapResult(BaseModel):
     failed_phase: Literal["copy", "setup", "validation"] | None = None
     error_message: str | None = None
     output: str = ""
+    classification: str | None = None
 
 
 def copy_files_to_worktree(
@@ -76,6 +83,7 @@ def copy_files_to_worktree(
                     failed_phase="copy",
                     error_message=msg,
                     output="\n".join(output_lines),
+                    classification=GateClassification.ENV.value,
                 )
             output_lines.append(f"WARNING: {msg}")
             continue
@@ -95,6 +103,7 @@ def copy_files_to_worktree(
                     failed_phase="copy",
                     error_message=msg,
                     output="\n".join(output_lines),
+                    classification=GateClassification.ENV.value,
                 )
             output_lines.append(f"WARNING: {msg}")
             continue
@@ -111,8 +120,13 @@ def copy_files_to_worktree(
                     failed_phase="copy",
                     error_message=msg,
                     output="\n".join(output_lines),
+                    classification=GateClassification.ENV.value,
                 )
             output_lines.append(f"WARNING: {msg}")
+            continue
+
+        if source == destination:
+            logger.debug("[BOOTSTRAP] Copy source is its own destination: %s", source)
             continue
 
         if not source.exists():
@@ -124,6 +138,7 @@ def copy_files_to_worktree(
                     failed_phase="copy",
                     error_message=msg,
                     output="\n".join(output_lines),
+                    classification=GateClassification.ENV.value,
                 )
             logger.warning(msg)
             output_lines.append(f"WARNING: {msg}")
@@ -150,6 +165,7 @@ def copy_files_to_worktree(
                     failed_phase="copy",
                     error_message=msg,
                     output="\n".join(output_lines),
+                    classification=GateClassification.ENV.value,
                 )
             output_lines.append(f"WARNING: {msg}")
             continue
@@ -249,6 +265,7 @@ def run_setup_commands(
                 failed_phase="setup",
                 error_message=msg,
                 output="\n".join(output_lines),
+                classification=GateClassification.ENV.value,
             )
 
         if stdout:
@@ -266,6 +283,7 @@ def run_setup_commands(
                 failed_phase="setup",
                 error_message=msg,
                 output="\n".join(output_lines),
+                classification=GateClassification.ENV.value,
             )
 
         logger.info("[BOOTSTRAP] Setup command %d/%d succeeded", i + 1, len(commands))
@@ -330,6 +348,7 @@ def run_validation_command(
             failed_phase="validation",
             error_message=msg,
             output="\n".join(timeout_output),
+            classification=GateClassification.REAL.value,
         )
 
     output_parts: list[str] = []
@@ -349,6 +368,7 @@ def run_validation_command(
             failed_phase="validation",
             error_message=msg,
             output=output,
+            classification=classify_exit_code(process.returncode).value,
         )
 
     logger.info("[BOOTSTRAP] Validation command succeeded")
@@ -418,6 +438,7 @@ def bootstrap_worktree(
                 failed_phase=copy_result.failed_phase,
                 error_message=copy_result.error_message,
                 output="\n".join(accumulated_output),
+                classification=copy_result.classification,
             )
 
     # Phase 2: Setup commands
@@ -436,6 +457,7 @@ def bootstrap_worktree(
                 failed_phase=setup_result.failed_phase,
                 error_message=setup_result.error_message,
                 output="\n".join(accumulated_output),
+                classification=setup_result.classification,
             )
 
     # Phase 3: Validation (if enabled)
@@ -454,6 +476,7 @@ def bootstrap_worktree(
                 failed_phase=validation_result.failed_phase,
                 error_message=validation_result.error_message,
                 output="\n".join(accumulated_output),
+                classification=validation_result.classification,
             )
 
     logger.info("[BOOTSTRAP] Worktree bootstrap completed successfully")

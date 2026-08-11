@@ -17,11 +17,12 @@ from pathlib import Path
 from subprocess import DEVNULL, PIPE, Popen, TimeoutExpired
 from typing import Any
 
-from bmad_assist_lite.core.exceptions import ProviderError
+from bmad_assist_lite.core.exceptions import ProviderError, ProviderExitCodeError
 from bmad_assist_lite.providers._windows import get_subprocess_kwargs, terminate_process
 from bmad_assist_lite.providers.base import (
     COMMON_TOOL_NAMES,
     BaseProvider,
+    ExitStatus,
     ProviderResult,
     format_tag,
     resolve_cli_path,
@@ -536,9 +537,13 @@ class CursorProvider(BaseProvider):
                 stderr_truncated = "..." + stderr_content[
                     -STDERR_TRUNCATE_LENGTH:
                 ].strip()
-            raise ProviderError(
+            raise ProviderExitCodeError(
                 f"Cursor CLI failed with exit code {returncode}, "
-                f"no result event received: {stderr_truncated}"
+                f"no result event received: {stderr_truncated}",
+                exit_code=returncode,
+                exit_status=ExitStatus.from_code(returncode),
+                stderr=stderr_content,
+                command=tuple(command),
             )
 
         # Zero exit but no result event

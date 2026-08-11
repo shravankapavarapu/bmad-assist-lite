@@ -7,8 +7,9 @@ failed QA during the sprint, reports them and exits.
 import logging
 from pathlib import Path
 
-from bmad_assist_lite.core.command_runner import CommandResult, clean_test_output, run_command
+from bmad_assist_lite.core.command_runner import clean_test_output
 from bmad_assist_lite.core.config import Config
+from bmad_assist_lite.core.gate_runner import GateCommand, GateOutcome, GateRunResult, run_gates
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.core.toolchain import ToolchainCommands, detect_toolchain
 from bmad_assist_lite.loop.types import PhaseResult
@@ -46,7 +47,7 @@ class EpicQualityGateHandler:
     def _write_report(
         self,
         state: State,
-        results: list[tuple[str, CommandResult]],
+        run: GateRunResult,
     ) -> Path:
         """Write epic QA report to cache directory."""
         cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
@@ -57,13 +58,15 @@ class EpicQualityGateHandler:
 
         lines = [f"# Epic {epic_num} Quality Gate Report\n"]
 
-        for name, result in results:
-            status = "PASS" if result.success else "FAIL"
-            lines.append(f"\n## {name}: {status}\n")
-            lines.append(f"**Command:** `{result.command}`\n")
-            lines.append(f"**Exit Code:** {result.exit_code}\n")
-            if not result.success:
-                raw_output = (result.stdout + "\n" + result.stderr).strip()
+        for outcome in run.outcomes:
+            lines.append(f"\n## {outcome.name}: {outcome.status_label}\n")
+            lines.append(f"**Command:** `{outcome.command}`\n")
+            lines.append(f"**Exit Code:** {outcome.exit_code}\n")
+            if not outcome.passed:
+                lines.append(
+                    f"**Classification:** {run.classification_label(outcome)}\n"
+                )
+                raw_output = (outcome.stdout + "\n" + outcome.stderr).strip()
                 output = clean_test_output(raw_output)
                 lines.append(f"**Output:**\n```\n{output}\n```\n")
 
@@ -74,6 +77,14 @@ class EpicQualityGateHandler:
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
         return report_path
+
+    @staticmethod
+    def _describe(run: GateRunResult, outcome: GateOutcome) -> str:
+        """Name a failing gate, its classification and the command that failed."""
+        return (
+            f"{outcome.name} [{run.classification_label(outcome)}] "
+            f"command: {outcome.command}"
+        )
 
     def execute(self, state: State) -> PhaseResult:
         """Run project-wide quality checks."""
@@ -90,23 +101,16 @@ class EpicQualityGateHandler:
         if tc.test:
             command_list.append(("Tests", tc.test))
 
-        results: list[tuple[str, CommandResult]] = []
-        failures: list[str] = []
-
-        for name, cmd in command_list:
-            write_progress(f"    Running: {cmd}")
-            cmd_result = run_command(cmd, self.project_path, timeout=timeout)
-            results.append((name, cmd_result))
-
-            icon = "\u2714" if cmd_result.success else "\u2718"
-            status = "PASS" if cmd_result.success else "FAIL"
-            write_progress(f"    {icon} {name}: {status}")
-
-            if not cmd_result.success:
-                failures.append(name)
+        run = run_gates(
+            [GateCommand(name=name, command=cmd) for name, cmd in command_list],
+            self.project_path,
+            timeout=timeout,
+            label=f"epic:{state.current_epic or '?'}",
+        )
+        failures: list[str] = [self._describe(run, o) for o in run.failures]
 
         # Write report
-        report_path = self._write_report(state, results)
+        report_path = self._write_report(state, run)
 
         # Check for failed QA stories
         if state.failed_qa_stories:
@@ -120,7 +124,7 @@ class EpicQualityGateHandler:
             return PhaseResult.fail(msg)
 
         if failures:
-            failed_gates = ", ".join(failures)
+            failed_gates = "; ".join(failures)
             msg = (
                 f"Epic quality gates failed: [{failed_gates}]. "
                 f"Report: {report_path}. "

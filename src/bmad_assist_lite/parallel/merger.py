@@ -37,7 +37,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
-from bmad_assist_lite.core.command_runner import clean_test_output, run_command
+from bmad_assist_lite.core.command_runner import clean_test_output
+from bmad_assist_lite.core.gate_runner import (
+    GateClassification,
+    GateCommand,
+    make_base_bootstrap,
+    run_gates,
+)
 from bmad_assist_lite.core.quality_gates import QualityGateEntry
 from bmad_assist_lite.core.toolchain import detect_toolchain
 from bmad_assist_lite.parallel.exceptions import ParallelError
@@ -74,6 +80,8 @@ class GateResult(BaseModel):
         stdout: Captured standard output.
         stderr: Captured standard error.
         duration_ms: Wall-clock execution time in milliseconds.
+        classification: Env-vs-real classification from the shared gate runner
+            (``real``, ``env`` or ``env-blocked``). Empty when the gate passed.
 
     """
 
@@ -86,6 +94,12 @@ class GateResult(BaseModel):
     stdout: str
     stderr: str
     duration_ms: int
+    classification: str = ""
+
+    @property
+    def status_label(self) -> str:
+        """Return ``PASS`` or ``FAIL`` \u2014 never ``unknown``."""
+        return "PASS" if self.passed else "FAIL"
 
 
 class PostMergeQGResult(BaseModel):
@@ -96,6 +110,13 @@ class PostMergeQGResult(BaseModel):
         story_id: The story identifier the QG ran for.
         gate_results: Per-gate execution results.
         duration_ms: Total wall-clock time across all gates.
+        env_blocked: ``True`` when the run ended blocked on the environment
+            rather than on the code.
+        classification: Overall ``real``/``env`` classification, or ``None``
+            when nothing failed.
+        failure_reason: Why the run failed when no gate command ever ran.
+            Never empty on a failed run \u2014 that emptiness is what produced
+            "failed gates: unknown".
 
     """
 
@@ -105,6 +126,9 @@ class PostMergeQGResult(BaseModel):
     story_id: str
     gate_results: list[GateResult] = []
     duration_ms: int = 0
+    env_blocked: bool = False
+    classification: str | None = None
+    failure_reason: str = ""
 
 
 class MergeResult(BaseModel):
@@ -833,36 +857,58 @@ def run_post_merge_qg(
     if config is not None and config.quality_gate is not None:
         command_timeout = config.quality_gate.command_timeout
 
-    gate_results: list[GateResult] = []
-    for entry in commands:
-        logger.info("%s Running: %s", tag, entry.command)
-        cmd_result = run_command(entry.command, project_root, timeout=command_timeout)
-
-        gate = GateResult(
-            name=entry.name,
-            command=entry.command,
-            passed=cmd_result.success,
-            exit_code=cmd_result.exit_code,
-            stdout=cmd_result.stdout,
-            stderr=cmd_result.stderr,
-            duration_ms=cmd_result.duration_ms,
-        )
-        gate_results.append(gate)
-
-        icon = "\u2714" if gate.passed else "\u2718"
-        logger.info("%s %s %s: %s", tag, icon, gate.name, "PASS" if gate.passed else "FAIL")
-
-    all_passed = all(g.passed for g in gate_results)
-    total_duration = sum(g.duration_ms for g in gate_results)
-
-    result = PostMergeQGResult(
-        all_passed=all_passed,
-        story_id=story_id,
-        gate_results=gate_results,
-        duration_ms=total_duration,
+    # The merge target was never bootstrapped before its gates ran — the verified
+    # root cause of a post-merge gate failing for an environment reason and being
+    # reported as a code failure. Reuses the worktree bootstrap pipeline.
+    run = run_gates(
+        [GateCommand(name=e.name, command=e.command) for e in commands],
+        project_root,
+        timeout=command_timeout,
+        label=f"post-merge:{story_id}",
+        bootstrap=make_base_bootstrap(project_root, config),
+        bootstrap_first=True,
+        report=False,
     )
 
-    if not all_passed:
+    gate_results: list[GateResult] = [
+        GateResult(
+            name=o.name,
+            command=o.command,
+            passed=o.passed,
+            exit_code=o.exit_code,
+            stdout=o.stdout,
+            stderr=o.stderr,
+            duration_ms=o.duration_ms,
+            classification=run.classification_label(o),
+        )
+        for o in run.outcomes
+    ]
+    for gate in gate_results:
+        icon = "\u2714" if gate.passed else "\u2718"
+        logger.info(
+            "%s %s %s: %s [%s] command: %s",
+            tag,
+            icon,
+            gate.name,
+            gate.status_label,
+            gate.classification,
+            gate.command,
+        )
+
+    result = PostMergeQGResult(
+        all_passed=run.all_passed,
+        story_id=story_id,
+        gate_results=gate_results,
+        duration_ms=run.duration_ms,
+        env_blocked=run.env_blocked,
+        classification=(
+            run.overall_classification.value
+            if run.overall_classification is not None
+            else None
+        ),
+    )
+
+    if not result.all_passed:
         try:
             _write_post_merge_failure_report(story_id, project_root, result)
         except OSError:
@@ -871,6 +917,36 @@ def run_post_merge_qg(
             )
 
     return result
+
+
+
+def _assert_fix_routable(qg_result: PostMergeQGResult) -> bool:
+    """Return True when a failed post-merge gate may reach the LLM fixer.
+
+    Runtime invariant, asserted where the routing decision is made rather than only
+    proven statically: an ``env``-classified failure is never handed to the fixer,
+    but it is always reported.
+
+    Args:
+        qg_result: The failed post-merge quality gate result.
+
+    Returns:
+        ``True`` when the failure is a real code failure.
+
+    """
+    if qg_result.classification == GateClassification.ENV.value or qg_result.env_blocked:
+        logger.warning(
+            "[QG|post-merge|%s] env-blocked \u2014 not routed to the fixer: %s",
+            qg_result.story_id,
+            "; ".join(
+                f"{g.name} [{g.classification}] command: {g.command}"
+                for g in qg_result.gate_results
+                if not g.passed
+            )
+            or qg_result.failure_reason,
+        )
+        return False
+    return True
 
 
 # ============================================================================
@@ -940,7 +1016,9 @@ def run_post_merge_fix(
     parts = story_id.split(".")
     if len(parts) != 2:  # noqa: PLR2004
         logger.error("%s Cannot parse story_id %r into epic.story", tag, story_id)
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason=f"cannot parse story_id {story_id!r} into epic.story"
+        )
     epic_num, story_num = parts[0], parts[1]
 
     # ------------------------------------------------------------------
@@ -989,7 +1067,9 @@ def run_post_merge_fix(
         )
         kill_process(proc)
         proc.wait()
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason=f"fix subprocess timed out after {timeout}s"
+        )
     finally:
         if proc is not None and proc.poll() is None:
             kill_process(proc)
@@ -1002,7 +1082,9 @@ def run_post_merge_fix(
         logger.error(
             "%s Fix subprocess failed (rc=%d)", tag, proc.returncode,
         )
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason=f"fix subprocess failed (rc={proc.returncode})"
+        )
 
     logger.info("%s Fix subprocess completed successfully", tag)
 
@@ -1017,7 +1099,9 @@ def run_post_merge_fix(
             "%s Fix subprocess produced no changes — treating as failed attempt",
             tag,
         )
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason="fix subprocess produced no changes"
+        )
 
     commit_msg = f"fix: post-merge integration fix for story {story_id}"
     try:
@@ -1026,7 +1110,9 @@ def run_post_merge_fix(
         logger.info("%s Committed fix: %s", tag, commit_msg)
     except ParallelError as exc:
         logger.error("%s Git commit failed: %s", tag, exc)
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason=f"git commit of the fix failed: {exc}"
+        )
 
     # ------------------------------------------------------------------
     # Step 5: Re-run quality gate to verify fix
@@ -1267,6 +1353,11 @@ class MergeQueue:
                     result.story_id, self._project_root, self._done_ids,
                 )
                 self._done_ids.add(result.story_id)
+            return result
+
+        # An environment failure has no code for the fixer to fix. Routing is
+        # downgraded; visibility is not — the failure is still reported.
+        if not _assert_fix_routable(result.qg_result):
             return result
 
         # Determine max retries

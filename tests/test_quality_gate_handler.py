@@ -52,7 +52,7 @@ class TestQualityGateHandler:
         state = _make_state()
 
         with patch(
-            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            "bmad_assist_lite.core.gate_runner.run_command",
             return_value=_ok_result(),
         ):
             result = handler.execute(state)
@@ -69,7 +69,7 @@ class TestQualityGateHandler:
         state = _make_state(retry=0)
 
         with patch(
-            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            "bmad_assist_lite.core.gate_runner.run_command",
             return_value=_fail_result(),
         ):
             result = handler.execute(state)
@@ -86,7 +86,7 @@ class TestQualityGateHandler:
         state = _make_state(retry=1)
 
         with patch(
-            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            "bmad_assist_lite.core.gate_runner.run_command",
             return_value=_fail_result(),
         ):
             result = handler.execute(state)
@@ -103,7 +103,7 @@ class TestQualityGateHandler:
         state = _make_state(retry=2)
 
         with patch(
-            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            "bmad_assist_lite.core.gate_runner.run_command",
             return_value=_fail_result(),
         ):
             result = handler.execute(state)
@@ -120,7 +120,7 @@ class TestQualityGateHandler:
         state = _make_state(retry=1)
 
         with patch(
-            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            "bmad_assist_lite.core.gate_runner.run_command",
             return_value=_fail_result(),
         ):
             result = handler.execute(state)
@@ -137,7 +137,7 @@ class TestQualityGateHandler:
         state = _make_state(story="1.2")
 
         with patch(
-            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            "bmad_assist_lite.core.gate_runner.run_command",
             return_value=_fail_result("pytest"),
         ):
             handler.execute(state)
@@ -146,7 +146,9 @@ class TestQualityGateHandler:
         assert report.exists()
         content = report.read_text(encoding="utf-8")
         assert "Quality Gate Failures" in content
-        assert "pytest" in content
+        # The report names the DECLARED gate command, matching the console summary.
+        assert "echo fail" in content
+        assert "**Classification:** real" in content
 
     def test_no_commands_passes(self, tmp_path):
         """No quality gate commands found results in pass."""
@@ -180,7 +182,7 @@ class TestQualityGateHandler:
         state = _make_state()
 
         with patch(
-            "bmad_assist_lite.loop.handlers.quality_gate.run_command",
+            "bmad_assist_lite.core.gate_runner.run_command",
             return_value=_ok_result("echo ok"),
         ):
             result = handler.execute(state)

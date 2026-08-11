@@ -315,7 +315,7 @@ class TestResolveQGCommands:
 class TestRunPostMergeQG:
     """Test run_post_merge_qg() function."""
 
-    @patch("bmad_assist_lite.parallel.merger.run_command")
+    @patch("bmad_assist_lite.core.gate_runner.run_command")
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
     def test_all_gates_pass(
         self,
@@ -339,10 +339,11 @@ class TestRunPostMergeQG:
         assert len(result.gate_results) == 2
         assert result.gate_results[0].passed is True
         assert result.gate_results[1].passed is True
-        assert result.duration_ms == 300
+        assert sum(g.duration_ms for g in result.gate_results) == 300
+        assert result.duration_ms >= 0
 
     @patch("bmad_assist_lite.parallel.merger._write_post_merge_failure_report")
-    @patch("bmad_assist_lite.parallel.merger.run_command")
+    @patch("bmad_assist_lite.core.gate_runner.run_command")
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
     def test_some_gates_fail(
         self,
@@ -375,7 +376,8 @@ class TestRunPostMergeQG:
         assert result.gate_results[1].exit_code == 1
         assert result.gate_results[1].stdout == "FAILED test_foo.py"
         assert result.gate_results[1].stderr == "1 failed"
-        assert result.duration_ms == 600
+        assert sum(g.duration_ms for g in result.gate_results) == 600
+        assert result.duration_ms >= 0
         mock_report.assert_called_once()
 
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
@@ -392,7 +394,7 @@ class TestRunPostMergeQG:
         assert result.gate_results == []
         assert result.duration_ms == 0
 
-    @patch("bmad_assist_lite.parallel.merger.run_command")
+    @patch("bmad_assist_lite.core.gate_runner.run_command")
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
     def test_uses_config_command_timeout(
         self,
@@ -410,7 +412,7 @@ class TestRunPostMergeQG:
 
         mock_run.assert_called_once_with("ruff check", Path("/repo"), timeout=60)
 
-    @patch("bmad_assist_lite.parallel.merger.run_command")
+    @patch("bmad_assist_lite.core.gate_runner.run_command")
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
     def test_uses_default_command_timeout(
         self,
@@ -428,7 +430,7 @@ class TestRunPostMergeQG:
         mock_run.assert_called_once_with("ruff check", Path("/repo"), timeout=120)
 
     @patch("bmad_assist_lite.parallel.merger._write_post_merge_failure_report")
-    @patch("bmad_assist_lite.parallel.merger.run_command")
+    @patch("bmad_assist_lite.core.gate_runner.run_command")
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
     def test_command_not_found_captured_as_fail(
         self,
@@ -455,7 +457,7 @@ class TestRunPostMergeQG:
         assert result.gate_results[0].passed is False
 
     @patch("bmad_assist_lite.parallel.merger._write_post_merge_failure_report")
-    @patch("bmad_assist_lite.parallel.merger.run_command")
+    @patch("bmad_assist_lite.core.gate_runner.run_command")
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
     def test_command_timeout_captured_as_fail(
         self,
@@ -482,7 +484,7 @@ class TestRunPostMergeQG:
         assert result.gate_results[0].passed is False
 
     @patch("bmad_assist_lite.parallel.merger._write_post_merge_failure_report")
-    @patch("bmad_assist_lite.parallel.merger.run_command")
+    @patch("bmad_assist_lite.core.gate_runner.run_command")
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
     def test_failure_report_write_error_is_nonfatal(
         self,
@@ -504,7 +506,7 @@ class TestRunPostMergeQG:
         assert result.all_passed is False
         assert len(result.gate_results) == 1
 
-    @patch("bmad_assist_lite.parallel.merger.run_command")
+    @patch("bmad_assist_lite.core.gate_runner.run_command")
     @patch("bmad_assist_lite.parallel.merger._resolve_qg_commands")
     def test_log_output_uses_prefix(
         self,

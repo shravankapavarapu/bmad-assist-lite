@@ -294,6 +294,20 @@ def start_stream_reader_threads(
     return stdout_thread, stderr_thread
 
 
+WINDOWS_COMMAND_NOT_FOUND: int = 9009
+"""``cmd.exe`` exit code for "is not recognized as an internal or external command".
+
+126/127 are *shell* conventions and are absent from ``cmd.exe``, which is the default
+shell for every ``shell=True`` subprocess on this tool's primary platform. Without this
+code a missing command on Windows classifies as a generic error.
+"""
+
+
+def _is_windows_platform(platform: str | None) -> bool:
+    """Return True when the given (or current) platform string is Windows."""
+    return (platform if platform is not None else sys.platform).startswith("win")
+
+
 class ExitStatus(Enum):
     """Semantic classification of process exit codes."""
 
@@ -306,25 +320,45 @@ class ExitStatus(Enum):
     SIGNAL = auto()
 
     @classmethod
-    def from_code(cls, exit_code: int) -> "ExitStatus":
-        """Classify a process exit code into a semantic status."""
+    def from_code(cls, exit_code: int, platform: str | None = None) -> "ExitStatus":
+        """Classify a process exit code into a semantic status.
+
+        The mapping is platform-aware: ``cmd.exe`` signals command-not-found with
+        9009 rather than 127, and Windows has no wait-status signal encoding, so the
+        ``> 128`` signal rule is POSIX-only. 126/127 stay mapped on every platform
+        because :func:`bmad_assist_lite.core.command_runner.run_command` synthesises
+        127 itself for ``FileNotFoundError`` regardless of platform.
+
+        Args:
+            exit_code: Raw process exit code.
+            platform: Platform string to classify for; defaults to ``sys.platform``.
+
+        Returns:
+            The semantic :class:`ExitStatus` for the code on that platform.
+
+        """
+        is_windows = _is_windows_platform(platform)
         if exit_code == 0:
             return cls.SUCCESS
         if exit_code == 2:
             return cls.MISUSE
+        if is_windows and exit_code == WINDOWS_COMMAND_NOT_FOUND:
+            return cls.NOT_FOUND
         if exit_code == 126:
             return cls.CANNOT_EXECUTE
         if exit_code == 127:
             return cls.NOT_FOUND
         if exit_code == 128:
             return cls.INVALID_EXIT
-        if exit_code > 128:
+        if not is_windows and exit_code > 128:
             return cls.SIGNAL
         return cls.ERROR
 
     @staticmethod
-    def get_signal_number(exit_code: int) -> int | None:
+    def get_signal_number(exit_code: int, platform: str | None = None) -> int | None:
         """Return the signal number from exit code, or None if not signal."""
+        if _is_windows_platform(platform):
+            return None
         if exit_code > 128:
             return exit_code - 128
         return None

@@ -23,10 +23,11 @@ from claude_agent_sdk import (
     query,
 )
 
-from bmad_assist_lite.core.exceptions import ProviderError
+from bmad_assist_lite.core.exceptions import ProviderError, ProviderExitCodeError
 from bmad_assist_lite.providers._windows import is_pid_alive, terminate_process
 from bmad_assist_lite.providers.base import (
     BaseProvider,
+    ExitStatus,
     ProviderResult,
     resolve_cli_path,
     validate_settings_file,
@@ -567,8 +568,12 @@ class ClaudeSDKProvider(BaseProvider):
         except ProcessError as e:
             exit_code = e.exit_code if e.exit_code is not None else 1
             stderr = e.stderr or ""
-            raise ProviderError(
-                f"Claude SDK failed with exit code {exit_code}: {stderr[:200]}"
+            raise ProviderExitCodeError(
+                f"Claude SDK failed with exit code {exit_code}: {stderr[:200]}",
+                exit_code=exit_code,
+                exit_status=ExitStatus.from_code(exit_code),
+                stderr=stderr,
+                command=(self.provider_name, model or "default"),
             ) from e
         except (TimeoutError, ProviderError):
             raise
