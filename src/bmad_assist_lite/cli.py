@@ -491,6 +491,7 @@ def run(
         stories_for_epic=stories_for_epic,
         resume_state=resume_state,
         single_story=single_story,
+        resume=resume_state is not None,
     )
 
     # Close file log handler

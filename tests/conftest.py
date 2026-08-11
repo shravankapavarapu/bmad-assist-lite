@@ -11,6 +11,7 @@ import pytest
 from bmad_assist_lite.core.config import _reset_config, load_config
 from bmad_assist_lite.core.paths import _reset_paths
 from bmad_assist_lite.loop.dispatch import reset_handlers
+from bmad_assist_lite.loop.run_mode import _reset_run_mode
 from bmad_assist_lite.providers.cursor import _reset_cursor_cli_version
 
 # ============================================================================
@@ -36,6 +37,14 @@ MINIMAL_CONFIG_DATA: dict = {
         },
     },
 }
+
+
+@pytest.fixture(autouse=True)
+def reset_run_mode_singleton():
+    """Reset the run mode (resume flag) before each test."""
+    _reset_run_mode()
+    yield
+    _reset_run_mode()
 
 
 @pytest.fixture(autouse=True)

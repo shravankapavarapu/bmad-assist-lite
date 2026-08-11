@@ -7,6 +7,9 @@ from bmad_assist_lite.cli import load_story_queue_cache
 from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.handlers.base import BaseHandler
+from bmad_assist_lite.loop.run_mode import is_resume_run
+from bmad_assist_lite.loop.story_validity import check_story_reusable
+from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
@@ -19,6 +22,39 @@ class CreateStoryHandler(BaseHandler):
     def phase_name(self) -> str:
         """Return the phase name."""
         return "create_story"
+
+    def execute(self, state: State) -> PhaseResult:
+        """Create the story, reusing a valid existing file on a resume path.
+
+        On a resume the story file on disk is the output of a phase that
+        already completed, so re-running the LLM buys nothing. On a fresh run
+        the same file is a leftover from an earlier crashed run, and trusting
+        it is how a run finishes fast with nothing to show — so the reuse is
+        never even considered there.
+        """
+        if not is_resume_run():
+            return super().execute(state)
+
+        verdict = check_story_reusable(state.current_story)
+        if verdict.reusable and verdict.path is not None:
+            write_progress(f"  Reusing existing story file: {verdict.path.name} (skipping phase)")
+            logger.info(
+                "Skipping create_story on resume: story %s already exists and is "
+                "structurally valid (%s)",
+                state.current_story,
+                verdict.path,
+            )
+            return PhaseResult.ok(
+                {
+                    "skipped": True,
+                    "skip_reason": "resume: existing story file passed structural validation",
+                    "story_path": str(verdict.path),
+                }
+            )
+        if verdict.path is not None:
+            logger.info("Not reusing existing story file — %s", verdict.summary())
+
+        return super().execute(state)
 
     def build_context(self, state: State) -> dict[str, Any]:
         """Build template context with story_key from cached queue."""

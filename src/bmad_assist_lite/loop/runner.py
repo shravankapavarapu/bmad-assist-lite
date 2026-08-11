@@ -16,6 +16,7 @@ from bmad_assist_lite.core.state import (
 from bmad_assist_lite.loop.cleanup import cleanup_for_phase, clear_story_cache
 from bmad_assist_lite.loop.dispatch import execute_phase, init_handlers
 from bmad_assist_lite.loop.locking import running_lock
+from bmad_assist_lite.loop.run_mode import set_resume_mode
 from bmad_assist_lite.loop.signals import (
     register_signal_handlers,
     reset_shutdown,
@@ -110,6 +111,7 @@ def run_loop(
     stories_for_epic: dict[int, list[str]],
     resume_state: State | None = None,
     single_story: bool = False,
+    resume: bool = False,
 ) -> LoopExitReason:
     """Run the main BMAD development loop.
 
@@ -120,6 +122,9 @@ def run_loop(
         stories_for_epic: Mapping of epic number to story IDs.
         resume_state: Optional state to resume from.
         single_story: If True, exit after completing one story.
+        resume: If True, the run was started with ``--resume``. Phases that may
+            reuse an artifact left by an earlier run consult this; on a fresh
+            run such an artifact is stale, not finished.
 
     Returns:
         LoopExitReason indicating how the loop ended.
@@ -137,6 +142,7 @@ def run_loop(
     budget_last_story: str | None = None
 
     # Initialize
+    set_resume_mode(resume)
     reset_shutdown()
     register_signal_handlers()
 
@@ -273,6 +279,43 @@ def run_loop(
                             )
                             return LoopExitReason.COMPLETED
                         # Fall through to normal advance_story below
+
+                    elif action == "env_blocked":
+                        # Environment failure: never the LLM fixer, and
+                        # qa_retry_count is left exactly as it was — this attempt
+                        # did not consume a code-fix retry. The failure stays
+                        # visible in the story record and at WARNING.
+                        state.failed_qa_stories.append(state.current_story or "")
+                        save_state(state, state_path)
+                        trigger_sync(state, project_path)
+                        write_progress(
+                            f"  Story {state.current_story}: quality gates"
+                            " ENV-BLOCKED \u2014 environment failure, not routed to"
+                            " the fixer"
+                        )
+                        if single_story:
+                            logger.info(
+                                "Single-story mode: exiting after story %s",
+                                state.current_story,
+                            )
+                            return LoopExitReason.COMPLETED
+                        next_state = skip_to_next_story(state, story_phases, stories)
+                        if next_state is not None:
+                            clear_story_cache(project_path)
+                            state = next_state
+                            continue
+                        if epic_teardown:
+                            clear_story_cache(project_path)
+                            state = state.with_phase(Phase(epic_teardown[0]))
+                        else:
+                            ep = advance_epic(state, epics, stories_for_epic, story_phases)
+                            if ep is None:
+                                _finalize_last_epic(state, state_path, project_path)
+                                logger.info("All epics completed!")
+                                return LoopExitReason.COMPLETED
+                            clear_story_cache(project_path)
+                            state = ep
+                        continue
 
                     elif action == "skip_story":
                         if config.auto_commit.enabled:
