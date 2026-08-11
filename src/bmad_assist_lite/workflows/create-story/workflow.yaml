@@ -4,20 +4,26 @@ template: template.md
 
 input_file_patterns:
   epic_file:
-    pattern: "{planning_artifacts}/*epic*{epic_num}*.md"
+    sharded: "{planning_artifacts}/epic-{epic_num}.md"
+    pattern: "{planning_artifacts}/epic-{epic_num}-*.md"
     strategy: SELECTIVE_LOAD
+    required: true
   prd_file:
     pattern: "{planning_artifacts}/*prd*.md"
     strategy: SELECTIVE_LOAD
+    required: false
   architecture_file:
     pattern: "{planning_artifacts}/*architecture*.md"
     strategy: FULL_LOAD
+    required: false
   ux_file:
     pattern: "{planning_artifacts}/*ux*.md"
     strategy: SELECTIVE_LOAD
+    required: false
   project_context:
-    pattern: "**/project-context.md"
+    pattern: "{project-root}/**/project-context.md"
     strategy: SELECTIVE_LOAD
+    required: false
 
 variables:
   mission: "Create a comprehensive story context file for Epic {epic_num} Story {story_num}"

@@ -3,8 +3,10 @@ description: Fix quality gate failures
 
 input_file_patterns:
   story_file:
-    pattern: "**/{epic_num}-{story_num}*.md"
+    sharded: "{project-root}/**/story-{epic_num}.{story_num}.md"
+    pattern: "{project-root}/**/{epic_num}-{story_num}-*.md"
     strategy: FULL_LOAD
+    required: true
 
 variables:
   - epic_num

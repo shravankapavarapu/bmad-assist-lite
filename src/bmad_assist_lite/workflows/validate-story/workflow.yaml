@@ -4,20 +4,27 @@ instructions: instructions.xml
 
 input_file_patterns:
   story_file:
-    pattern: "**/{epic_num}-{story_num}*.md"
+    sharded: "{project-root}/**/story-{epic_num}.{story_num}.md"
+    pattern: "{project-root}/**/{epic_num}-{story_num}-*.md"
     strategy: FULL_LOAD
+    required: true
   epic_file:
-    pattern: "**/epic-{epic_num}*.md"
+    sharded: "{project-root}/**/epic-{epic_num}.md"
+    pattern: "{project-root}/**/epic-{epic_num}-*.md"
     strategy: FULL_LOAD
+    required: false
   architecture_file:
-    pattern: "**/architecture*.md"
+    pattern: "{project-root}/**/architecture*.md"
     strategy: FULL_LOAD
+    required: false
   prd_file:
     pattern: "{planning_artifacts}/*prd*.md"
     strategy: SELECTIVE_LOAD
+    required: false
   project_context:
-    pattern: "**/project-context.md"
+    pattern: "{project-root}/**/project-context.md"
     strategy: SELECTIVE_LOAD
+    required: false
 
 variables:
   mission: "Validate story quality for Epic {epic_num} Story {story_num}"

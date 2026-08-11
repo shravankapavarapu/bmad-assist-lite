@@ -3,11 +3,14 @@ instructions: instructions.xml
 
 input_file_patterns:
   story_file:
-    pattern: "**/{epic_num}-{story_num}*.md"
+    sharded: "{project-root}/**/story-{epic_num}.{story_num}.md"
+    pattern: "{project-root}/**/{epic_num}-{story_num}-*.md"
     strategy: FULL_LOAD
+    required: true
   project_context:
-    pattern: "**/project_context*.md"
+    pattern: "{project-root}/**/project-context.md"
     strategy: FULL_LOAD
+    required: false
 
 variables:
   mission: "Implement Epic {epic_num} Story {story_num}"
