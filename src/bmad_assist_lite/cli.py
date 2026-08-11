@@ -602,7 +602,10 @@ providers:
   master:
     provider: claude          # claude, gemini, codex, cursor
     model: claude-opus-4-6    # Pin Opus 4.6. To use 4.7, set `model: claude-opus-4-7` and add `effort: max`.
-  multi:
+  multi:                      # independent reviewers/validators.
+                              # Leaving this empty makes the master review its own
+                              # work, which is not a review. Keep at least one entry
+                              # that differs from `master` above.
     - provider: gemini
       model: gemini-3.1-pro-preview
     - provider: claude

@@ -94,11 +94,22 @@ class BaseHandler(ABC):
         """Get the model name for provider invocation."""
         return self.config.providers.master.model
 
+    def get_allowed_tools(self) -> list[str] | None:
+        """Tool restriction applied to the master invocation.
+
+        ``None`` means unrestricted, which is correct for phases that must write
+        (create_story, dev_story, the synthesis phases). Judging phases override
+        this to stay read-only however many frames separate this call from the
+        handler that decided to make it.
+        """
+        return None
+
     def invoke_provider(self, prompt: str) -> ProviderResult:
         """Invoke the provider with the given prompt."""
         provider = self.get_provider()
         model = self.get_model()
         timeout = get_phase_timeout(self.config, self.phase_name)
+        allowed_tools = self.get_allowed_tools()
 
         model_display = model or provider.default_model or "default"
         timeout_display = f"{timeout}s" if timeout else "no limit"
@@ -119,6 +130,7 @@ class BaseHandler(ABC):
             model=model,
             timeout=timeout,
             cwd=self.project_path,
+            allowed_tools=allowed_tools,
             effort=self.config.providers.master.effort,
         )
 

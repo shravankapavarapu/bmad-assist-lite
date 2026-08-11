@@ -284,6 +284,57 @@ def _load_yaml_file(path: Path) -> dict[str, Any]:
         raise ConfigError(f"Cannot read config file {path}: {e}") from e
 
 
+_SELF_REVIEW_REMEDY = (
+    "Fix: add at least one reviewer under `providers.multi` in bmad-assist-lite.yaml "
+    "that differs from `providers.master`, e.g.\n"
+    "  providers:\n"
+    "    multi:\n"
+    "      - provider: claude\n"
+    "        model: sonnet"
+)
+
+
+def self_review_warning(config: Config, phase: str | None = None) -> str | None:
+    """Return a warning when review phases would be judged by the master itself.
+
+    Two conditions qualify: an empty ``providers.multi`` (the master is the only
+    reviewer available, so the model that wrote the code reviews it), and a
+    ``providers.multi`` entry identical to the master on both provider and
+    model. Returns ``None`` when an independent reviewer is configured.
+
+    Args:
+        config: The loaded configuration.
+        phase: Optional phase name, included in the message when the warning is
+            emitted at the point the affected phase runs.
+
+    """
+    master = config.providers.master
+    where = f"Phase `{phase}`: " if phase else ""
+
+    if not config.providers.multi:
+        return (
+            f"{where}`providers.multi` is empty, so review and validation fall back to the "
+            f"master provider ({master.provider}/{master.model}) — the model that wrote the "
+            f"work also judges it. This violates the no-self-verification principle and makes "
+            f"the resulting review unreliable.\n{_SELF_REVIEW_REMEDY}"
+        )
+
+    duplicates = [
+        mc
+        for mc in config.providers.multi
+        if mc.provider == master.provider and mc.model == master.model
+    ]
+    if duplicates:
+        return (
+            f"{where}`providers.multi` contains a reviewer identical to the master "
+            f"({master.provider}/{master.model}), so the model that wrote the work is also "
+            f"one of its judges. This violates the no-self-verification principle.\n"
+            f"{_SELF_REVIEW_REMEDY}"
+        )
+
+    return None
+
+
 def load_config(config_data: dict[str, Any]) -> Config:
     """Load and validate configuration from a dictionary."""
     global _config
@@ -291,10 +342,14 @@ def load_config(config_data: dict[str, Any]) -> Config:
         raise ConfigError(f"config_data must be a dict, got {type(config_data).__name__}")
     try:
         _config = Config.model_validate(config_data)
-        return _config
     except ValidationError as e:
         _config = None
         raise ConfigError(f"Configuration validation failed: {e}") from e
+
+    warning = self_review_warning(_config)
+    if warning is not None:
+        logger.warning("%s", warning)
+    return _config
 
 
 def get_config() -> Config:
