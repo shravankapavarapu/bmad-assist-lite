@@ -12,10 +12,11 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from bmad_assist_lite.core.exceptions import ConfigError
 from bmad_assist_lite.parallel.config import ParallelConfig
+from bmad_assist_lite.validation.findings import Severity
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,9 @@ NON_ROUTABLE_LLM_PHASES: frozenset[str] = frozenset(
         "code_review",
         "code_review_synthesis",
         "fix_quality_gate",
+        # The review fixer answers a review at model parity. Routing a cheaper
+        # model here would have it fix findings it cannot fully understand.
+        "fix_review",
     }
 )
 
@@ -235,6 +239,7 @@ class TimeoutsConfig(BaseModel):
     code_review_synthesis: int | None = None
     quality_gate: int | None = None
     fix_quality_gate: int | None = None
+    fix_review: int | None = None
     epic_quality_gate: int | None = None
     retrospective: int | None = None
 
@@ -248,6 +253,7 @@ class TimeoutsConfig(BaseModel):
         "code_review_synthesis": 1200,
         "quality_gate": 300,
         "fix_quality_gate": 900,
+        "fix_review": 900,
         "epic_quality_gate": 600,
         "retrospective": 600,
     }
@@ -353,6 +359,16 @@ class LoopConfig(BaseModel):
         gt=0,
         description="Stop the run after this many wall-clock seconds (None = unlimited)",
     )
+    review_max_iterations: int = Field(
+        default=1,
+        ge=0,
+        description=(
+            "Cap on review -> fix -> re-review iterations per story. 0 disables "
+            "the loop entirely (the kill switch). Deliberately NOT named "
+            "code_review_max_iterations: that key belongs to the BMAD job's own "
+            "cycle, and a grep for either name should land in exactly one world."
+        ),
+    )
     story: list[str] = Field(
         default_factory=lambda: [
             "create_story",
@@ -368,6 +384,44 @@ class LoopConfig(BaseModel):
 
 
 DEFAULT_LOOP_CONFIG = LoopConfig()
+
+
+class ReviewConfig(BaseModel):
+    """Which findings block, and whether a follow-up pass is worth paying for.
+
+    The follow-up formula is harvested from upstream's unattended review step;
+    its constants are not portable — they were tuned against a different
+    finding distribution — so they are configuration, with the upstream values
+    as the starting point rather than as a target.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    blocking_severity: Severity = Field(
+        default=Severity.MEDIUM,
+        description=(
+            "Lowest severity that can drive a fix iteration. Findings below it "
+            "are still recorded; they are culled from the loop, not the record."
+        ),
+    )
+    followup_medium_weight: int = Field(
+        default=3, ge=0, description="Weight of a medium finding in the follow-up score"
+    )
+    followup_low_weight: int = Field(
+        default=1, ge=0, description="Weight of a low finding in the follow-up score"
+    )
+    followup_threshold: int = Field(
+        default=5,
+        ge=0,
+        description="Score at or above which another review pass is recommended",
+    )
+
+    @field_validator("blocking_severity", mode="before")
+    @classmethod
+    def _coerce_blocking_severity(cls, value: object) -> object:
+        if isinstance(value, str):
+            return Severity.parse(value)
+        return value
 
 
 class Config(BaseModel):
@@ -389,6 +443,7 @@ class Config(BaseModel):
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)
+    review: ReviewConfig = Field(default_factory=ReviewConfig)
     parallel: ParallelConfig | None = Field(
         default=None, description="Parallel story execution configuration"
     )

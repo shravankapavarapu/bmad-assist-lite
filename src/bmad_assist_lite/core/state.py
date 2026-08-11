@@ -25,6 +25,57 @@ def _utc_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+# Ignored-field warnings already emitted, keyed by (source, sorted field names).
+# Loading is not a once-per-run event — resume, sync and the hygiene sweep all
+# read these files — so an un-deduplicated warning would bury the log it is
+# meant to make readable.
+_reported_ignored_fields: set[tuple[str, tuple[str, ...]]] = set()
+
+
+def log_ignored_fields(
+    model_cls: type[BaseModel], data: dict[str, Any], source: str
+) -> tuple[str, ...]:
+    """Warn once about keys a model will silently drop.
+
+    Pydantic's runtime default is ``extra='ignore'``: a state file written by
+    a newer version loads cleanly and its unknown keys vanish without a word.
+    Tolerance is what we want on load; silence is not, because the dropped key
+    may be the one that explains the run.
+
+    Note this is a *runtime* concern and unrelated to ``init_forbid_extra``,
+    which is a mypy-plugin setting and has no effect on validation.
+
+    Args:
+        model_cls: The model the data is about to be validated against.
+        data: The raw mapping read from disk.
+        source: Where it was read from, used to deduplicate the warning.
+
+    Returns:
+        The ignored field names, sorted.
+
+    """
+    ignored = tuple(sorted(set(data) - set(model_cls.model_fields)))
+    if not ignored:
+        return ()
+
+    key = (source, ignored)
+    if key not in _reported_ignored_fields:
+        _reported_ignored_fields.add(key)
+        logger.warning(
+            "%s at %s: ignoring %d unknown field(s) written by another version: %s",
+            model_cls.__name__,
+            source,
+            len(ignored),
+            ", ".join(ignored),
+        )
+    return ignored
+
+
+def _reset_ignored_field_log() -> None:
+    """Clear the once-per-source warning memo. For testing."""
+    _reported_ignored_fields.clear()
+
+
 class Phase(Enum):
     """Workflow phases for the development loop.
 
@@ -39,6 +90,10 @@ class Phase(Enum):
         8. FIX_QUALITY_GATE - LLM fix attempt for failed quality gates
         9. EPIC_QUALITY_GATE - Project-wide quality gate (non-LLM, epic teardown)
        10. RETROSPECTIVE - Epic retrospective (after last story)
+
+    FIX_REVIEW is an eleventh phase but deliberately not a listed one: like
+    FIX_QUALITY_GATE it is a detour reached only via a ``next_phase`` override,
+    never a member of ``loop.story``.
     """
 
     CREATE_STORY = "create_story"
@@ -49,6 +104,7 @@ class Phase(Enum):
     CODE_REVIEW_SYNTHESIS = "code_review_synthesis"
     QUALITY_GATE = "quality_gate"
     FIX_QUALITY_GATE = "fix_quality_gate"
+    FIX_REVIEW = "fix_review"
     EPIC_QUALITY_GATE = "epic_quality_gate"
     RETROSPECTIVE = "retrospective"
 
@@ -63,6 +119,14 @@ class State(BaseModel):
     completed_epics: list[int | str] = Field(default_factory=list)
     failed_qa_stories: list[str] = Field(default_factory=list)
     qa_retry_count: int = 0
+    # Review loop, mirroring the qa_retry_count mechanism rather than inventing
+    # a new one. ``review_finding_hashes`` holds one normalised set hash per
+    # review pass of the current story; a repeat is what proves the fixer is
+    # stuck rather than merely slow.
+    review_iteration: int = 0
+    review_finding_hashes: list[str] = Field(default_factory=list)
+    review_blocked_stories: list[str] = Field(default_factory=list)
+    review_story_id: str | None = None
     started_at: datetime | None = None
     updated_at: datetime | None = None
     story_started_at: datetime | None = None
@@ -135,6 +199,7 @@ def load_state(path: str | Path) -> State:
             raise StateError(
                 f"State file corrupted at {path}: expected dict, got {type(data).__name__}"
             )
+        log_ignored_fields(State, data, str(path))
         return State.model_validate(data)
     except yaml.YAMLError as e:
         raise StateError(f"State file corrupted at {path}: invalid YAML") from e

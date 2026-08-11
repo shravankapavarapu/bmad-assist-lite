@@ -1,0 +1,71 @@
+<instructions>
+  <mission>Address blocking code-review findings for Epic {epic_num} Story {story_num}</mission>
+
+  <context>
+    A multi-model code review raised findings that were triaged into a
+    structured record. The blocking ones are attached below, each with a file,
+    an anchor (the symbol or expression it points at), a severity and a root-cause
+    bucket. Your job is to address the blocking findings and nothing else.
+
+    After this step the code is reviewed again by the full reviewer panel. The
+    review loop is capped, so a finding that comes back unchanged ends the loop
+    and marks the story blocked — an edit that does not actually change the
+    flagged behaviour is worse than no edit, because it consumes the budget
+    while proving nothing.
+  </context>
+
+  <steps>
+    <step number="1" name="Understand the Story">
+      Read the story file to understand what was implemented, which files
+      changed, and what the acceptance criteria are. A "fix" that breaks an
+      acceptance criterion is not a fix.
+    </step>
+
+    <step number="2" name="Read Each Finding at Its Source">
+      For each blocking finding in the attached record:
+      - Open the named file and locate the anchor. The line number is advisory
+        only; it may have shifted.
+      - Read the surrounding code and its call sites. Judge whether the finding
+        describes a real, reachable problem, not the worst theoretical reading.
+      - Identify the root cause rather than the symptom.
+
+      Findings are grouped by bucket. Handle them in this order:
+      1. `intent_gap` — the code does something the story did not ask for, or
+         omits something it did. Highest value to fix.
+      2. `patch` — a localized defect with a localized fix.
+      3. `bad_spec` — the story itself is wrong or ambiguous. Do NOT revert and
+         re-derive the implementation. Apply the smallest correct change and say
+         plainly in your summary that the specification was the cause.
+      Findings in the `defer` and `reject` buckets are recorded but are NOT
+      yours to act on. Leave them alone.
+    </step>
+
+    <step number="3" name="Apply Minimal, Targeted Fixes">
+      CRITICAL CONSTRAINTS:
+      - Fix ONLY the blocking findings listed. Do not refactor unrelated code.
+      - Do not add features, rename things for taste, or restructure files.
+      - Moving the flagged code somewhere else is not a fix. The reviewer
+        identifies findings by what the code does, not by where it sits.
+      - If you conclude a finding is wrong, do NOT silently ignore it. Leave the
+        code as it is and explain your reasoning in the summary — a disagreement
+        the next review can read is useful; a silent no-op is not.
+
+      Every behavioural fix needs a test that fails before it and passes after.
+      If the finding is that a test was missing, the fix IS the test.
+    </step>
+
+    <step number="4" name="Verify">
+      Run the project's lint, typecheck and test commands. Every fix must leave
+      the suite green; a fix that trades a review finding for a test failure has
+      moved the problem, not solved it.
+    </step>
+
+    <step number="5" name="Summary">
+      Report concisely:
+      - Each finding addressed, with the file:line of the change.
+      - Each finding deliberately NOT addressed, and why.
+      - Confirmation that lint, typecheck and tests pass.
+      - Note: the reviewer panel re-runs automatically after this step.
+    </step>
+  </steps>
+</instructions>

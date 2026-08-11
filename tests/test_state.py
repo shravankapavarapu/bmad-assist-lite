@@ -47,8 +47,8 @@ class TestPhaseEnum:
     """Tests for the Phase enum."""
 
     def test_phase_enum_values(self):
-        """Phase enum has exactly 10 members with expected string values."""
-        assert len(Phase) == 10
+        """Phase enum has exactly 11 members with expected string values."""
+        assert len(Phase) == 11
         expected = {
             "CREATE_STORY": "create_story",
             "VALIDATE_STORY": "validate_story",
@@ -58,6 +58,7 @@ class TestPhaseEnum:
             "CODE_REVIEW_SYNTHESIS": "code_review_synthesis",
             "QUALITY_GATE": "quality_gate",
             "FIX_QUALITY_GATE": "fix_quality_gate",
+            "FIX_REVIEW": "fix_review",
             "EPIC_QUALITY_GATE": "epic_quality_gate",
             "RETROSPECTIVE": "retrospective",
         }

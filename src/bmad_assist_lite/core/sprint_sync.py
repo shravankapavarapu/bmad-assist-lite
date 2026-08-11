@@ -30,6 +30,7 @@ PHASE_TO_STATUS: dict[str, str] = {
     Phase.CODE_REVIEW_SYNTHESIS.value: "review",
     Phase.QUALITY_GATE.value: "review",
     Phase.FIX_QUALITY_GATE.value: "in-progress",
+    Phase.FIX_REVIEW.value: "in-progress",
     Phase.EPIC_QUALITY_GATE.value: "review",
     Phase.RETROSPECTIVE.value: "done",
 }

@@ -224,6 +224,16 @@ parallel:
   copy_strict: false           # true = error on missing copy source, false = warn
   bootstrap_timeout: 120       # per-command timeout in seconds for setup/validation
 
+# Bounded review -> fix -> re-review loop
+loop:
+  review_max_iterations: 1  # fix rounds per story; 0 disables the loop entirely
+
+review:
+  blocking_severity: medium   # low|medium|high — below this, findings are recorded only
+  followup_medium_weight: 3   # follow-up score: any(high) or 3*medium + 1*low >= threshold
+  followup_low_weight: 1
+  followup_threshold: 5
+
 # Auto-commit story changes after quality gate pass/fail
 auto_commit:
   enabled: true  # default

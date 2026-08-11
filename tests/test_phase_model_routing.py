@@ -89,6 +89,7 @@ class TestPhaseClassification:
             "code_review_synthesis",
             "dev_story",
             "fix_quality_gate",
+            "fix_review",
             "validate_story",
         ]
 
@@ -96,9 +97,11 @@ class TestPhaseClassification:
         assert sorted(NON_LLM_PHASES) == ["epic_quality_gate", "quality_gate"]
 
     def test_class_sizes(self):
+        # ROUTABLE_PHASES stays closed at 3: the review fix phase joined the
+        # NON-routable class, which is where model parity requires it to be.
         assert (len(ROUTABLE_PHASES), len(NON_ROUTABLE_LLM_PHASES), len(NON_LLM_PHASES)) == (
             3,
-            5,
+            6,
             2,
         )
 

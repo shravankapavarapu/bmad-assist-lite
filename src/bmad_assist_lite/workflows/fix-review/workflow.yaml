@@ -1,0 +1,13 @@
+name: fix-review
+description: Address blocking code-review findings, then re-review
+
+input_file_patterns:
+  story_file:
+    sharded: "{project-root}/**/story-{epic_num}.{story_num}.md"
+    pattern: "{project-root}/**/{epic_num}-{story_num}-*.md"
+    strategy: FULL_LOAD
+    required: true
+
+variables:
+  - epic_num
+  - story_num

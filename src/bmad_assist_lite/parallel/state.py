@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from bmad_assist_lite.core.state import log_ignored_fields
 from bmad_assist_lite.parallel.exceptions import ParallelError
 
 logger = logging.getLogger(__name__)
@@ -390,6 +391,7 @@ def load_state(path: Path) -> ParallelState | None:
                 f"Parallel state file corrupted at {path}: "
                 f"expected dict, got {type(data).__name__}"
             )
+        log_ignored_fields(ParallelState, data, str(path))
         return ParallelState.model_validate(data)
     except yaml.YAMLError as e:
         raise ParallelError(

@@ -6,6 +6,7 @@ from bmad_assist_lite.loop.handlers.create_story import CreateStoryHandler
 from bmad_assist_lite.loop.handlers.dev_story import DevStoryHandler
 from bmad_assist_lite.loop.handlers.epic_quality_gate import EpicQualityGateHandler
 from bmad_assist_lite.loop.handlers.fix_quality_gate import FixQualityGateHandler
+from bmad_assist_lite.loop.handlers.fix_review import FixReviewHandler
 from bmad_assist_lite.loop.handlers.quality_gate import QualityGateHandler
 from bmad_assist_lite.loop.handlers.retrospective import RetrospectiveHandler
 from bmad_assist_lite.loop.handlers.validate_story import ValidateStoryHandler
@@ -20,6 +21,7 @@ __all__ = [
     "CodeReviewSynthesisHandler",
     "QualityGateHandler",
     "FixQualityGateHandler",
+    "FixReviewHandler",
     "EpicQualityGateHandler",
     "RetrospectiveHandler",
 ]

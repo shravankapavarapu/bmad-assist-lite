@@ -26,6 +26,7 @@ from bmad_assist_lite.parallel.git_ops import (
     tree_sha,
 )
 from bmad_assist_lite.parallel.merge_guard import (
+    REQUIRED_CLAUSES,
     DeletionDecision,
     assert_deletion_allowed,
     assert_merge_lock_not_held,
@@ -733,9 +734,20 @@ class TestNoDataLoss:
         refused = DeletionDecision(
             branch="parallel/1-1", integration_ref="HEAD", safe=False,
             unmerged_commits=3, reason="3 commits would be lost",
+            clauses_consulted=REQUIRED_CLAUSES,
         )
         with pytest.raises(ParallelError, match="refusing to delete"):
             assert_deletion_allowed(refused, "branch parallel/1-1")
+
+        # REQ-05.4 crit 1 (A16): a verdict that consulted only one clause is
+        # not a verdict. Hygiene and merge share this guard, so a half-checked
+        # decision must be unusable at the deletion site, not merely discouraged.
+        half_checked = DeletionDecision(
+            branch="parallel/1-1", integration_ref="HEAD", safe=True,
+            clauses_consulted=frozenset({"unmerged-commits"}),
+        )
+        with pytest.raises(ParallelError, match="both clauses"):
+            assert_deletion_allowed(half_checked, "branch parallel/1-1")
 
     def test_guard_treats_an_unreadable_repository_as_unsafe(self, tmp_path: Path) -> None:
         """Indeterminate is unsafe: losing work is not recoverable."""

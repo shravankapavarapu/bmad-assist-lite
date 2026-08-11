@@ -390,9 +390,20 @@ def load_sprint_status(path: str | Path) -> SprintStatus:
     try:
         data = yaml.safe_load(content)
         if not isinstance(data, dict):
-            logger.warning("Sprint status corrupted at %s: expected dict", path)
+            logger.warning(
+                "CORRUPT sprint status at %s: expected a mapping, got %s. "
+                "Treating as empty for this read — story discovery will look "
+                "like an empty backlog until the file is repaired.",
+                path,
+                type(data).__name__,
+            )
             return SprintStatus()
         return SprintStatus.model_validate(data)
     except (yaml.YAMLError, Exception) as e:
-        logger.warning("Sprint status parse error at %s: %s", path, e)
+        logger.warning(
+            "CORRUPT sprint status at %s: %s. Treating as empty for this read — "
+            "story discovery will look like an empty backlog until it is repaired.",
+            path,
+            e,
+        )
         return SprintStatus()

@@ -35,6 +35,7 @@ def init_handlers(config: "Config", project_path: Path) -> None:
         DevStoryHandler,
         EpicQualityGateHandler,
         FixQualityGateHandler,
+        FixReviewHandler,
         QualityGateHandler,
         RetrospectiveHandler,
         ValidateStoryHandler,
@@ -50,6 +51,7 @@ def init_handlers(config: "Config", project_path: Path) -> None:
         Phase.CODE_REVIEW_SYNTHESIS: CodeReviewSynthesisHandler(config, project_path),
         Phase.QUALITY_GATE: QualityGateHandler(config, project_path),
         Phase.FIX_QUALITY_GATE: FixQualityGateHandler(config, project_path),
+        Phase.FIX_REVIEW: FixReviewHandler(config, project_path),
         Phase.EPIC_QUALITY_GATE: EpicQualityGateHandler(config, project_path),
         Phase.RETROSPECTIVE: RetrospectiveHandler(config, project_path),
     }

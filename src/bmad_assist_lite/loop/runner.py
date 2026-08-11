@@ -378,6 +378,11 @@ def run_loop(
                     # Increment retry counter when entering FIX_QUALITY_GATE
                     if result.next_phase == Phase.FIX_QUALITY_GATE:
                         state.qa_retry_count += 1
+                    # Same mechanism for the review loop's own detour. Counted
+                    # on entry to the fixer, so the cap reads as "fix rounds
+                    # spent" rather than "reviews run".
+                    if result.next_phase == Phase.FIX_REVIEW:
+                        state.review_iteration += 1
                     state = state.with_phase(result.next_phase)
                     continue
 

@@ -227,7 +227,9 @@ def cleanup_worktree(
     wt_path = _worktree_path(story_id, base_dir, repo_name)
     branch = _branch_name(story_id)
 
-    decision = branch_deletion_decision(project_root, branch, integration_ref)
+    decision = branch_deletion_decision(
+        project_root, branch, integration_ref, worktree_path=wt_path
+    )
     if not decision.safe:
         logger.warning(
             "[ORCHESTRATOR] Refusing to clean up story %s: %s. "

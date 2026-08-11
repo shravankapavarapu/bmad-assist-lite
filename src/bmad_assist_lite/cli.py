@@ -748,13 +748,62 @@ def reset_lock(
         "-p",
         help="Path to project directory.",
     ),
+    audit: bool = typer.Option(
+        False,
+        "--audit",
+        help="Report every piece of stale state without removing anything.",
+    ),
+    clean: bool = typer.Option(
+        False,
+        "--clean",
+        help="Remove the stale state --audit offers. Never removes anything "
+        "that holds work.",
+    ),
 ) -> None:
-    """Remove stale lock file.
+    """Remove a stale lock file, or audit and clean stale state.
 
-    Use this if a previous run crashed and left a lock file behind.
+    Use this if a previous run crashed and left state behind.
+
+    With no flags this removes the lock file, as it always has. ``--audit``
+    widens it to the whole stale-state surface — orphaned temp files, corrupt
+    or stale state files, a stale story queue, a resume checkpoint parked on
+    finished work, and abandoned worktrees — and reports without touching
+    anything. ``--clean`` is the only way to make it destructive, and even
+    then it never removes a worktree holding unmerged commits, never removes
+    one belonging to a parked merge, and never terminates a process.
     """
     project = project.resolve()
     lock_path = project / ".bmad-assist-lite" / "running.lock"
+
+    if audit or clean:
+        from bmad_assist_lite.loop.state_hygiene import sweep_stale_state
+
+        report = sweep_stale_state(project, dry_run=not clean)
+
+        if not report.findings:
+            typer.echo("No stale state detected.")
+            return
+
+        typer.echo(f"Stale state under {project}:\n")
+        for finding in report.findings:
+            if finding.removable:
+                marker = "REMOVED" if finding.path in report.removed else "offer"
+                typer.echo(f"  [{marker}] {finding.item}: {finding.path}")
+                typer.echo(f"           {finding.detail}")
+            else:
+                typer.echo(f"  [KEPT ] {finding.item}: {finding.path}")
+                typer.echo(f"           {finding.detail}")
+                typer.echo(f"           kept because: {finding.protected_reason}")
+
+        if report.dry_run:
+            offers = len(report.offers)
+            typer.echo(
+                f"\nDry run — nothing was removed. {offers} item(s) would be "
+                "removed by: reset-lock --clean"
+            )
+        else:
+            typer.echo(f"\nRemoved {len(report.removed)} item(s).")
+        return
 
     if lock_path.exists():
         lock_path.unlink()
