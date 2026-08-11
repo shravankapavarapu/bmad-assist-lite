@@ -10,11 +10,29 @@ import pytest
 from pydantic import ValidationError
 
 from bmad_assist_lite.parallel.exceptions import ParallelError
+from bmad_assist_lite.parallel.merge_guard import DeletionDecision
 from bmad_assist_lite.parallel.merger import (
     MergeQueue,
     MergeResult,
     merge_story,
 )
+
+
+def _cleared_guard(
+    project_root: Path, branch: str, integration_ref: str = "HEAD"
+) -> DeletionDecision:
+    """Stand in for the no-data-loss guard with a cleared verdict.
+
+    These tests are about what happens once the guard has already said the
+    deletion loses nothing; the guard itself is exercised against real git
+    repositories in ``test_merge_protocol.py``.
+    """
+    return DeletionDecision(
+        branch=branch,
+        integration_ref=integration_ref,
+        safe=True,
+        reason="test fixture",
+    )
 
 # ============================================================================
 # MergeResult Model Tests (Task 6.1)
@@ -93,6 +111,10 @@ class TestMergeStoryCleanMerge:
     """Test merge_story() when the merge succeeds (no conflicts)."""
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
+    @patch(
+        "bmad_assist_lite.parallel.merger.branch_deletion_decision",
+        new=_cleared_guard,
+    )
     @patch("bmad_assist_lite.parallel.merger._run_git")
     def test_clean_merge_returns_success(
         self,
@@ -115,6 +137,10 @@ class TestMergeStoryCleanMerge:
         assert result.error is None
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
+    @patch(
+        "bmad_assist_lite.parallel.merger.branch_deletion_decision",
+        new=_cleared_guard,
+    )
     @patch("bmad_assist_lite.parallel.merger._run_git")
     def test_branch_deletion_called_after_merge(
         self,
@@ -477,6 +503,10 @@ class TestMergeStoryWorktreeCleanup:
     """Test worktree cleanup after successful merge."""
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
+    @patch(
+        "bmad_assist_lite.parallel.merger.branch_deletion_decision",
+        new=_cleared_guard,
+    )
     @patch("bmad_assist_lite.parallel.merger._run_git")
     def test_cleanup_worktree_called_after_success(
         self,
@@ -493,9 +523,15 @@ class TestMergeStoryWorktreeCleanup:
 
         merge_story("3.1", Path("/repo"))
 
-        mock_cleanup.assert_called_once_with("3.1", Path("/repo"))
+        mock_cleanup.assert_called_once_with(
+            "3.1", Path("/repo"), integration_ref="HEAD",
+        )
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
+    @patch(
+        "bmad_assist_lite.parallel.merger.branch_deletion_decision",
+        new=_cleared_guard,
+    )
     @patch("bmad_assist_lite.parallel.merger._run_git")
     def test_cleanup_failure_is_nonfatal(
         self,
@@ -517,6 +553,10 @@ class TestMergeStoryWorktreeCleanup:
         mock_cleanup.assert_called_once()
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
+    @patch(
+        "bmad_assist_lite.parallel.merger.branch_deletion_decision",
+        new=_cleared_guard,
+    )
     @patch("bmad_assist_lite.parallel.merger._run_git")
     def test_cleanup_failure_logged_as_warning(
         self,
@@ -549,6 +589,10 @@ class TestMergeStoryBranchDeletion:
     """Test branch deletion resilience on clean merge path."""
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
+    @patch(
+        "bmad_assist_lite.parallel.merger.branch_deletion_decision",
+        new=_cleared_guard,
+    )
     @patch("bmad_assist_lite.parallel.merger._run_git")
     def test_branch_deletion_failure_is_nonfatal(
         self,
@@ -569,6 +613,10 @@ class TestMergeStoryBranchDeletion:
         mock_cleanup.assert_called_once()
 
     @patch("bmad_assist_lite.parallel.merger.cleanup_worktree")
+    @patch(
+        "bmad_assist_lite.parallel.merger.branch_deletion_decision",
+        new=_cleared_guard,
+    )
     @patch("bmad_assist_lite.parallel.merger._run_git")
     def test_branch_deletion_failure_logged_as_warning(
         self,
@@ -732,8 +780,16 @@ class TestMergeQueueProcessNext:
         assert result is not None
         assert result.success is True
         assert result.story_id == "3.1"
+        # The in-lock land never resolves: AI resolution is a separate,
+        # out-of-lock rung of the ladder, and cleanup is deferred until the
+        # re-gate verdict exists.
         mock_merge.assert_called_once_with(
-            "3.1", Path("/repo"), resolve=True, conflict_resolution_timeout=120,
+            "3.1",
+            Path("/repo"),
+            resolve=False,
+            branch_override="parallel/3-1",
+            cleanup=False,
+            integration_ref="HEAD",
         )
 
     async def test_process_next_returns_none_on_empty_queue(self) -> None:

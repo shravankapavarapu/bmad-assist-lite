@@ -803,12 +803,17 @@ class TestMergeQueuePostMergeQG:
 
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
-    async def test_qg_exception_preserves_merge_result(
+    async def test_qg_exception_blocks_the_merge(
         self,
         mock_merge: MagicMock,
         mock_qg: MagicMock,
     ) -> None:
-        """Verify QG infrastructure exception does not swallow merge result."""
+        """Verify a re-gate that cannot run does not authorise a land.
+
+        The re-gate is never skipped: an infrastructure failure means the
+        gate has not passed, so the merge parks with the branch intact
+        instead of standing on an unrun gate.
+        """
         mock_merge.return_value = MergeResult(success=True, story_id="3.1")
         mock_qg.side_effect = OSError("disk full")
 
@@ -818,8 +823,11 @@ class TestMergeQueuePostMergeQG:
         result = await queue.process_next()
 
         assert result is not None
-        assert result.success is True
+        assert result.success is False
+        assert result.landed is False
+        assert result.parked is True
         assert result.qg_result is None
+        assert "disk full" in (result.error or "")
 
 
 # ============================================================================
