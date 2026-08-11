@@ -54,7 +54,8 @@ Sprint-status.yaml is the **single source of truth** for story discovery and pro
 
 Workflow templates include tech-stack agnostic patterns ported from production bmad-assist usage:
 
-- **`create-story/template.md`** — Includes `<!-- QUALITY-GATE: BLOCKING -->` sections: Testing Requirements (unit/negative/integration tests) and Quality Gates table (lint, typecheck, build, tests, runtime)
+- **`create-story/template.md`** — Includes a `## Testing Requirements` section (unit/negative/integration tests) and a `## Quality Gates` table (lint, typecheck, build, tests, runtime) whose rows are parsed by `core/quality_gates.py::parse_quality_gates_table`.
+  *(Corrected 2026-08-11: this previously described `<!-- QUALITY-GATE: BLOCKING -->` markers. **No such marker exists** in the template or anywhere in `src/`. The claim had propagated into ADR-0008 §1(c) and REQ-04.1, where it would have made the create-story skip predicate reject every story the tool itself generates.)*
 - **`dev-story/instructions.xml`** — 9 steps: Load Story → Load Context → Detect Toolchain → Detect Review Continuation → Implement Tasks (TDD + negative tests) → Run Validations → Quality Gate Validation (BLOCKING) → Story Completion → Completion Communication
 - **`code-review/checklist.md`** — Includes Story Test Requirements (BLOCKING), Runtime Verification (deferred to synthesis), and BLOCKING ISSUES summary
 - **`code-review/instructions.xml`** — Step 3 includes read-only Story Test Requirements Check (NO command execution — multi-LLM parallel safety)
