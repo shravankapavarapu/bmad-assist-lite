@@ -11,6 +11,11 @@ from bmad_assist_lite.core.config import Config, get_phase_timeout, resolve_phas
 from bmad_assist_lite.core.exceptions import CompilerError, ConfigError, ProviderExitCodeError
 from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import (
+    AutonomyLevel,
+    allowed_tools_for,
+    assert_tools_match_level,
+)
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
 from bmad_assist_lite.providers.base import BaseProvider, ProviderResult, write_progress
@@ -19,7 +24,33 @@ logger = logging.getLogger(__name__)
 
 
 class BaseHandler(ABC):
-    """Abstract base class for phase handlers."""
+    """Abstract base class for phase handlers.
+
+    Every concrete handler must declare an :class:`AutonomyLevel` as the class
+    attribute ``autonomy``, stating what the phase is permitted to do. There is
+    no default: a permissive default is how the old prose rule quietly failed
+    to cover phases added after it was written.
+    """
+
+    autonomy: AutonomyLevel
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse a concrete phase handler that has not declared its autonomy.
+
+        Abstract intermediates are exempt — they are not phases. Everything
+        else must answer the question before it can be defined at all, which is
+        what turns the ladder from documentation into a guard.
+        """
+        super().__init_subclass__(**kwargs)
+
+        if getattr(cls, "__abstractmethods__", None):
+            return
+        if not isinstance(getattr(cls, "autonomy", None), AutonomyLevel):
+            raise TypeError(
+                f"{cls.__name__} must declare an `autonomy` level "
+                f"(one of {[lvl.name for lvl in AutonomyLevel]}). "
+                "Every phase states what it is permitted to do; there is no default."
+            )
 
     def __init__(self, config: Config, project_path: Path) -> None:
         """Initialize the handler with config and project path."""
@@ -50,7 +81,31 @@ class BaseHandler(ABC):
             "story_num": self._extract_story_num(state.current_story),
             "story_id": state.current_story,
             "project_path": str(self.project_path),
+            "solutions": self._solutions_block(state),
         }
+
+    def _solutions_block(self, state: State) -> str:
+        """Previously solved problems relevant to this phase, or an empty string.
+
+        Tagged by phase and epic so a phase is only handed solutions that were
+        filed as relevant to it. Off by default, and the disabled path does no
+        filesystem work at all.
+        """
+        if not self.config.solutions.enabled:
+            return ""
+
+        from bmad_assist_lite.core.solutions import context_block_for
+
+        tags = {self.phase_name}
+        if state.current_epic is not None:
+            tags.add(f"epic-{state.current_epic}")
+
+        return context_block_for(
+            self.project_path,
+            tags,
+            limit=self.config.solutions.max_injected,
+            max_chars=self.config.solutions.max_injected_chars,
+        )
 
     def render_prompt(self, state: State) -> str:
         """Render prompt using compiler."""
@@ -101,12 +156,13 @@ class BaseHandler(ABC):
     def get_allowed_tools(self) -> list[str] | None:
         """Tool restriction applied to the master invocation.
 
-        ``None`` means unrestricted, which is correct for phases that must write
-        (create_story, dev_story, the synthesis phases). Judging phases override
-        this to stay read-only however many frames separate this call from the
-        handler that decided to make it.
+        Derived from the phase's declared :class:`AutonomyLevel` rather than
+        chosen per handler, so the permission and the tool set cannot drift
+        apart. ``None`` means unrestricted, which is what ``EXECUTE`` resolves
+        to. An override that widens the result is caught at the invocation
+        point by :func:`assert_tools_match_level`.
         """
-        return None
+        return allowed_tools_for(self.autonomy)
 
     def invoke_provider(
         self, prompt: str, *, model: str | None = None, attempt: int = 1
@@ -123,6 +179,11 @@ class BaseHandler(ABC):
         model = self.get_model(model=model, attempt=attempt)
         timeout = get_phase_timeout(self.config, self.phase_name)
         allowed_tools = self.get_allowed_tools()
+
+        # G12: the declaration above is a class attribute and the resolver is an
+        # overridable method, so neither proves anything on its own. This is the
+        # check that binds, on the path the provider is actually reached by.
+        assert_tools_match_level(self.autonomy, allowed_tools, phase=self.phase_name)
 
         model_display = model or provider.default_model or "default"
         timeout_display = f"{timeout}s" if timeout else "no limit"

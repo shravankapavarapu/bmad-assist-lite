@@ -108,7 +108,7 @@ class MergeAttempt(BaseModel):
 
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     tier: MergeTier
     branch: str
@@ -140,7 +140,7 @@ class GateObservation(BaseModel):
 
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     tree_sha: str
     commit_sha: str = ""
@@ -208,7 +208,7 @@ class StoryState(BaseModel):
     All mutations must use ``model_copy(update={...})``.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     status: StoryStatus = StoryStatus.BACKLOG
     worktree_path: Path | None = None
@@ -236,7 +236,7 @@ class ParallelState(BaseModel):
     ID from the full epic identifier string.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     base_branch: str
     epic: int

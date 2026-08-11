@@ -11,6 +11,7 @@ import subprocess
 from typing import Any
 
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_loop import ReviewDecision, decide_review_loop
 from bmad_assist_lite.loop.types import PhaseResult
@@ -76,6 +77,9 @@ def _strip_review_narration(text: str) -> str:
 
 class CodeReviewSynthesisHandler(BaseHandler):
     """Master LLM synthesizes multi-LLM code review reports."""
+
+    autonomy = AutonomyLevel.EXECUTE
+    """Single master, so it is safe to run the build/test/lint commands."""
 
     @property
     def phase_name(self) -> str:

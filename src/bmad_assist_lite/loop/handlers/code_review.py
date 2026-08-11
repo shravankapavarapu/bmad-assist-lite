@@ -8,6 +8,7 @@ from typing import Any
 from bmad_assist_lite.core.async_utils import run_async_in_thread
 from bmad_assist_lite.core.config import get_phase_timeout, self_review_warning
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 class CodeReviewHandler(BaseHandler):
     """Multi-LLM code review with Evidence Score aggregation."""
 
+    autonomy = AutonomyLevel.READ_ONLY
+    """Multi-LLM and parallel: read-only checks only, no command execution."""
+
     @property
     def phase_name(self) -> str:
         """Return the phase name."""
@@ -27,15 +31,6 @@ class CodeReviewHandler(BaseHandler):
     def build_context(self, state: State) -> dict[str, Any]:
         """Build template context for this phase."""
         return self._build_common_context(state)
-
-    def get_allowed_tools(self) -> list[str] | None:
-        """Restrict the master fallback reviewer to read-only tools.
-
-        The multi path already passes READ_ONLY_TOOLS. A reviewer with write
-        access is a defect regardless of which model the reviewer is, so the
-        empty-multi fallback through BaseHandler.execute() must match it.
-        """
-        return list(READ_ONLY_TOOLS)
 
     def _warn_if_self_review(self) -> None:
         """Announce a degraded reviewer configuration at the point of harm."""

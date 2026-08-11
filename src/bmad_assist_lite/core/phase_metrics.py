@@ -69,8 +69,10 @@ __all__ = [
     "PhaseMetricRecord",
     "PhaseMetricsHandle",
     "append_record",
+    "cost_since",
     "load_records",
     "phase_metrics_context",
+    "record_count",
     "record_provider_call",
 ]
 
@@ -218,6 +220,79 @@ def load_records(path: str | Path) -> list[PhaseMetricRecord]:
         except (json.JSONDecodeError, ValidationError, TypeError) as e:
             raise MetricsError(f"Corrupt phase metrics record at {path}:{lineno}: {e}") from e
     return records
+
+
+def record_count(path: str | Path) -> int:
+    """Count records currently on disk, tolerantly.
+
+    Used to mark where a run starts in a file that outlives it. A file that
+    cannot be read counts as empty: the caller is establishing a baseline, and
+    a baseline it cannot establish must not be allowed to end the run.
+
+    Args:
+        path: The metrics file.
+
+    Returns:
+        The number of non-blank lines, or 0 if the file is missing or unreadable.
+
+    """
+    path = Path(path).expanduser()
+    if not path.exists():
+        return 0
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        logger.warning("Cannot read phase metrics at %s to establish a baseline", path)
+        return 0
+    return sum(1 for line in content.splitlines() if line.strip())
+
+
+def cost_since(path: str | Path, start_index: int) -> float | None:
+    """Total recorded provider spend, in USD, from ``start_index`` onward.
+
+    This is the *enforcement* reader, and its failure posture is deliberately
+    the opposite of :func:`load_records`. Reading for measurement must raise on
+    a corrupt record, because a harness that silently skips records reports a
+    run that did not happen. Reading to enforce a budget must not: a corrupt
+    metrics file is not a reason to kill a multi-hour run, and the honest answer
+    is "spend is unknown" rather than a number that would be acted on.
+
+    A record that reports no cost contributes nothing rather than being read as
+    a claim that the phase was free — but a set of such records still totals
+    ``0.0``, not ``None``. ``None`` means *unmeterable*; ``0.0`` means
+    *measured as nothing spent*, and the caller must not conflate them.
+
+    Args:
+        path: The metrics file.
+        start_index: Number of records that predate this run; they are skipped.
+
+    Returns:
+        Dollars recorded from ``start_index`` onward, or None if the file cannot
+        be read.
+
+    """
+    path = Path(path).expanduser()
+    if not path.exists():
+        return 0.0
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        logger.warning("Cannot read phase metrics at %s; cost budget not enforced", path)
+        return None
+
+    costs: list[float] = []
+    lines = [line for line in content.splitlines() if line.strip()]
+    for line in lines[start_index:]:
+        try:
+            value = _as_float(json.loads(line).get("total_cost_usd"))
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            logger.warning("Corrupt phase metrics record at %s; cost budget not enforced", path)
+            return None
+        if value is not None:
+            costs.append(value)
+
+    return math.fsum(costs)
 
 
 # ============================================================================

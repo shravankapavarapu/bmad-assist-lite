@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from bmad_assist_lite.core.state import Phase, State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 class FixReviewHandler(BaseHandler):
     """Master LLM addresses blocking review findings."""
+
+    autonomy = AutonomyLevel.EXECUTE
+    """Fixes review findings and re-runs the checks."""
 
     @property
     def phase_name(self) -> str:

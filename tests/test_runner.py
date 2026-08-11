@@ -373,3 +373,230 @@ class TestBudgetExhaustedExitCode:
         assert mock_run_loop.called, f"run_loop not called; output: {result.output}"
         assert result.exit_code == BUDGET_EXHAUSTED_EXIT_CODE
         assert "--resume" in result.output
+
+
+# ---------------------------------------------------------------------------
+# loop.max_cost_usd  (T31 / OSS #11)
+# ---------------------------------------------------------------------------
+#
+# ADR-0005 rejected a token/cost cap as "a control that can never fire", because
+# nothing metered spend. T27 (capture) and T37 (persistence) removed that
+# objection: `phase-metrics.jsonl` now carries a per-phase `total_cost_usd`.
+# The pilot measured $45.41 for a single story, so the cap is not hypothetical.
+
+
+def _spend(path: Path, usd: float, *, phase: str = "dev_story") -> None:
+    """Append one phase metric record carrying a cost, as a real phase would."""
+    from datetime import datetime
+
+    from bmad_assist_lite.core.phase_metrics import PhaseMetricRecord, append_record
+
+    append_record(
+        PhaseMetricRecord(
+            story_id="1.1",
+            phase=phase,
+            timestamp=datetime(2026, 8, 11, 12, 0, 0),
+            duration_ms=1000,
+            total_cost_usd=usd,
+            call_count=1,
+        ),
+        path,
+    )
+
+
+class TestMaxCostConfig:
+    """The cost budget is additive and optional (G8)."""
+
+    def test_defaults_to_none(self) -> None:
+        assert load_config(
+            {"providers": {"master": {"provider": "claude", "model": "opus"}}}
+        ).loop.max_cost_usd is None
+
+    def test_accepts_a_dollar_figure(self) -> None:
+        assert _config(max_cost_usd=45.41).loop.max_cost_usd == 45.41
+
+    def test_rejects_zero(self) -> None:
+        """A cap of 0 would stop before the first phase — a footgun, not a budget."""
+        with pytest.raises(Exception):
+            _config(max_cost_usd=0)
+
+
+class TestCostAccounting:
+    """Spend is read from the persisted metrics, and only for this run."""
+
+    def test_sums_cost_recorded_after_the_baseline(self, tmp_path: Path) -> None:
+        from bmad_assist_lite.core.phase_metrics import cost_since, record_count
+
+        path = tmp_path / "phase-metrics.jsonl"
+        _spend(path, 10.0)
+        baseline = record_count(path)
+        _spend(path, 2.5)
+        _spend(path, 1.25)
+
+        assert baseline == 1
+        assert cost_since(path, baseline) == pytest.approx(3.75)
+
+    def test_earlier_runs_do_not_count_against_this_run(self, tmp_path: Path) -> None:
+        """NEG — otherwise --resume would re-trip the cap immediately.
+
+        ``max_stories`` and ``max_runtime`` both reset per run; the cost budget
+        matches them rather than becoming a project-lifetime total that makes
+        the documented ``--resume`` remedy useless.
+        """
+        from bmad_assist_lite.core.phase_metrics import cost_since, record_count
+
+        path = tmp_path / "phase-metrics.jsonl"
+        _spend(path, 500.0)
+        assert cost_since(path, record_count(path)) == 0.0
+
+    def test_unreadable_metrics_do_not_raise(self, tmp_path: Path) -> None:
+        """Enforcement reads tolerantly; a corrupt file must not end a long run."""
+        from bmad_assist_lite.core.phase_metrics import cost_since
+
+        path = tmp_path / "phase-metrics.jsonl"
+        path.write_text("{not json\n", encoding="utf-8")
+        assert cost_since(path, 0) is None
+
+    def test_unreported_cost_is_not_zero(self, tmp_path: Path) -> None:
+        """A provider that reports no cost yields None, never a fake 0.0."""
+        from datetime import datetime
+
+        from bmad_assist_lite.core.phase_metrics import (
+            PhaseMetricRecord,
+            append_record,
+            cost_since,
+        )
+
+        path = tmp_path / "phase-metrics.jsonl"
+        append_record(
+            PhaseMetricRecord(
+                phase="quality_gate",
+                timestamp=datetime(2026, 8, 11, 12, 0, 0),
+                duration_ms=5,
+            ),
+            path,
+        )
+        assert cost_since(path, 0) == 0.0
+
+
+class TestMaxCostBudget:
+    """The cap actually fires — REQ-08.5 criterion 4 forbids shipping one that cannot."""
+
+    def test_stops_the_run_when_spend_reaches_the_cap(self, tmp_path: Path) -> None:
+        """LOAD-BEARING: each phase costs $1; a $2 cap must not reach story 1.3."""
+        from bmad_assist_lite.loop.runner import run_loop
+
+        metrics = tmp_path / "phase-metrics.jsonl"
+
+        def costly(state):
+            _spend(metrics, 1.0, phase=str(state.current_phase))
+            return _quality_gate_passes(state)
+
+        with (
+            patch("bmad_assist_lite.loop.runner._metrics_path", return_value=metrics),
+            _LoopHarness(costly) as harness,
+        ):
+            result = run_loop(
+                config=_config(max_cost_usd=2.0),
+                project_path=tmp_path,
+                epics=EPICS,
+                stories_for_epic=STORIES_FOR_EPIC,
+            )
+
+        assert result == LoopExitReason.BUDGET_EXHAUSTED
+        assert harness.stories_seen() == ["1.1"], "spent past the cap"
+
+    def test_none_means_unlimited(self, tmp_path: Path) -> None:
+        """NEG — no cost budget leaves today's behaviour untouched."""
+        from bmad_assist_lite.loop.runner import run_loop
+
+        metrics = tmp_path / "phase-metrics.jsonl"
+
+        def costly(state):
+            _spend(metrics, 100.0, phase=str(state.current_phase))
+            return _quality_gate_passes(state)
+
+        with (
+            patch("bmad_assist_lite.loop.runner._metrics_path", return_value=metrics),
+            _LoopHarness(costly) as harness,
+        ):
+            result = run_loop(
+                config=_config(),
+                project_path=tmp_path,
+                epics=EPICS,
+                stories_for_epic=STORIES_FOR_EPIC,
+            )
+
+        assert result == LoopExitReason.COMPLETED
+        assert harness.stories_seen() == ["1.1", "1.2", "1.3"]
+
+    def test_cap_above_actual_spend_never_fires(self, tmp_path: Path) -> None:
+        """NEG — a budget that is not reached must not change the outcome."""
+        from bmad_assist_lite.loop.runner import run_loop
+
+        metrics = tmp_path / "phase-metrics.jsonl"
+
+        def costly(state):
+            _spend(metrics, 0.01, phase=str(state.current_phase))
+            return _quality_gate_passes(state)
+
+        with (
+            patch("bmad_assist_lite.loop.runner._metrics_path", return_value=metrics),
+            _LoopHarness(costly) as harness,
+        ):
+            result = run_loop(
+                config=_config(max_cost_usd=1000.0),
+                project_path=tmp_path,
+                epics=EPICS,
+                stories_for_epic=STORIES_FOR_EPIC,
+            )
+
+        assert result == LoopExitReason.COMPLETED
+        assert harness.stories_seen() == ["1.1", "1.2", "1.3"]
+
+    def test_exhaustion_names_the_cost_budget_and_the_remedy(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The console says which budget, what it cost, and how to continue."""
+        from bmad_assist_lite.loop.runner import run_loop
+
+        metrics = tmp_path / "phase-metrics.jsonl"
+
+        def costly(state):
+            _spend(metrics, 5.0, phase=str(state.current_phase))
+            return _quality_gate_passes(state)
+
+        with (
+            patch("bmad_assist_lite.loop.runner._metrics_path", return_value=metrics),
+            _LoopHarness(costly),
+        ):
+            run_loop(
+                config=_config(max_cost_usd=5.0),
+                project_path=tmp_path,
+                epics=EPICS,
+                stories_for_epic=STORIES_FOR_EPIC,
+            )
+
+        out = capsys.readouterr().out
+        assert "loop.max_cost_usd" in out
+        assert "--resume" in out
+        assert "$" in out, "a cost budget should report dollars"
+        assert "loop.max_stories" not in out, "named the wrong budget"
+
+    def test_unmeterable_spend_does_not_stop_the_run(self, tmp_path: Path) -> None:
+        """NEG — if nothing is metered the cap must not fire on a phantom zero."""
+        from bmad_assist_lite.loop.runner import run_loop
+
+        with (
+            patch("bmad_assist_lite.loop.runner._metrics_path", return_value=None),
+            _LoopHarness(_quality_gate_passes) as harness,
+        ):
+            result = run_loop(
+                config=_config(max_cost_usd=0.01),
+                project_path=tmp_path,
+                epics=EPICS,
+                stories_for_epic=STORIES_FOR_EPIC,
+            )
+
+        assert result == LoopExitReason.COMPLETED
+        assert harness.stories_seen() == ["1.1", "1.2", "1.3"]

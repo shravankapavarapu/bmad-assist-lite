@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from bmad_assist_lite.core.config import Config
+from bmad_assist_lite.core.phase_metrics import cost_since, record_count
 from bmad_assist_lite.core.sprint_sync import trigger_sync
 from bmad_assist_lite.core.state import (
     Phase,
@@ -55,6 +56,22 @@ def _print_phase_banner(phase_name: str, epic: int | str | None, story: str | No
     write_progress(f"\n{separator}")
     write_progress(banner)
     write_progress(separator)
+
+
+def _metrics_path() -> Path | None:
+    """Resolve the persisted per-phase metrics file, or None if unavailable.
+
+    The cost budget is only as good as the meter behind it, so this returning
+    None is load-bearing: it means spend cannot be observed, and an unobservable
+    budget must not fire rather than firing on an assumed zero.
+    """
+    try:
+        from bmad_assist_lite.core.paths import get_paths
+
+        return get_paths().phase_metrics_file
+    except Exception:
+        logger.debug("Paths not initialised; cost budget cannot be enforced")
+        return None
 
 
 def _budget_exhausted(
@@ -154,12 +171,20 @@ def run_loop(
     story_phases = config.loop.story
     epic_teardown = config.loop.epic_teardown
 
-    # Run-level budget (both optional; None = unlimited, today's behaviour)
+    # Run-level budget (all optional; None = unlimited, today's behaviour)
     max_stories = config.loop.max_stories
     max_runtime = config.loop.max_runtime
+    max_cost_usd = config.loop.max_cost_usd
     run_started = time.monotonic()
     stories_started = 0
     budget_last_story: str | None = None
+
+    # Spend is counted per run, like the other two budgets: the metrics file
+    # outlives the run, so everything already in it belongs to earlier ones.
+    # Counting those would make a run start over budget and turn the documented
+    # `--resume` remedy into an immediate re-stop.
+    cost_metrics_path = _metrics_path() if max_cost_usd is not None else None
+    cost_baseline = record_count(cost_metrics_path) if cost_metrics_path is not None else 0
 
     # Initialize
     set_resume_mode(resume)
@@ -227,6 +252,23 @@ def run_loop(
                         state_path=state_path,
                         project_path=project_path,
                     )
+
+                # Cost budget: read back from the metrics the provider layer
+                # persists, so it meters what was actually billed rather than a
+                # local estimate. `None` spend means the meter is unreadable —
+                # the budget then does not fire, because a cap that fires on an
+                # assumed zero is worse than no cap at all.
+                if max_cost_usd is not None and cost_metrics_path is not None:
+                    spent = cost_since(cost_metrics_path, cost_baseline)
+                    if spent is not None and spent >= max_cost_usd:
+                        return _budget_exhausted(
+                            key="loop.max_cost_usd",
+                            configured=f"${max_cost_usd:,.2f}",
+                            reached=f"${spent:,.2f}",
+                            state=state,
+                            state_path=state_path,
+                            project_path=project_path,
+                        )
 
                 # Iteration budget: counted as stories entered, checked before
                 # any phase of the new story runs, so the stop is clean.

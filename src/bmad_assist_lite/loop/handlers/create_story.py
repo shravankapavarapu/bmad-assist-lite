@@ -6,6 +6,7 @@ from typing import Any
 from bmad_assist_lite.cli import load_story_queue_cache
 from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.run_mode import is_resume_run
 from bmad_assist_lite.loop.story_validity import check_story_reusable
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 class CreateStoryHandler(BaseHandler):
     """Creates a new story file from epic context using Master LLM."""
+
+    autonomy = AutonomyLevel.EXECUTE
+    """Unrestricted today. A candidate for WRITE, but narrowing it is a
+    behaviour change that needs its own evidence, not a silent side effect."""
 
     @property
     def phase_name(self) -> str:

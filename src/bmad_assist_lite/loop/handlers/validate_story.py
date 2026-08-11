@@ -8,6 +8,7 @@ from typing import Any
 from bmad_assist_lite.core.async_utils import run_async_in_thread
 from bmad_assist_lite.core.config import get_phase_timeout, self_review_warning
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 class ValidateStoryHandler(BaseHandler):
     """Multi-LLM story validation with Evidence Score aggregation."""
 
+    autonomy = AutonomyLevel.READ_ONLY
+    """A validator that can write can fix what it is judging (F-13)."""
+
     @property
     def phase_name(self) -> str:
         """Return the phase name."""
@@ -27,15 +31,6 @@ class ValidateStoryHandler(BaseHandler):
     def build_context(self, state: State) -> dict[str, Any]:
         """Build template context for this phase."""
         return self._build_common_context(state)
-
-    def get_allowed_tools(self) -> list[str] | None:
-        """Restrict the master fallback validator to read-only tools.
-
-        The multi path already passes READ_ONLY_TOOLS. A validator that can
-        mutate the workspace is a defect regardless of which model it is, so
-        the empty-multi fallback through BaseHandler.execute() must match it.
-        """
-        return list(READ_ONLY_TOOLS)
 
     def _warn_if_self_review(self) -> None:
         """Announce a degraded validator configuration at the point of harm."""

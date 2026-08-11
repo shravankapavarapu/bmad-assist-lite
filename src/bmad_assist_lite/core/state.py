@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from bmad_assist_lite.core.exceptions import StateError
 
@@ -18,6 +18,56 @@ logger = logging.getLogger(__name__)
 STATE_FILENAME: str = "state.yaml"
 STATE_DIR: str = ".bmad-assist-lite"
 TEMP_FILE_SUFFIX = ".tmp"
+
+
+# ============================================================================
+# Unknown-key policy for every model that persists state to disk
+# ============================================================================
+#
+# Three models write state to disk, and they must not answer "what happens to a
+# key I do not recognise?" by accident. Two of them used to leave `extra`
+# undeclared and so inherited Pydantic's silent `ignore`, while the third
+# declared `allow`; the result was that a mistyped key vanished from two files
+# and survived in the third, with nothing in the source saying so on purpose.
+#
+# The rule is one sentence: **a file this tool alone writes drops unknown keys;
+# a file other authors also write preserves them.**
+#
+# That split is deliberate, and flattening it in either direction breaks
+# something real — both halves are pinned by tests in
+# `tests/test_state_extra_policy.py`:
+#
+#   * Making the tool-owned models `allow` would remove a live guard. `State`
+#     is mutated in place by `update_position()`, and under `allow` Pydantic
+#     accepts `state.current_phse = ...` as a brand-new field instead of
+#     raising. Dropping is also self-cleaning: a bad key leaves on the next
+#     save instead of being copied forward forever.
+#   * Making `SprintStatus` `ignore` would destroy user data. `sprint-status.yaml`
+#     is the documented single source of truth for story discovery and is also
+#     written by BMAD planning skills and edited by hand; it carries top-level
+#     keys this tool does not model (`project`, `current_sprint`, `totals`).
+#     Under `ignore` every save would silently strip them.
+#
+# Dropping is never silent: `log_ignored_fields()` warns once per source before
+# validation, so the tolerance that makes upgrades survivable does not also make
+# a typo invisible.
+
+EXTRA_POLICY: dict[str, str] = {
+    # Tool-owned files: only this tool writes them, so an unknown key is either
+    # version skew or a mistake. Drop it (loudly) rather than copy it forward.
+    "State": "ignore",
+    "ParallelState": "ignore",
+    "StoryState": "ignore",
+    "MergeAttempt": "ignore",
+    "GateObservation": "ignore",
+    # Co-authored file: dropping would delete content we did not write.
+    "SprintStatus": "allow",
+}
+
+PRESERVE_UNKNOWN_KEYS: frozenset[str] = frozenset(
+    name for name, policy in EXTRA_POLICY.items() if policy == "allow"
+)
+"""Models that keep unknown keys, because something other than this tool wrote them."""
 
 
 def _utc_now() -> datetime:
@@ -110,7 +160,14 @@ class Phase(Enum):
 
 
 class State(BaseModel):
-    """Persistent state for the development loop."""
+    """Persistent state for the development loop.
+
+    Unknown keys are dropped (and warned about) per ``EXTRA_POLICY``: this file
+    has one writer, and the model is mutated in place, so ``extra='allow'``
+    would turn a misspelled attribute assignment into a silent new field.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     current_epic: int | str | None = None
     current_story: str | None = None

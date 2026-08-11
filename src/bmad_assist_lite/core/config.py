@@ -315,6 +315,51 @@ class AutoCommitConfig(BaseModel):
     enabled: bool = Field(default=True, description="Auto-commit after code_review_synthesis")
 
 
+class SolutionsConfig(BaseModel):
+    """The compounding solutions store: off by default, bounded when on.
+
+    Opt-in because it changes what reaches a prompt, and because an empty store
+    would otherwise cost every phase a directory scan for nothing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(
+        default=False, description="Consult docs/solutions/ during dev and synthesis phases"
+    )
+    max_records: int = Field(
+        default=200, ge=1, description="Cap on stored records; oldest evicted beyond it"
+    )
+    max_injected: int = Field(
+        default=5, ge=0, description="Cap on records injected into a single phase"
+    )
+    max_injected_chars: int = Field(
+        default=4000, ge=0, description="Hard character cap on the injected block"
+    )
+
+
+class SignoffConfig(BaseModel):
+    """Whether a recorded architect sign-off is a precondition of ``done``.
+
+    Defaults to off. The postcondition is real, but requiring an artifact that
+    no existing project has produced yet would stop every upgraded run at its
+    first story, and it keys the "was anything implemented?" half on this tool's
+    own auto-commit subject line, which a project committing by hand will not
+    match. REQ-08.6's reversibility clause names exactly this posture —
+    advisory by default, enforcing by flag.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    required: bool = Field(
+        default=False,
+        description=(
+            "Refuse to mark a story done unless a sign-off artifact exists whose "
+            "tree SHA matches the current tree (guards incident I-01)"
+        ),
+    )
+
+
 class ForensicsConfig(BaseModel):
     """Retention policy for story-scoped forensic artifacts.
 
@@ -358,6 +403,15 @@ class LoopConfig(BaseModel):
         default=None,
         gt=0,
         description="Stop the run after this many wall-clock seconds (None = unlimited)",
+    )
+    max_cost_usd: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Stop the run once this many US dollars of provider spend have been "
+            "recorded for it (None = unlimited). Measured from the persisted "
+            "per-phase metrics, and counted per run so --resume starts fresh."
+        ),
     )
     review_max_iterations: int = Field(
         default=1,
@@ -442,6 +496,8 @@ class Config(BaseModel):
         default=None, description="Fallback quality gate commands"
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
+    signoff: SignoffConfig = Field(default_factory=SignoffConfig)
+    solutions: SolutionsConfig = Field(default_factory=SolutionsConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     parallel: ParallelConfig | None = Field(

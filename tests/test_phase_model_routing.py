@@ -23,6 +23,7 @@ from bmad_assist_lite.core.config import (
 )
 from bmad_assist_lite.core.exceptions import ConfigError
 from bmad_assist_lite.core.state import Phase, State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.plugins.loader import load_all_plugins
 from bmad_assist_lite.plugins.registry import PluginRegistry
@@ -55,6 +56,9 @@ def _load(phase_models: dict[str, str] | None = None, **kwargs: Any) -> Config:
 
 class _StubHandler(BaseHandler):
     """Minimal concrete handler used to exercise BaseHandler.get_model()."""
+
+    autonomy = AutonomyLevel.READ_ONLY
+    """Model routing is the subject here; the narrowest level keeps it inert."""
 
     def __init__(self, config: Config, phase: str) -> None:
         super().__init__(config, Path("."))
