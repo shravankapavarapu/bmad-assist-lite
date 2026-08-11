@@ -10,7 +10,6 @@ import asyncio
 import logging
 import math
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,7 @@ from bmad_assist_lite.providers.base import (
     resolve_cli_path,
     validate_settings_file,
 )
-from bmad_assist_lite.providers.result_collector import ResultCollector
+from bmad_assist_lite.providers.result_collector import CallMetrics, ResultCollector
 
 logger = logging.getLogger(__name__)
 
@@ -68,28 +67,6 @@ def _is_benign_success_error(exc: Exception) -> bool:
 # ============================================================================
 # Per-call metric capture
 # ============================================================================
-
-
-@dataclass(frozen=True)
-class _SdkMetrics:
-    """Per-call metrics read off the SDK's terminal ``ResultMessage``.
-
-    Every field is ``None`` when unavailable — never ``0``, which would be
-    indistinguishable from a real measurement of zero.
-
-    ``input_tokens`` is the *uncached* prompt remainder. The full prompt size is
-    ``input_tokens + cache_read_tokens + cache_creation_tokens``; for this tool's
-    large XML prompts the cached share is usually the dominant one, so any
-    aggregate built on ``input_tokens`` alone systematically under-reports.
-    """
-
-    api_duration_ms: int | None = None
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    cache_read_tokens: int | None = None
-    cache_creation_tokens: int | None = None
-    total_cost_usd: float | None = None
-    session_id: str | None = None
 
 
 # Token keys read out of the raw ``usage`` dict, in lookup order. The CLI passes
@@ -304,7 +281,7 @@ def _extract_usage_tokens_safe(usage: object) -> dict[str, int | None]:
         return _empty_tokens()
 
 
-def _extract_metrics(message: ResultMessage | None) -> _SdkMetrics:
+def _extract_metrics(message: ResultMessage | None) -> CallMetrics:
     """Extract per-call metrics from a ``ResultMessage`` without ever raising.
 
     Instrumentation must not be able to fail a real invocation, so every
@@ -315,6 +292,14 @@ def _extract_metrics(message: ResultMessage | None) -> _SdkMetrics:
 
     Every field is read independently, so one malformed value costs only itself:
     a bad ``total_cost_usd`` must not take the token counts down with it.
+
+    The guarantee is made structural by a top-level ``except``. Every input
+    reachable today is already caught by an inner guard (``_read_attr`` per
+    attribute, ``_extract_usage_tokens_safe`` around the token path), so the
+    backstop is unreachable on current code. It exists for the next field read
+    added here: a read placed outside those helpers would otherwise propagate and
+    fail a real invocation, contradicting the guarantee above. Fields gathered
+    before such a raise are still returned — a partial metric set beats none.
 
     When a stream carries more than one ``ResultMessage``, the **first** is the
     one extracted here — see :meth:`_invoke_async_with_collector`.
@@ -328,22 +313,38 @@ def _extract_metrics(message: ResultMessage | None) -> _SdkMetrics:
 
     """
     if message is None:
-        return _SdkMetrics()
+        return CallMetrics()
 
-    tokens = _extract_usage_tokens_safe(_read_attr(message, "usage"))
+    tokens = _empty_tokens()
+    api_duration_ms: int | None = None
+    total_cost_usd: float | None = None
+    session_id: str | None = None
 
-    return _SdkMetrics(
-        api_duration_ms=_as_int(_read_attr(message, "duration_api_ms"), "duration_api_ms"),
+    try:
+        tokens = _extract_usage_tokens_safe(_read_attr(message, "usage"))
+        api_duration_ms = _as_int(_read_attr(message, "duration_api_ms"), "duration_api_ms")
+        total_cost_usd = _as_float(_read_attr(message, "total_cost_usd"), "total_cost_usd")
+        session_id = _as_str(_read_attr(message, "session_id"), "session_id")
+    except Exception as e:
+        logger.warning(
+            "Claude SDK metric extraction raised past its inner guards (%s); "
+            "reporting only the metrics gathered before the failure. This means a "
+            "field is being read outside a guarded helper — fix that read.",
+            e,
+        )
+
+    return CallMetrics(
+        api_duration_ms=api_duration_ms,
         input_tokens=tokens["input_tokens"],
         output_tokens=tokens["output_tokens"],
         cache_read_tokens=tokens["cache_read_tokens"],
         cache_creation_tokens=tokens["cache_creation_tokens"],
-        total_cost_usd=_as_float(_read_attr(message, "total_cost_usd"), "total_cost_usd"),
-        session_id=_as_str(_read_attr(message, "session_id"), "session_id"),
+        total_cost_usd=total_cost_usd,
+        session_id=session_id,
     )
 
 
-def _format_metric_suffix(metrics: _SdkMetrics) -> str:
+def _format_metric_suffix(metrics: CallMetrics) -> str:
     """Render the available metrics as a log suffix.
 
     Args:
@@ -425,8 +426,12 @@ class ClaudeSDKProvider(BaseProvider):
         collector: ResultCollector,
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
-    ) -> tuple[str, ResultMessage | None]:
-        """Stream the SDK query, returning the collected text and result envelope.
+    ) -> str:
+        """Stream the SDK query, returning the collected text.
+
+        Metrics are not returned; they are recorded onto ``collector`` the moment
+        the terminal envelope arrives, so that a call cancelled by the timeout
+        still reports whatever it had learned.
 
         A well-formed stream carries exactly one ``ResultMessage``. If more than
         one arrives, the **first** is kept and each subsequent one is logged as a
@@ -435,8 +440,7 @@ class ClaudeSDKProvider(BaseProvider):
         populated metric set for an empty one.
 
         Returns:
-            A tuple of the accumulated response text and the first terminal
-            ``ResultMessage``, which is None when the stream carried none.
+            The accumulated response text.
 
         """
         extra_args: dict[str, str | None] = {}
@@ -464,6 +468,12 @@ class ClaudeSDKProvider(BaseProvider):
                 elif isinstance(message, ResultMessage):
                     if result_message is None:
                         result_message = message
+                        # Record immediately rather than after the loop: if the
+                        # stream hangs during teardown (an un-reaped subprocess
+                        # is the observed case), wait_for cancels this coroutine
+                        # and the local is lost. Only what is on the collector
+                        # survives into _handle_timeout().
+                        collector.record_metrics(_extract_metrics(message))
                     else:
                         logger.warning(
                             "Claude SDK stream carried more than one ResultMessage "
@@ -491,7 +501,7 @@ class ClaudeSDKProvider(BaseProvider):
         if collector.is_empty:
             raise ProviderError("No response received from SDK")
 
-        return collector.text, result_message
+        return collector.text
 
     def _do_invoke(
         self,
@@ -538,7 +548,7 @@ class ClaudeSDKProvider(BaseProvider):
         try:
             from bmad_assist_lite.core.async_utils import run_async_in_thread
 
-            response_text, result_message = run_async_in_thread(
+            response_text = run_async_in_thread(
                 asyncio.wait_for(
                     self._invoke_async_with_collector(
                         prompt,
@@ -566,7 +576,9 @@ class ClaudeSDKProvider(BaseProvider):
             raise ProviderError(f"Unexpected SDK error: {e}") from e
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
-        metrics = _extract_metrics(result_message)
+        # Extracted once, when the envelope arrived. None here means the stream
+        # carried no result envelope, which is unavailable — not zero.
+        metrics = collector.metrics or CallMetrics()
 
         logger.info(
             "Claude SDK completed: duration=%dms, response_len=%d%s",

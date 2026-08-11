@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
+from bmad_assist_lite.providers import claude_sdk
 from bmad_assist_lite.providers.base import ProviderResult
 from bmad_assist_lite.providers.claude_sdk import ClaudeSDKProvider
 
@@ -1050,3 +1051,62 @@ class TestConstructionCompatibility:
         assert result.stdout == "out"
         assert result.duration_ms == 42
         assert result.total_cost_usd is None
+
+
+# ============================================================================
+# T35 / F-17 — _extract_metrics has a top-level backstop
+# ============================================================================
+
+
+class TestExtractMetricsTopLevelBackstop:
+    """The function's docstring guarantee is upheld by construction, not by luck.
+
+    Every currently-reachable input is caught by an inner guard, so this backstop
+    is unreachable today. It exists for the next field read added outside the
+    protected helper: without it, such a read would propagate and fail a real
+    invocation. The tests therefore *mutate* an inner guard into a raising one to
+    reach the outer handler — the only way to prove a backstop fires.
+    """
+
+    def test_raise_from_an_unguarded_read_is_caught(self) -> None:
+        """A raise escaping the inner guards does not propagate out."""
+        with patch.object(
+            claude_sdk, "_as_float", side_effect=RuntimeError("future unguarded read")
+        ):
+            metrics = claude_sdk._extract_metrics(make_result_message())
+
+        assert metrics is not None
+
+    def test_backstop_returns_what_was_already_gathered(self) -> None:
+        """Fields read before the raise survive; the rest degrade to None."""
+        with patch.object(
+            claude_sdk, "_as_float", side_effect=RuntimeError("future unguarded read")
+        ):
+            metrics = claude_sdk._extract_metrics(
+                make_result_message(usage={"input_tokens": 11, "output_tokens": 22})
+            )
+
+        assert metrics.input_tokens == 11
+        assert metrics.output_tokens == 22
+        assert metrics.api_duration_ms == 8500
+        assert metrics.total_cost_usd is None
+        assert metrics.session_id is None
+
+    def test_backstop_warns(self, caplog: Any) -> None:
+        """The backstop is loud — a silently swallowed failure is worse than none."""
+        with caplog.at_level(logging.WARNING), patch.object(
+            claude_sdk, "_as_float", side_effect=RuntimeError("future unguarded read")
+        ):
+            claude_sdk._extract_metrics(make_result_message())
+
+        assert any("future unguarded read" in t for t in warning_texts(caplog))
+
+    def test_backstop_never_reports_zero(self) -> None:
+        """Degraded fields are None, never 0 — the never-zero rule holds here too."""
+        with patch.object(
+            claude_sdk, "_as_int", side_effect=RuntimeError("future unguarded read")
+        ):
+            metrics = claude_sdk._extract_metrics(make_result_message())
+
+        assert metrics.api_duration_ms is None
+        assert metrics.total_cost_usd is None

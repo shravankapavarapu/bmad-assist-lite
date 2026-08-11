@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from bmad_assist_lite.core.exceptions import ProviderTimeoutError
-from bmad_assist_lite.providers.result_collector import ResultCollector
+from bmad_assist_lite.providers.result_collector import CallMetrics, ResultCollector
 
 logger = logging.getLogger(__name__)
 
@@ -403,6 +403,34 @@ class ProviderResult:
     total_cost_usd: float | None = None
 
 
+def _timeout_metric_kwargs(metrics: CallMetrics | None) -> dict[str, Any]:
+    """Map recorded call metrics onto ProviderResult keyword arguments.
+
+    Args:
+        metrics: Metrics the provider recorded on the collector, or None if it
+            never reported any.
+
+    Returns:
+        The metric keyword arguments, or an empty mapping when no metrics were
+        recorded — which leaves every metric field at its ``None`` default. The
+        distinction that matters is None versus 0: a timed-out call reporting 0
+        tokens is indistinguishable from a cheap call, whereas None is visibly
+        missing and can be excluded from an aggregate.
+
+    """
+    if metrics is None:
+        return {}
+    return {
+        "provider_session_id": metrics.session_id,
+        "api_duration_ms": metrics.api_duration_ms,
+        "input_tokens": metrics.input_tokens,
+        "output_tokens": metrics.output_tokens,
+        "cache_read_tokens": metrics.cache_read_tokens,
+        "cache_creation_tokens": metrics.cache_creation_tokens,
+        "total_cost_usd": metrics.total_cost_usd,
+    }
+
+
 class BaseProvider(ABC):
     """Abstract base class for CLI provider implementations.
 
@@ -595,6 +623,15 @@ class BaseProvider(ABC):
         # After grace (or if not active), check accumulated text
         partial_text = collector.text
         duration_ms = int((time.monotonic() - start_time) * 1000)
+
+        # Carry whatever metrics the provider managed to record before the
+        # timeout. A timed-out call that reported zero tokens would bias any
+        # aggregate downward exactly where it hurts most: the slowest, most
+        # expensive phases are the ones that time out, so their disappearance
+        # from the sample makes a lever that slowed things down look like it
+        # reduced tokens. Absent metrics stay None so the gap is detectable.
+        metric_kwargs = _timeout_metric_kwargs(collector.metrics)
+
         if len(partial_text) >= MIN_USEFUL_RESPONSE_CHARS:
             logger.warning(
                 "Returning partial result: %d chars captured (duration=%dms)",
@@ -609,6 +646,7 @@ class BaseProvider(ABC):
                 model=model,
                 command=command,
                 timed_out=True,
+                **metric_kwargs,
             )
 
         # Partial text too small — raise with partial result attached
@@ -622,6 +660,7 @@ class BaseProvider(ABC):
                 model=model,
                 command=command,
                 timed_out=True,
+                **metric_kwargs,
             )
 
         raise ProviderTimeoutError(
