@@ -521,6 +521,7 @@ class BaseProvider(ABC):
         effort: str | None = None,
         color_index: int | None = None,
         system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Execute LLM provider with the given prompt.
 
@@ -537,6 +538,11 @@ class BaseProvider(ABC):
             effort: Reasoning-effort hint, forwarded to _do_invoke() verbatim.
                 Provider-specific; providers that do not support it ignore it.
             color_index: Index for ANSI color differentiation in output.
+            resume: Session id to resume (session reuse). Provider-specific;
+                only Claude acts on it, other providers ignore it. None (default)
+                starts a fresh session, i.e. current behaviour. When a Claude call
+                resumes, the returned result carries resumed_session_id=<id> and
+                session_reused=True (L4 attribution).
 
         Returns:
             ProviderResult with timed_out=False on success, or timed_out=True
@@ -567,6 +573,7 @@ class BaseProvider(ABC):
                     effort=effort,
                     color_index=color_index,
                     system_prompt=system_prompt,
+                    resume=resume,
                 )
             except TimeoutError:
                 timed_out = True
@@ -651,6 +658,7 @@ class BaseProvider(ABC):
         effort: str | None = None,
         color_index: int | None = None,
         system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Provider-specific invocation that must call collector.add() as chunks arrive.
 
@@ -672,6 +680,9 @@ class BaseProvider(ABC):
             system_prompt: Stable text to carry as the provider's system prompt
                 (append mode), enabling cross-call prompt-cache reuse. Providers
                 that cannot act on it must still accept the keyword.
+            resume: Session id to resume. Provider-specific; ignore if
+                unsupported. Implementations that cannot act on it must still
+                accept the keyword so invoke() can forward it unconditionally.
 
         Returns:
             ProviderResult on successful completion.

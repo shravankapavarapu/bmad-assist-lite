@@ -245,6 +245,7 @@ class CursorProvider(BaseProvider):
         effort: str | None = None,
         color_index: int | None = None,
         system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Execute Cursor CLI with NDJSON streaming and collector integration.
 

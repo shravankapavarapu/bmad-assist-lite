@@ -9,6 +9,7 @@ from bmad_assist_lite.core.async_utils import run_async_in_thread
 from bmad_assist_lite.core.config import get_phase_timeout, self_review_warning
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
+from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
@@ -138,7 +139,7 @@ class CodeReviewHandler(BaseHandler):
                 read_only_tools = list(READ_ONLY_TOOLS)
 
                 def _make_invoker(
-                    p: Any, m: str, t: int, e: str | None
+                    p: Any, m: str, t: int, e: str | None, r: str | None
                 ) -> Any:
                     return lambda: p.invoke(
                         prompt,
@@ -148,7 +149,19 @@ class CodeReviewHandler(BaseHandler):
                         allowed_tools=read_only_tools,
                         effort=e,
                         system_prompt=system_prompt,
+                        resume=r,
                     )
+
+                # L2: each reviewer lane may resume its OWN round-1 session on a
+                # round-2 re-review. Keyed by story+phase+index+provider+model so
+                # it can never cross a story/phase/lane boundary (F-13 structural).
+                story_id = state.current_story
+                lane_keys = [
+                    reviewer_reuse.lane_key(
+                        story_id, self.phase_name, idx, mc.provider, mc.model
+                    )
+                    for idx, mc in enumerate(multi_configs)
+                ]
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(multi_configs)
@@ -163,12 +176,17 @@ class CodeReviewHandler(BaseHandler):
                     for idx, mc in enumerate(multi_configs):
                         provider = get_provider(mc.provider)
                         providers.append(provider)
+                        resume_id = reviewer_reuse.resume_id_for(
+                            state, self.config, provider=mc.provider, key=lane_keys[idx]
+                        )
                         if idx > 0 and stagger > 0:
                             await asyncio.sleep(stagger)
                         futures.append(
                             loop.run_in_executor(
                                 executor,
-                                _make_invoker(provider, mc.model, timeout, mc.effort),
+                                _make_invoker(
+                                    provider, mc.model, timeout, mc.effort, resume_id
+                                ),
                             )
                         )
 
@@ -183,6 +201,15 @@ class CodeReviewHandler(BaseHandler):
                             {"reviewer": label, "error": str(raw), "exit_code": 1}
                         )
                     else:
+                        # Carry this lane's session id forward for a round-2 resume.
+                        reviewer_reuse.capture_session(
+                            state,
+                            self.config,
+                            story_id=story_id,
+                            provider=multi_configs[i].provider,
+                            key=lane_keys[i],
+                            result=raw,
+                        )
                         response = providers[i].parse_output(raw)
                         results.append(
                             {

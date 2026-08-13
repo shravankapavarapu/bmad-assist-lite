@@ -199,6 +199,7 @@ class BaseHandler(ABC):
         model: str | None = None,
         attempt: int = 1,
         system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Invoke the provider with the given prompt.
 
@@ -207,6 +208,8 @@ class BaseHandler(ABC):
             model: Per-invocation model override, honoured only for routable phases.
             attempt: 1-based attempt number; a retry escalates back to the master model.
             system_prompt: Stable context to append as a cached system prompt, or None.
+            resume: Session id to resume (session reuse). Claude-only; None starts
+                a fresh session. Used by the synthesis lane's round-2 self-resume.
 
         """
         provider = self.get_provider()
@@ -241,6 +244,7 @@ class BaseHandler(ABC):
             allowed_tools=allowed_tools,
             effort=self.config.providers.master.effort,
             system_prompt=system_prompt,
+            resume=resume,
         )
 
     def execute(self, state: State) -> PhaseResult:

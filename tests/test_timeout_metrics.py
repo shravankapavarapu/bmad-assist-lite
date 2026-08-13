@@ -90,6 +90,7 @@ class TimingOutProvider(BaseProvider):
         effort: str | None = None,
         color_index: int | None = None,
         system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Emit partial text, optionally record metrics, then time out."""
         if self._text:

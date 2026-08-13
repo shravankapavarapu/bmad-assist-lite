@@ -76,6 +76,7 @@ class FakeProvider(BaseProvider):
         effort: str | None = None,
         color_index: int | None = None,
         system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Simulate provider invocation with configurable behavior."""
         self._do_invoke_called = True

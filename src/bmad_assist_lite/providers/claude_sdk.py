@@ -431,6 +431,7 @@ class ClaudeSDKProvider(BaseProvider):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> str:
         """Stream the SDK query, returning the collected text.
 
@@ -485,9 +486,12 @@ class ClaudeSDKProvider(BaseProvider):
             extra_args=extra_args,
             cli_path=self._resolve_cli_path(),
             strict_mcp_config=hermetic,
+            resume=resume,
         )
         if hermetic:
             logger.debug("Hermetic run: strict_mcp_config=True, project MCP servers not loaded.")
+        if resume:
+            logger.info("Claude SDK resuming session %s (reviewer self-resume).", resume)
 
         result_message: ResultMessage | None = None
 
@@ -556,8 +560,16 @@ class ClaudeSDKProvider(BaseProvider):
         effort: str | None = None,
         color_index: int | None = None,
         system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
-        """Execute Claude SDK with the given prompt and return the result."""
+        """Execute Claude SDK with the given prompt and return the result.
+
+        When ``resume`` is a session id, the SDK continues that conversation
+        (``ClaudeAgentOptions.resume``) instead of cold-starting a fresh session,
+        so context is not recompiled. The returned result then carries
+        ``resumed_session_id``/``session_reused`` for L4 attribution. None
+        (default) is the fresh-session path.
+        """
         _ = color_index
 
         if timeout <= 0:
@@ -600,6 +612,7 @@ class ClaudeSDKProvider(BaseProvider):
                         allowed_tools,
                         effort,
                         system_prompt,
+                        resume,
                     ),
                     timeout=timeout,
                 )
@@ -641,6 +654,8 @@ class ClaudeSDKProvider(BaseProvider):
             model=effective_model,
             command=(self.provider_name, model or "default"),
             provider_session_id=metrics.session_id,
+            resumed_session_id=resume,
+            session_reused=bool(resume),
             api_duration_ms=metrics.api_duration_ms,
             input_tokens=metrics.input_tokens,
             output_tokens=metrics.output_tokens,

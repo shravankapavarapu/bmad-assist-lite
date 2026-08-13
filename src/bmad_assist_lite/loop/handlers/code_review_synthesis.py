@@ -12,6 +12,7 @@ from typing import Any
 
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
+from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_loop import ReviewDecision, decide_review_loop
 from bmad_assist_lite.loop.types import PhaseResult
@@ -342,7 +343,26 @@ class CodeReviewSynthesisHandler(BaseHandler):
                     len(resp) // 4,
                 )
 
-            result = self.invoke_provider(full_prompt)
+            # L2: synthesis resumes its OWN round-1 synthesis session on a round-2
+            # re-synthesis (keyed by story so it never crosses a story boundary;
+            # this is the master provider's synthesis lane -- never the dev
+            # session, which is a separate phase/invoke and is never captured here).
+            master = self.config.providers.master
+            synth_key = reviewer_reuse.lane_key(
+                state.current_story, self.phase_name, 0, master.provider, master.model
+            )
+            resume_id = reviewer_reuse.resume_id_for(
+                state, self.config, provider=master.provider, key=synth_key
+            )
+            result = self.invoke_provider(full_prompt, resume=resume_id)
+            reviewer_reuse.capture_session(
+                state,
+                self.config,
+                story_id=state.current_story,
+                provider=master.provider,
+                key=synth_key,
+                result=result,
+            )
 
             if result.exit_code != 0:
                 return PhaseResult.fail(
