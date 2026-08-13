@@ -911,6 +911,26 @@ def load_config_with_project(
         raise ConfigError(f"Invalid configuration (from {merged_str}): {e}") from e
 
 
+#: The Claude effort ladder, low -> high. An unset effort is treated as the
+#: ``medium`` the master runs at, so a notch-down is a single, defined step.
+_EFFORT_LADDER: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
+def notch_down_effort(effort: str | None) -> str:
+    """Return the effort one notch below ``effort`` (SP-3 lean review).
+
+    ``None`` (provider default) is read as ``medium`` — the level the master
+    runs at — so lowering it yields ``low``. An unrecognised value floors to
+    ``low``. Never goes below ``low``.
+    """
+    current = (effort or "medium").strip().lower()
+    try:
+        index = _EFFORT_LADDER.index(current)
+    except ValueError:
+        return "low"
+    return _EFFORT_LADDER[max(0, index - 1)]
+
+
 def get_phase_timeout(config: Config, phase: str) -> int:
     """Get timeout for a specific workflow phase."""
     if config.timeouts is not None:

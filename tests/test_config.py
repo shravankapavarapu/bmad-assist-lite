@@ -15,6 +15,7 @@ from bmad_assist_lite.core.config import (
     get_config,
     get_phase_timeout,
     load_config,
+    notch_down_effort,
 )
 from bmad_assist_lite.core.exceptions import ConfigError
 from bmad_assist_lite.core.state import Phase
@@ -675,3 +676,25 @@ class TestSpeedConfig:
     def test_frozen(self):
         with pytest.raises((TypeError, ValueError, AttributeError)):
             SpeedConfig().structured_review = True  # type: ignore[misc]
+
+
+class TestNotchDownEffort:
+    """SP-3 effort ladder: one defined step lower, floored at low."""
+
+    def test_none_reads_as_medium(self):
+        assert notch_down_effort(None) == "low"
+
+    def test_each_notch(self):
+        assert notch_down_effort("max") == "xhigh"
+        assert notch_down_effort("xhigh") == "high"
+        assert notch_down_effort("high") == "medium"
+        assert notch_down_effort("medium") == "low"
+
+    def test_floors_at_low(self):
+        assert notch_down_effort("low") == "low"
+
+    def test_unknown_floors_to_low(self):
+        assert notch_down_effort("bogus") == "low"
+
+    def test_case_insensitive(self):
+        assert notch_down_effort("HIGH") == "medium"

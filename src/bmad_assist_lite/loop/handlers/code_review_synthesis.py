@@ -9,6 +9,7 @@ import logging
 import re
 from typing import Any
 
+from bmad_assist_lite.core.config import notch_down_effort
 from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
@@ -274,6 +275,12 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
         return decision
 
+    def _lean_effort_kwargs(self) -> dict[str, Any]:
+        """SP-3: lower the synthesis/adjudication effort one notch when lean."""
+        if self.config.speed.lean_review:
+            return {"effort": notch_down_effort(self.config.providers.master.effort)}
+        return {}
+
     def _load_story_text(self, state: State, limit: int = 16000) -> str:
         """Return the story file text (bounded) for adjudication scope context."""
         story_id = state.current_story
@@ -369,7 +376,9 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
         # Tool-free (allowed_tools=[]): the adjudicator cannot fix or explore, so
         # its output is a short decisions block, not a multi-turn fix pass.
-        result = self.invoke_provider(adj_prompt, allowed_tools=[])
+        result = self.invoke_provider(
+            adj_prompt, allowed_tools=[], **self._lean_effort_kwargs()
+        )
         if result.exit_code != 0:
             return PhaseResult.fail(
                 result.stderr or f"Provider exited with code {result.exit_code}"
@@ -504,7 +513,9 @@ class CodeReviewSynthesisHandler(BaseHandler):
             resume_id = reviewer_reuse.resume_id_for(
                 state, self.config, provider=master.provider, key=synth_key
             )
-            result = self.invoke_provider(full_prompt, resume=resume_id)
+            result = self.invoke_provider(
+                full_prompt, resume=resume_id, **self._lean_effort_kwargs()
+            )
             reviewer_reuse.capture_session(
                 state,
                 self.config,

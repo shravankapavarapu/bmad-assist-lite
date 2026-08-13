@@ -79,6 +79,38 @@ class TestDeltaPromptContent:
         assert "no uncommitted diff detected" in prompt
 
 
+class TestLeanReview:
+    def test_lean_addendum_inlines_diff_and_demands_findings_only(self, tmp_path):
+        handler = _handler(tmp_path, {"lean_review": True})
+        with patch(
+            "bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="THE DIFF"
+        ), patch.object(CodeReviewHandler, "render_prompt", return_value="FULL"):
+            prompt = handler._review_prompt(State(current_epic=3, current_story="3.1"))
+        assert "FULL" in prompt
+        assert "changed-code-diff" in prompt and "THE DIFF" in prompt
+        assert "findings ONLY" in prompt
+
+    def test_lean_off_adds_no_addendum(self, tmp_path):
+        handler = _handler(tmp_path, {})
+        with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL"):
+            prompt = handler._review_prompt(State(current_epic=3, current_story="3.1"))
+        assert prompt == "FULL"
+
+    def test_delta_round2_skips_lean_addendum(self, tmp_path):
+        # When both delta_round2 and lean_review are on, round-2 uses the delta
+        # prompt (already lean) and must NOT also append the lean addendum.
+        _seed_findings(tmp_path, "3.1", "R1 finding")
+        handler = _handler(tmp_path, {"delta_round2": True, "lean_review": True})
+        state = State(current_epic=3, current_story="3.1")
+        state.review_iteration = 1
+        with patch(
+            "bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="DIFF"
+        ):
+            prompt = handler._review_prompt(state)
+        assert "Round-2 re-review" in prompt
+        assert "<lean-review>" not in prompt
+
+
 class TestGitDiffHelper:
     def test_returns_none_outside_repo(self, tmp_path):
         # tmp_path is not a git repo -> git diff exits non-zero -> None.

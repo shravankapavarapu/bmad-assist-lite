@@ -6,7 +6,11 @@ import os
 from typing import Any
 
 from bmad_assist_lite.core.async_utils import run_async_in_thread
-from bmad_assist_lite.core.config import get_phase_timeout, self_review_warning
+from bmad_assist_lite.core.config import (
+    get_phase_timeout,
+    notch_down_effort,
+    self_review_warning,
+)
 from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
@@ -118,15 +122,38 @@ class CodeReviewHandler(BaseHandler):
         either case.
         """
         if self.config.speed.delta_round2 and state.review_iteration >= 1:
+            # The delta prompt is already lean + diff-scoped; no lean addendum.
             prompt = self._build_delta_review_prompt(state)
             write_progress(
                 "  Round-2 delta review: scoped to the fix diff + round-1 findings"
             )
         else:
             prompt = self.render_prompt(state)
+            # SP-3: inline the changed-code diff and demand findings-only,
+            # diff-scoped reading (reviewers cannot run git themselves).
+            if self.config.speed.lean_review:
+                prompt = f"{prompt}\n\n{self._lean_review_addendum()}"
         if self.config.speed.structured_review:
             prompt = f"{prompt}\n\n{reviewer_findings_addendum()}"
         return prompt
+
+    def _lean_review_addendum(self) -> str:
+        """SP-3: inline the changed-code diff + findings-only, diff-scoped guidance."""
+        diff = git_diff(self.project_path)
+        diff_block = (
+            f"<changed-code-diff>\n{diff}\n</changed-code-diff>\n\n" if diff else ""
+        )
+        return (
+            f"{diff_block}"
+            "<lean-review>\n"
+            "Output findings ONLY — no step-by-step narration, no file-by-file "
+            "walkthrough, no restating the story. Each finding is a specific "
+            "file:line plus <= 25 words of claim/evidence.\n"
+            "Review the changed-code diff above; open a file with Read ONLY when "
+            "the diff is insufficient to judge a specific finding. Do not sweep the "
+            "whole tree.\n"
+            "</lean-review>"
+        )
 
     def _build_delta_review_prompt(self, state: State) -> str:
         """SP-2: a fresh, scoped round-2 review prompt (no full artifacts, no resume).
@@ -245,11 +272,17 @@ class CodeReviewHandler(BaseHandler):
                         )
                         if idx > 0 and stagger > 0:
                             await asyncio.sleep(stagger)
+                        # SP-3: reviewer lanes run one effort notch lower.
+                        lane_effort = (
+                            notch_down_effort(mc.effort)
+                            if self.config.speed.lean_review
+                            else mc.effort
+                        )
                         futures.append(
                             loop.run_in_executor(
                                 executor,
                                 _make_invoker(
-                                    provider, mc.model, timeout, mc.effort, resume_id
+                                    provider, mc.model, timeout, lane_effort, resume_id
                                 ),
                             )
                         )
