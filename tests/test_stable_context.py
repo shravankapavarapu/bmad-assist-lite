@@ -60,6 +60,47 @@ class TestStableSuperset:
         assert build_stable_system_prompt(_ctx(tmp_path, 1)) is None
 
 
+class TestUserMessageExclusion:
+    """Stable artifacts leave the user message under stable_prefix.
+
+    They ride the cached system prompt instead; story/volatile files stay.
+    """
+
+    def _compiled(self):  # type: ignore[no-untyped-def]
+        from bmad_assist_lite.compiler.types import CompiledWorkflow
+
+        return CompiledWorkflow(
+            workflow_name="x",
+            mission="m",
+            context="",
+            variables={},
+            instructions="i",
+            output_template="t",
+        )
+
+    def test_off_keeps_all_files(self) -> None:
+        from bmad_assist_lite.compiler.output import generate_output
+
+        files = {"project_context": "PCBODY", "epic_file": "EPICBODY", "story_file": "STORYBODY"}
+        xml = generate_output(self._compiled(), context_files=files, stable_prefix=False).xml
+        assert "PCBODY" in xml and "EPICBODY" in xml and "STORYBODY" in xml
+
+    def test_on_drops_stable_keeps_story(self) -> None:
+        from bmad_assist_lite.compiler.output import generate_output
+
+        files = {
+            "project_context": "PCBODY",
+            "architecture_file": "ARCHBODY",
+            "epic_file": "EPICBODY",
+            "story_file": "STORYBODY",
+        }
+        xml = generate_output(self._compiled(), context_files=files, stable_prefix=True).xml
+        assert "STORYBODY" in xml
+        assert "PCBODY" not in xml
+        assert "ARCHBODY" not in xml
+        assert "EPICBODY" not in xml
+
+
 class TestCompilerConfig:
     def test_stable_prefix_defaults_off(self) -> None:
         assert CompilerConfig().stable_prefix is False

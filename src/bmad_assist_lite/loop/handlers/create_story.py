@@ -106,6 +106,7 @@ class CreateStoryHandler(BaseHandler):
             output_folder=paths.output_folder,
             project_knowledge=paths.project_knowledge,
             resolved_variables=resolved_variables,
+            stable_prefix=self.config.compiler.stable_prefix,
         )
 
         try:

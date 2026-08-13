@@ -158,9 +158,17 @@ class ValidateStoryHandler(BaseHandler):
                 ) as executor:
                     futures = []
                     providers: list[Any] = []
-                    for mc in multi_configs:
+                    # Stagger the start of each reviewer when a cached system
+                    # prompt is in play, so the first reviewer warms the shared
+                    # stable-context cache before the next begins; without this
+                    # the concurrent reviewers race an unwarmed cache and each
+                    # pays full price for the same bytes.
+                    stagger = self.config.parallel_delay if system_prompt else 0.0
+                    for idx, mc in enumerate(multi_configs):
                         provider = get_provider(mc.provider)
                         providers.append(provider)
+                        if idx > 0 and stagger > 0:
+                            await asyncio.sleep(stagger)
                         futures.append(
                             loop.run_in_executor(
                                 executor,
