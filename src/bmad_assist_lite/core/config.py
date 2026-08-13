@@ -421,6 +421,63 @@ class EpicKnowledgeConfig(BaseModel):
     )
 
 
+class SpeedConfig(BaseModel):
+    """Wall-clock speed pack for the review pipeline (goal-run6).
+
+    All off by default and backward-compatible: with every flag ``False`` the
+    review chain runs exactly as today. The measured physics is that every
+    single-lane phase is 100% API time at a fixed output-tokens/sec, so
+    ``wall ~= critical-path output tokens / tps``. Each flag removes
+    critical-path output tokens from a distinct phase family:
+
+    - ``structured_review`` (SP-1): reviewers emit a strict findings block; the
+      ``*_synthesis`` phases become a deterministic code-side merge/dedup plus one
+      short capped adjudication call instead of a multi-thousand-token
+      re-narration. Targets the three synthesis phases (~35% of wall).
+    - ``delta_round2`` (SP-2): the round-2 re-review gets a fresh session scoped
+      to round-1 findings + the handler-inlined fix ``git diff`` + the story
+      file -- not the full artifact set, not a resumed transcript. Targets the
+      round-2 ``code_review`` phase.
+    - ``lean_review`` (SP-3): reviewer + synthesis effort one notch lower,
+      findings-only output with length guidance, and diff-scoped reading
+      ("review the inlined diff; open files only when it is insufficient").
+    - ``remove_stagger`` (SP-4): drop the reviewer fan-out stagger (it only ever
+      fired to warm the dead L1 system-prompt cache).
+
+    Quality is guarded in the A/B, not here: the deterministic merge must drop no
+    round-1 finding of severity >= high, and the final severity mix must stay
+    within +/-1 of the all-off anchor.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    structured_review: bool = Field(
+        default=False,
+        description=(
+            "SP-1: reviewers emit structured findings; synthesis becomes a "
+            "deterministic merge + one capped adjudication call"
+        ),
+    )
+    delta_round2: bool = Field(
+        default=False,
+        description=(
+            "SP-2: round-2 re-review runs a fresh session scoped to round-1 "
+            "findings + inlined fix diff + story (no full artifacts, no resume)"
+        ),
+    )
+    lean_review: bool = Field(
+        default=False,
+        description=(
+            "SP-3: reviewer/synthesis effort one notch down, findings-only "
+            "output, diff-scoped reading"
+        ),
+    )
+    remove_stagger: bool = Field(
+        default=False,
+        description="SP-4: drop the reviewer fan-out stagger (was only for the dead L1 cache)",
+    )
+
+
 class SignoffConfig(BaseModel):
     """Whether a recorded architect sign-off is a precondition of ``done``.
 
@@ -584,6 +641,7 @@ class Config(BaseModel):
     solutions: SolutionsConfig = Field(default_factory=SolutionsConfig)
     session_reuse: SessionReuseConfig = Field(default_factory=SessionReuseConfig)
     epic_knowledge: EpicKnowledgeConfig = Field(default_factory=EpicKnowledgeConfig)
+    speed: SpeedConfig = Field(default_factory=SpeedConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     parallel: ParallelConfig | None = Field(

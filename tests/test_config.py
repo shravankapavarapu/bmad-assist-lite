@@ -8,6 +8,7 @@ from bmad_assist_lite.core.config import (
     LoopConfig,
     QualityGateConfig,
     SessionReuseConfig,
+    SpeedConfig,
     TimeoutsConfig,
     _deep_merge,
     _reset_config,
@@ -620,3 +621,57 @@ class TestEpicKnowledgeConfig:
     def test_max_chars_non_negative(self):
         with pytest.raises((ValueError, ConfigError)):
             EpicKnowledgeConfig(max_chars=-1)
+
+
+class TestSpeedConfig:
+    """speed.* (goal-run6 speed pack) — every flag default OFF, opt-in."""
+
+    def test_defaults_all_off(self):
+        cfg = SpeedConfig()
+        assert cfg.structured_review is False
+        assert cfg.delta_round2 is False
+        assert cfg.lean_review is False
+        assert cfg.remove_stagger is False
+
+    def test_minimal_config_defaults_off(self):
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        assert cfg.speed.structured_review is False
+        assert cfg.speed.delta_round2 is False
+        assert cfg.speed.lean_review is False
+        assert cfg.speed.remove_stagger is False
+
+    def test_opt_in_via_config(self):
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "speed": {
+                    "structured_review": True,
+                    "delta_round2": True,
+                    "lean_review": True,
+                    "remove_stagger": True,
+                },
+            }
+        )
+        assert cfg.speed.structured_review is True
+        assert cfg.speed.delta_round2 is True
+        assert cfg.speed.lean_review is True
+        assert cfg.speed.remove_stagger is True
+
+    def test_partial_opt_in_leaves_rest_off(self):
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "speed": {"delta_round2": True},
+            }
+        )
+        assert cfg.speed.delta_round2 is True
+        assert cfg.speed.structured_review is False
+        assert cfg.speed.lean_review is False
+        assert cfg.speed.remove_stagger is False
+
+    def test_frozen(self):
+        with pytest.raises((TypeError, ValueError, AttributeError)):
+            SpeedConfig().structured_review = True  # type: ignore[misc]
