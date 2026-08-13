@@ -128,6 +128,11 @@ NON_ROUTABLE_LLM_PHASES: frozenset[str] = frozenset(
         "fix_review",
     }
 )
+# Note: the L3 epic-knowledge writer (``write_epic_knowledge``) is intentionally
+# absent from every set here. It is invoked from a story-completion hook, not the
+# phase loop, so it is not a ``Phase`` enum member and must not appear in the
+# classification that partitions that enum. It runs at master capability by
+# construction (the hook uses ``providers.master.model`` directly).
 
 # Deterministic phases that invoke no LLM at all, so there is no model to route.
 NON_LLM_PHASES: frozenset[str] = frozenset(
@@ -242,6 +247,7 @@ class TimeoutsConfig(BaseModel):
     fix_review: int | None = None
     epic_quality_gate: int | None = None
     retrospective: int | None = None
+    write_epic_knowledge: int | None = None
 
     # Phases that need longer timeouts than default (300s)
     _PHASE_DEFAULTS: ClassVar[dict[str, int]] = {
@@ -256,6 +262,7 @@ class TimeoutsConfig(BaseModel):
         "fix_review": 900,
         "epic_quality_gate": 600,
         "retrospective": 600,
+        "write_epic_knowledge": 600,
     }
 
     def get_timeout(self, phase: str) -> int:

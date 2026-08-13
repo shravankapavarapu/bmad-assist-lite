@@ -73,7 +73,43 @@ def build_stable_system_prompt(context: CompilerContext) -> str | None:
         if content and content.strip():
             parts.append(f'<stable-artifact name="{key}">\n{content}\n</stable-artifact>')
 
+    # L3: the epic-knowledge brief rides the same cached region, but goes LAST.
+    # It is the one part that changes between stories (it accumulates), so placing
+    # it after the epic-invariant artifacts confines the cross-story cache
+    # invalidation to the tail -- the invariant bulk before it stays
+    # byte-identical across the epic's stories and keeps its prefix-cache hits.
+    brief = _epic_knowledge_block(context)
+    if brief:
+        parts.append(brief)
+
     if not parts:
         return None
 
     return "<stable-context>\n" + "\n".join(parts) + "\n</stable-context>\n"
+
+
+def _epic_knowledge_block(context: CompilerContext) -> str | None:
+    """Return the epic-knowledge brief as a stable-artifact block, or None.
+
+    Gated on ``epic_knowledge.enabled`` (read defensively -- the compiler runs in
+    tests and probes where no config is loaded, which means "off"). Returns None
+    when disabled, the epic is unknown, or no brief has been written yet.
+    """
+    try:
+        from bmad_assist_lite.core.config import get_config
+
+        if not get_config().epic_knowledge.enabled:
+            return None
+    except Exception:
+        return None
+
+    epic_num = context.resolved_variables.get("epic_num")
+    if epic_num is None:
+        return None
+
+    from bmad_assist_lite.core.epic_knowledge import read_epic_knowledge
+
+    brief = read_epic_knowledge(epic_num)
+    if not brief:
+        return None
+    return f'<stable-artifact name="epic_knowledge">\n{brief}\n</stable-artifact>'

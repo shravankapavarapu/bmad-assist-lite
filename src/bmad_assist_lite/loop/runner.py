@@ -139,6 +139,15 @@ def _auto_commit_after_synthesis(
         write_progress(f"  Git: committed story {state.current_story} changes")
 
 
+def _write_epic_knowledge_after_story(
+    config: Config, project_path: Path, state: State
+) -> None:
+    """Update the epic-knowledge brief after a story passes (L3, gated + best-effort)."""
+    from bmad_assist_lite.core.epic_knowledge import write_epic_knowledge_after_story
+
+    write_epic_knowledge_after_story(config, project_path, state)
+
+
 def run_loop(
     config: Config,
     project_path: Path,
@@ -328,6 +337,8 @@ def run_loop(
                         if config.auto_commit.enabled:
                             _auto_commit_after_synthesis(config, project_path, state)
                         mark_story_completed(state)
+                        # L3: curate the epic-knowledge brief for later stories.
+                        _write_epic_knowledge_after_story(config, project_path, state)
                         state.qa_retry_count = 0
                         save_state(state, state_path)
                         trigger_sync(state, project_path)
