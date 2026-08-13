@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from bmad_assist_lite.core.config import Config
@@ -107,6 +108,34 @@ def _build_writer_prompt(epic_num: str | int, story_id: str, existing: str | Non
     )
 
 
+def _normalize_brief(text: str) -> str:
+    """Trim model chatter so the cached brief is clean markdown only.
+
+    Smaller models sometimes emit a preamble ("I'll help you create the
+    brief... Let me find the artifacts.") -- sometimes with no newline before
+    the heading ("...artifacts.# Epic 3", observed with haiku) -- or wrap the
+    whole thing in a ``` fence, despite the prompt asking for the brief alone.
+    The brief must start with a heading, so everything before the FIRST markdown
+    heading (``#``..``######`` + space, which skips ``#5``-style prose since it
+    requires the trailing space) is dropped, wherever that heading falls. A
+    surrounding code fence is stripped first. If no heading is found the text is
+    returned stripped, and the caller's empty-brief guard decides what to do.
+    """
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].lstrip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    match = re.search(r"#{1,6}[ \t]", text)
+    if match:
+        return text[match.start() :].strip()
+    return text
+
+
 def _bound(text: str, max_chars: int) -> str:
     """Hard-cap the brief so accumulation can never defeat context economy."""
     if max_chars <= 0 or len(text) <= max_chars:
@@ -163,7 +192,7 @@ def write_epic_knowledge_after_story(config: Config, project_path: Path, state: 
                 allowed_tools=list(READ_ONLY_TOOLS),
                 effort=config.providers.master.effort,
             )
-        brief = provider.parse_output(result).strip()
+        brief = _normalize_brief(provider.parse_output(result))
         if not brief:
             logger.warning("epic_knowledge: master returned an empty brief; keeping prior")
             return

@@ -14,6 +14,7 @@ from bmad_assist_lite.compiler.types import CompilerContext
 from bmad_assist_lite.core.config import load_config
 from bmad_assist_lite.core.epic_knowledge import (
     _bound,
+    _normalize_brief,
     epic_knowledge_path,
     read_epic_knowledge,
     write_epic_knowledge_after_story,
@@ -101,6 +102,46 @@ class TestPathAndRead:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("# brief\nCARRY_FORWARD\n", encoding="utf-8")
         assert read_epic_knowledge(3) == "# brief\nCARRY_FORWARD"
+
+
+class TestNormalizeBrief:
+    def test_clean_brief_untouched(self) -> None:
+        brief = "# Epic 3 — knowledge brief\n\n## Decisions\n- x\n"
+        assert _normalize_brief(brief) == brief.strip()
+
+    def test_strips_preamble_on_same_line_as_heading(self) -> None:
+        """Exact haiku failure the L2 writer canary caught: no newline before '#'."""
+        raw = (
+            "I'll help you create the epic-knowledge brief for epic 3. Let me first "
+            "find the project structure and the story 3.1 artifacts.# Epic 3 — knowledge "
+            "brief\n\n## Decisions\n- nextPayloadId is a UUID string.\n"
+        )
+        out = _normalize_brief(raw)
+        assert out.startswith("# Epic 3 — knowledge brief")
+        assert "I'll help you" not in out
+        assert "nextPayloadId is a UUID string." in out
+
+    def test_strips_preamble_on_prior_line(self) -> None:
+        raw = "Sure, here is the brief:\n\n# Epic 3\n## Gotchas\n- guard the branch\n"
+        out = _normalize_brief(raw)
+        assert out.startswith("# Epic 3")
+        assert "Sure, here" not in out
+
+    def test_strips_code_fence(self) -> None:
+        raw = "```markdown\n# Epic 3\n## Decisions\n- x\n```"
+        out = _normalize_brief(raw)
+        assert out.startswith("# Epic 3")
+        assert "```" not in out
+
+    def test_hash_in_prose_not_mistaken_for_heading(self) -> None:
+        """'#5' has no trailing space, so the real heading is where the cut lands."""
+        raw = "Fixed issue #5 first. # Epic 3\n- body\n"
+        out = _normalize_brief(raw)
+        assert out.startswith("# Epic 3")
+        assert "issue #5" not in out
+
+    def test_no_heading_returns_stripped(self) -> None:
+        assert _normalize_brief("  just prose, no heading  ") == "just prose, no heading"
 
 
 class TestBound:
