@@ -22,6 +22,10 @@ from bmad_assist_lite.providers.base import BaseProvider, ProviderResult, write_
 
 logger = logging.getLogger(__name__)
 
+#: Sentinel for ``invoke_provider`` overrides, so an explicit ``None`` / ``[]``
+#: (e.g. "no tools") is distinguishable from "caller did not override".
+_UNSET: Any = object()
+
 
 class BaseHandler(ABC):
     """Abstract base class for phase handlers.
@@ -200,6 +204,8 @@ class BaseHandler(ABC):
         attempt: int = 1,
         system_prompt: str | None = None,
         resume: str | None = None,
+        allowed_tools: Any = _UNSET,
+        effort: Any = _UNSET,
     ) -> ProviderResult:
         """Invoke the provider with the given prompt.
 
@@ -210,12 +216,21 @@ class BaseHandler(ABC):
             system_prompt: Stable context to append as a cached system prompt, or None.
             resume: Session id to resume (session reuse). Claude-only; None starts
                 a fresh session. Used by the synthesis lane's round-2 self-resume.
+            allowed_tools: Override the phase's tool allowlist. Left unset, the
+                phase's declared autonomy resolves it; pass ``[]`` for a tool-free
+                call (e.g. the SP-1 structured adjudication, which must not fix or
+                explore). Still checked against the declared level.
+            effort: Override the reasoning effort. Left unset, the master effort is
+                used; SP-3 lowers it a notch for the lean review path.
 
         """
         provider = self.get_provider()
         model = self.get_model(model=model, attempt=attempt)
         timeout = get_phase_timeout(self.config, self.phase_name)
-        allowed_tools = self.get_allowed_tools()
+        if allowed_tools is _UNSET:
+            allowed_tools = self.get_allowed_tools()
+        if effort is _UNSET:
+            effort = self.config.providers.master.effort
 
         # G12: the declaration above is a class attribute and the resolver is an
         # overridable method, so neither proves anything on its own. This is the
@@ -242,7 +257,7 @@ class BaseHandler(ABC):
             timeout=timeout,
             cwd=self.project_path,
             allowed_tools=allowed_tools,
-            effort=self.config.providers.master.effort,
+            effort=effort,
             system_prompt=system_prompt,
             resume=resume,
         )

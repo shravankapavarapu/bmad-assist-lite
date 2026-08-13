@@ -15,6 +15,16 @@ from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_loop import ReviewDecision, decide_review_loop
+from bmad_assist_lite.loop.review_merge import (
+    ADJUDICATION_CLOSE_MARKER,
+    ADJUDICATION_OPEN_MARKER,
+    apply_adjudication,
+    high_severity_preserved,
+    merge_findings,
+    parse_adjudication,
+    parse_reviewer_findings,
+    render_adjudication_candidates,
+)
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers.base import write_progress
 from bmad_assist_lite.validation.findings import (
@@ -214,10 +224,21 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
     def _run_review_loop(self, state: State, response: str) -> ReviewDecision:
         """Decide whether this story earns another fix round, and record it."""
+        findings = self._parse_review_findings(response)
+        return self._decide_and_record(state, findings)
+
+    def _decide_and_record(
+        self, state: State, findings: FindingSet | None
+    ) -> ReviewDecision:
+        """Run the bounded review decision over an already-parsed finding set.
+
+        Shared by the legacy prose path (which parses the synthesis response) and
+        the SP-1 structured path (which supplies the merged/adjudicated set
+        directly). ``None`` findings mean a parse failure, never a clean review.
+        """
         story_id = state.current_story or "unknown"
         self._reset_review_state_for_story(state)
 
-        findings = self._parse_review_findings(response)
         decision = decide_review_loop(
             findings,
             iteration=state.review_iteration,
@@ -281,6 +302,147 @@ class CodeReviewSynthesisHandler(BaseHandler):
         except Exception:
             return None
 
+    def _load_story_text(self, state: State, limit: int = 16000) -> str:
+        """Return the story file text (bounded) for adjudication scope context."""
+        story_id = state.current_story
+        if not story_id:
+            return ""
+        try:
+            for path in sorted(self.project_path.glob(f"**/story-{story_id}.md")):
+                if path.is_file():
+                    return path.read_text(encoding="utf-8")[:limit]
+        except OSError as exc:
+            logger.warning("Could not read story file for adjudication: %s", exc)
+        return ""
+
+    def _build_adjudication_prompt(
+        self, story_id: str, candidates: str, story_text: str
+    ) -> str:
+        """Build the compact, tool-free adjudication prompt for the merged findings.
+
+        Deliberately NOT the compiled synthesis workflow (which instructs fixing +
+        verification + a report — the very output SP-1 removes from this phase).
+        The reviewers already read the code; the adjudicator only assigns each
+        finding a root-cause bucket and gives a one-line verdict, by reference to
+        stable ids so it can neither invent nor drop findings.
+        """
+        story_block = (
+            f"<story>\n{story_text}\n</story>\n\n" if story_text else ""
+        )
+        return (
+            f"<mission>Adjudicate pre-merged multi-reviewer code-review findings "
+            f"for story {story_id}. The reviewers have ALREADY read the code and "
+            f"reported structured findings; duplicates are merged for you below. "
+            f"Do NOT read files, run any tools, or change code — this is a fast "
+            f"adjudication only.</mission>\n\n"
+            f"{story_block}"
+            f"<candidate-findings>\n{candidates}\n</candidate-findings>\n\n"
+            "<task>\n"
+            "For each candidate id, decide its ROOT-CAUSE bucket:\n"
+            "  intent_gap - the code diverges from what the story asked for\n"
+            "  bad_spec   - the story itself is wrong or ambiguous\n"
+            "  patch      - a localized defect with a localized fix\n"
+            "  defer      - real, but out of scope on the story's stated intent\n"
+            "  reject     - not a real problem / false positive\n"
+            "`defer` and `reject` never trigger a fix round, whatever the severity. "
+            "Keep a genuinely blocking defect as `patch`/`intent_gap`/`bad_spec`; "
+            "only `defer`/`reject` when the story's stated intent or the code truly "
+            "warrants it. Do not restate the findings.\n"
+            "</task>\n\n"
+            "<output-contract>\n"
+            "Emit EXACTLY this block and nothing after it (keep the verdict to one "
+            "sentence; one decision object per candidate id):\n"
+            f"{ADJUDICATION_OPEN_MARKER}\n"
+            "```json\n"
+            '{"verdict": "<one sentence>", "decisions": ['
+            '{"id": "F1", "bucket": "patch"}]}\n'
+            "```\n"
+            f"{ADJUDICATION_CLOSE_MARKER}\n"
+            "</output-contract>"
+        )
+
+    def _structured_synthesis(
+        self, state: State, reviews: list[dict[str, Any]]
+    ) -> PhaseResult | None:
+        """SP-1 path: deterministic merge + one capped adjudication call.
+
+        Returns a ``PhaseResult`` on success, or ``None`` to signal the caller to
+        fall back to the legacy synthesis (no reviewer produced a parseable block,
+        or the merge would have violated the >= high preservation guard).
+        """
+        story_id = state.current_story or "unknown"
+        raw_findings, notes = parse_reviewer_findings(reviews)
+        for note in notes:
+            logger.info("structured_review: %s", note)
+        if not raw_findings:
+            return None
+
+        merged = merge_findings(raw_findings)
+        # SP-1 quality guard, code-checkable: the deterministic merge must drop no
+        # round-1 finding of severity >= high. True by construction; enforced so a
+        # regression falls back to the safe path rather than shipping a silent drop.
+        if not high_severity_preserved(raw_findings, merged):
+            logger.error(
+                "structured merge would drop a >= high finding; using legacy path"
+            )
+            return None
+
+        candidates, id_map = render_adjudication_candidates(merged)
+        story_text = self._load_story_text(state)
+        adj_prompt = self._build_adjudication_prompt(story_id, candidates, story_text)
+        write_progress(
+            f"  Structured review: {len(raw_findings)} reviewer finding(s) -> "
+            f"{len(merged)} merged; adjudicating (tool-free, capped)"
+        )
+
+        # Tool-free (allowed_tools=[]): the adjudicator cannot fix or explore, so
+        # its output is a short decisions block, not a multi-turn fix pass.
+        result = self.invoke_provider(adj_prompt, allowed_tools=[])
+        if result.exit_code != 0:
+            return PhaseResult.fail(
+                result.stderr or f"Provider exited with code {result.exit_code}"
+            )
+
+        logger.info(
+            "code_review_synthesis (structured) output: %d chars (~%d tokens)",
+            len(result.stdout),
+            len(result.stdout) // 4,
+        )
+
+        adjudication = parse_adjudication(result.stdout)
+        if adjudication is None:
+            logger.warning(
+                "adjudication block unparseable; keeping reviewer-assigned buckets"
+            )
+        findings = apply_adjudication(id_map, adjudication)
+
+        cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / f"synthesis-response-review-{story_id}.md").write_text(
+            result.stdout, encoding="utf-8"
+        )
+
+        decision = self._decide_and_record(state, findings)
+        if adjudication is not None and adjudication.verdict:
+            write_progress(f"  Adjudication verdict: {adjudication.verdict}")
+
+        outputs: dict[str, Any] = {
+            "response": result.stdout,
+            "model": result.model,
+            "duration_ms": result.duration_ms,
+            "reviews_synthesized": len(reviews),
+            "merged_findings": len(merged),
+            "structured_review": True,
+            "review_outcome": decision.outcome.value,
+            "review_finding_hash": decision.finding_hash,
+            "review_blocking_findings": decision.blocking_count,
+        }
+        return PhaseResult(
+            success=True,
+            next_phase=decision.next_phase,
+            outputs=outputs,
+        )
+
     def execute(self, state: State) -> PhaseResult:
         """Execute synthesis with cached reviews and Evidence Score context."""
         try:
@@ -297,6 +459,22 @@ class CodeReviewSynthesisHandler(BaseHandler):
                 pass
             elif isinstance(reviews, dict):
                 reviews = reviews.get("reviews", [])
+
+            # SP-1: structured deterministic merge + one capped adjudication call,
+            # replacing the LLM re-narration/fix pass. Falls through to the legacy
+            # path if no reviewer emitted a parseable findings block.
+            if self.config.speed.structured_review:
+                structured = self._structured_synthesis(state, reviews)
+                if structured is not None:
+                    return structured
+                logger.warning(
+                    "structured_review on but no usable reviewer findings block; "
+                    "falling back to the legacy synthesis path"
+                )
+                write_progress(
+                    "  structured_review: no parseable reviewer findings — "
+                    "using legacy synthesis"
+                )
 
             prompt = self.render_prompt(state)
 
