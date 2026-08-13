@@ -164,8 +164,40 @@ class BaseHandler(ABC):
         """
         return allowed_tools_for(self.autonomy)
 
+    def build_system_prompt(self, state: State) -> str | None:
+        """The epic's stable context as an appended, cached system prompt, or None.
+
+        Gated on ``compiler.stable_prefix``. The block is byte-identical across the
+        epic's phases and stories, so it caches once and is read cheaply on every
+        later call. Off by default, in which case the CLI's default system prompt
+        is used unchanged.
+        """
+        if not self.config.compiler.stable_prefix:
+            return None
+
+        from bmad_assist_lite.compiler.stable_context import build_stable_system_prompt
+
+        paths = get_paths()
+        context = CompilerContext(
+            project_root=self.project_path,
+            output_folder=paths.output_folder,
+            project_knowledge=paths.project_knowledge,
+            resolved_variables={
+                "epic_num": state.current_epic,
+                "story_num": self._extract_story_num(state.current_story),
+                "planning_artifacts": str(paths.planning_artifacts),
+                "implementation_artifacts": str(paths.implementation_artifacts),
+            },
+        )
+        return build_stable_system_prompt(context)
+
     def invoke_provider(
-        self, prompt: str, *, model: str | None = None, attempt: int = 1
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        attempt: int = 1,
+        system_prompt: str | None = None,
     ) -> ProviderResult:
         """Invoke the provider with the given prompt.
 
@@ -173,6 +205,7 @@ class BaseHandler(ABC):
             prompt: The compiled prompt to send.
             model: Per-invocation model override, honoured only for routable phases.
             attempt: 1-based attempt number; a retry escalates back to the master model.
+            system_prompt: Stable context to append as a cached system prompt, or None.
 
         """
         provider = self.get_provider()
@@ -206,13 +239,15 @@ class BaseHandler(ABC):
             cwd=self.project_path,
             allowed_tools=allowed_tools,
             effort=self.config.providers.master.effort,
+            system_prompt=system_prompt,
         )
 
     def execute(self, state: State) -> PhaseResult:
         """Execute the handler."""
         try:
             prompt = self.render_prompt(state)
-            result = self.invoke_provider(prompt)
+            system_prompt = self.build_system_prompt(state)
+            result = self.invoke_provider(prompt, system_prompt=system_prompt)
 
             if result.exit_code != 0:
                 error_msg = result.stderr or f"Provider exited with code {result.exit_code}"

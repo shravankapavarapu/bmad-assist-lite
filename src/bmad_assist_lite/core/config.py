@@ -315,6 +315,25 @@ class AutoCommitConfig(BaseModel):
     enabled: bool = Field(default=True, description="Auto-commit after code_review_synthesis")
 
 
+class CompilerConfig(BaseModel):
+    """Prompt-compiler knobs.
+
+    ``stable_prefix`` carries the epic's stable, unfiltered artifacts (project
+    context, PRD, UX, architecture, epic) as an *appended* system prompt so their
+    bytes form a warm, byte-identical prompt-cache prefix shared across every
+    phase and story of the epic. It cannot ride a shared user-message prefix: the
+    CLI keys the user-message cache on the whole prompt, so a stable prefix with a
+    differing tail misses entirely (measured). Off by default.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stable_prefix: bool = Field(
+        default=False,
+        description="Carry stable epic artifacts as a cached (appended) system prompt",
+    )
+
+
 class SolutionsConfig(BaseModel):
     """The compounding solutions store: off by default, bounded when on.
 
@@ -496,6 +515,7 @@ class Config(BaseModel):
         default=None, description="Fallback quality gate commands"
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
+    compiler: CompilerConfig = Field(default_factory=CompilerConfig)
     signoff: SignoffConfig = Field(default_factory=SignoffConfig)
     solutions: SolutionsConfig = Field(default_factory=SolutionsConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)

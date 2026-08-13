@@ -520,6 +520,7 @@ class BaseProvider(ABC):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         color_index: int | None = None,
+        system_prompt: str | None = None,
     ) -> ProviderResult:
         """Execute LLM provider with the given prompt.
 
@@ -565,6 +566,7 @@ class BaseProvider(ABC):
                     allowed_tools=allowed_tools,
                     effort=effort,
                     color_index=color_index,
+                    system_prompt=system_prompt,
                 )
             except TimeoutError:
                 timed_out = True
@@ -648,6 +650,7 @@ class BaseProvider(ABC):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         color_index: int | None = None,
+        system_prompt: str | None = None,
     ) -> ProviderResult:
         """Provider-specific invocation that must call collector.add() as chunks arrive.
 
@@ -666,6 +669,9 @@ class BaseProvider(ABC):
                 unsupported. Implementations that cannot act on it must still
                 accept the keyword so invoke() can forward it unconditionally.
             color_index: Index for ANSI color differentiation in output.
+            system_prompt: Stable text to carry as the provider's system prompt
+                (append mode), enabling cross-call prompt-cache reuse. Providers
+                that cannot act on it must still accept the keyword.
 
         Returns:
             ProviderResult on successful completion.

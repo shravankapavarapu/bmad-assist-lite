@@ -112,6 +112,7 @@ class CodeReviewHandler(BaseHandler):
         try:
             self._warn_if_self_review()
             prompt = self.render_prompt(state)
+            system_prompt = self.build_system_prompt(state)
 
             multi_configs = self.config.providers.multi
             if not multi_configs:
@@ -146,6 +147,7 @@ class CodeReviewHandler(BaseHandler):
                         cwd=self.project_path,
                         allowed_tools=read_only_tools,
                         effort=e,
+                        system_prompt=system_prompt,
                     )
 
                 with concurrent.futures.ThreadPoolExecutor(
