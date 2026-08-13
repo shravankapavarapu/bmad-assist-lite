@@ -172,12 +172,9 @@ class ValidateStoryHandler(BaseHandler):
                 ) as executor:
                     futures = []
                     providers: list[Any] = []
-                    # Stagger the start of each reviewer when a cached system
-                    # prompt is in play, so the first reviewer warms the shared
-                    # stable-context cache before the next begins; without this
-                    # the concurrent reviewers race an unwarmed cache and each
-                    # pays full price for the same bytes.
-                    stagger = self.config.parallel_delay if system_prompt else 0.0
+                    # Stagger reviewer starts so validator-1 warms the shared
+                    # stable-context cache before the others begin (SP-4 drops it).
+                    stagger = self._reviewer_stagger(system_prompt)
                     for idx, mc in enumerate(multi_configs):
                         provider = get_provider(mc.provider)
                         providers.append(provider)

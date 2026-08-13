@@ -196,6 +196,17 @@ class BaseHandler(ABC):
         )
         return build_stable_system_prompt(context)
 
+    def _reviewer_stagger(self, system_prompt: str | None) -> float:
+        """Seconds to delay each successive reviewer lane's start.
+
+        The stagger only ever existed to let reviewer-1 warm the L1 stable-context
+        cache before the others begin; it is already 0 when no system prompt is in
+        play. SP-4 (``speed.remove_stagger``) drops it unconditionally.
+        """
+        if self.config.speed.remove_stagger:
+            return 0.0
+        return self.config.parallel_delay if system_prompt else 0.0
+
     def invoke_provider(
         self,
         prompt: str,
