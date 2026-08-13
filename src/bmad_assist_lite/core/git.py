@@ -9,6 +9,34 @@ from bmad_assist_lite.providers._windows import get_subprocess_kwargs
 logger = logging.getLogger(__name__)
 
 
+def git_diff(project_path: Path, *, stat: bool = False, timeout: int = 15) -> str | None:
+    """Return the working-tree diff (``git diff``), or ``--stat``, or None on error.
+
+    Unstaged changes only. After ``code_review_synthesis`` auto-commits the dev +
+    synthesis work, this is exactly the ``fix_review`` changes a round-2 delta
+    review (SP-2) needs to scope to — reviewers are read-only and cannot run git
+    themselves, so the handler inlines this into the prompt.
+    """
+    args = ["git", "diff", "--stat"] if stat else ["git", "diff"]
+    try:
+        result = subprocess.run(
+            args,
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            **get_subprocess_kwargs(),
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("git diff failed: %s", exc)
+        return None
+    if result.returncode != 0:
+        logger.warning("git diff failed: %s", result.stderr.strip())
+        return None
+    output: str = result.stdout
+    return output.strip() if stat else output
+
+
 def _title_from_story_key(story_key: str) -> str:
     """Extract human-readable title from a story key.
 

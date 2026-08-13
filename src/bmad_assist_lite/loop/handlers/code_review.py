@@ -7,6 +7,7 @@ from typing import Any
 
 from bmad_assist_lite.core.async_utils import run_async_in_thread
 from bmad_assist_lite.core.config import get_phase_timeout, self_review_warning
+from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers import reviewer_reuse
@@ -109,15 +110,73 @@ class CodeReviewHandler(BaseHandler):
             logger.warning("Evidence Score calculation failed: %s", e)
             return None
 
+    def _review_prompt(self, state: State) -> str:
+        """Select and decorate the reviewer prompt for this round.
+
+        Round-1 (or SP-2 off): the full compiled workflow. Round-2 with SP-2 on:
+        a scoped delta prompt. SP-1 appends the structured-findings contract in
+        either case.
+        """
+        if self.config.speed.delta_round2 and state.review_iteration >= 1:
+            prompt = self._build_delta_review_prompt(state)
+            write_progress(
+                "  Round-2 delta review: scoped to the fix diff + round-1 findings"
+            )
+        else:
+            prompt = self.render_prompt(state)
+        if self.config.speed.structured_review:
+            prompt = f"{prompt}\n\n{reviewer_findings_addendum()}"
+        return prompt
+
+    def _build_delta_review_prompt(self, state: State) -> str:
+        """SP-2: a fresh, scoped round-2 review prompt (no full artifacts, no resume).
+
+        Reviewers are read-only and cannot run git, so the round-1 instruction to
+        "use git to discover changes" is dead on round-2; this inlines the fix diff
+        instead. The re-review checks only "were the round-1 blocking findings
+        fixed, and did the fix break anything in the diff", per the review-ROI
+        evidence that round-2 changes decisions without needing full context.
+        """
+        story_id = state.current_story or "unknown"
+        cache = self.project_path / ".bmad-assist-lite" / "cache"
+        findings_text = ""
+        findings_path = cache / f"review-findings-{story_id}.md"
+        try:
+            if findings_path.is_file():
+                findings_text = findings_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("delta round-2: could not read round-1 findings: %s", exc)
+        diff = git_diff(self.project_path) or "(no uncommitted diff detected)"
+        story_text = ""
+        try:
+            for path in sorted(self.project_path.glob(f"**/story-{story_id}.md")):
+                if path.is_file():
+                    story_text = path.read_text(encoding="utf-8")[:16000]
+                    break
+        except OSError as exc:
+            logger.warning("delta round-2: could not read story file: %s", exc)
+        story_block = f"<story>\n{story_text}\n</story>\n\n" if story_text else ""
+        return (
+            f"<mission>Round-2 re-review for story {story_id}. The round-1 findings "
+            f"below were handed to a fixer. Your job is NARROW: verify each blocking "
+            f"finding was actually fixed, and check the fix diff introduced no new "
+            f"defects. Do NOT re-review the whole story from scratch.</mission>\n\n"
+            f"<constraints>\n"
+            f"- READ-ONLY: do not modify any files.\n"
+            f"- Work from the inlined fix diff below; open a file only when the diff "
+            f"is insufficient to judge a finding.\n"
+            f"- Be concise: specific file:line findings only.\n"
+            f"</constraints>\n\n"
+            f"<round-1-findings>\n{findings_text}\n</round-1-findings>\n\n"
+            f"<fix-diff>\n{diff}\n</fix-diff>\n\n"
+            f"{story_block}"
+        )
+
     def execute(self, state: State) -> PhaseResult:
         """Run parallel multi-LLM code review with Evidence Score aggregation."""
         try:
             self._warn_if_self_review()
-            prompt = self.render_prompt(state)
-            # SP-1: reviewers additionally emit a structured findings block so the
-            # synthesis can merge in code instead of re-deriving findings in prose.
-            if self.config.speed.structured_review:
-                prompt = f"{prompt}\n\n{reviewer_findings_addendum()}"
+            prompt = self._review_prompt(state)
             system_prompt = self.build_system_prompt(state)
 
             multi_configs = self.config.providers.multi

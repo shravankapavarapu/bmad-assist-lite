@@ -7,9 +7,9 @@ Evidence Score context injected into the prompt.
 import json
 import logging
 import re
-import subprocess
 from typing import Any
 
+from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers import reviewer_reuse
@@ -274,34 +274,6 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
         return decision
 
-    def _capture_git_diff_stat(self) -> str | None:
-        """Capture git diff --stat to show what files changed."""
-        try:
-            result = subprocess.run(
-                ["git", "diff", "--stat"],
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            return result.stdout.strip() if result.returncode == 0 else None
-        except Exception:
-            return None
-
-    def _capture_git_diff(self) -> str | None:
-        """Capture full git diff for saving to cache."""
-        try:
-            result = subprocess.run(
-                ["git", "diff"],
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            return result.stdout if result.returncode == 0 else None
-        except Exception:
-            return None
-
     def _load_story_text(self, state: State, limit: int = 16000) -> str:
         """Return the story file text (bounded) for adjudication scope context."""
         story_id = state.current_story
@@ -559,8 +531,8 @@ class CodeReviewSynthesisHandler(BaseHandler):
             cache_dir.mkdir(parents=True, exist_ok=True)
             story_id = state.current_story or "unknown"
 
-            diff_stat_after = self._capture_git_diff_stat()
-            full_diff = self._capture_git_diff()
+            diff_stat_after = git_diff(self.project_path, stat=True)
+            full_diff = git_diff(self.project_path)
 
             if diff_stat_after:
                 write_progress(f"  Code changes by synthesis:\n{diff_stat_after}")
