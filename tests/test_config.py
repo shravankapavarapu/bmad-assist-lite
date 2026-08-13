@@ -4,8 +4,10 @@ import pytest
 
 from bmad_assist_lite.core.config import (
     Config,
+    EpicKnowledgeConfig,
     LoopConfig,
     QualityGateConfig,
+    SessionReuseConfig,
     TimeoutsConfig,
     _deep_merge,
     _reset_config,
@@ -558,3 +560,63 @@ class TestSelfReviewWarningDoesNotOverFire:
             {"providers": {"master": {"provider": "claude", "model": "claude-opus-5"}}}
         )
         assert self_review_warning(config) is not None
+
+
+# ============================================================================
+# L2/L3 context-economy flags (goal-run5 Phase 2)
+# ============================================================================
+
+
+class TestSessionReuseConfig:
+    """session_reuse.reviewer_self_resume (L2) — default OFF, opt-in."""
+
+    def test_default_off(self):
+        assert SessionReuseConfig().reviewer_self_resume is False
+
+    def test_minimal_config_defaults_off(self):
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        assert cfg.session_reuse.reviewer_self_resume is False
+
+    def test_opt_in_via_config(self):
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "session_reuse": {"reviewer_self_resume": True},
+            }
+        )
+        assert cfg.session_reuse.reviewer_self_resume is True
+
+    def test_frozen(self):
+        with pytest.raises((TypeError, ValueError, AttributeError)):
+            SessionReuseConfig().reviewer_self_resume = True  # type: ignore[misc]
+
+
+class TestEpicKnowledgeConfig:
+    """epic_knowledge (L3) — default OFF, bounded when on."""
+
+    def test_defaults(self):
+        cfg = EpicKnowledgeConfig()
+        assert cfg.enabled is False
+        assert cfg.max_chars == 8000
+
+    def test_minimal_config_defaults_off(self):
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        assert cfg.epic_knowledge.enabled is False
+
+    def test_opt_in_via_config(self):
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "epic_knowledge": {"enabled": True, "max_chars": 4000},
+            }
+        )
+        assert cfg.epic_knowledge.enabled is True
+        assert cfg.epic_knowledge.max_chars == 4000
+
+    def test_max_chars_non_negative(self):
+        with pytest.raises((ValueError, ConfigError)):
+            EpicKnowledgeConfig(max_chars=-1)

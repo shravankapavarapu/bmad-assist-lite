@@ -357,6 +357,63 @@ class SolutionsConfig(BaseModel):
     )
 
 
+class SessionReuseConfig(BaseModel):
+    """Reuse a reviewer/synthesis Claude session across review rounds (L2).
+
+    Off by default and backward-compatible: when disabled, every review round
+    cold-starts a fresh session exactly as today. When enabled, each reviewer
+    lane in the multi-LLM fan-out (``code_review`` / ``validate_story``) keeps
+    its own round-1 session id, and a round-2 re-review resumes *that same
+    reviewer's* session (``resume=<id>``) so it re-reads only the fix diff
+    instead of recompiling the full story context. ``code_review_synthesis``
+    likewise resumes its own round-1 synthesis session on round 2.
+
+    The reviewer independence rule (F-13) is preserved *structurally*: a lane
+    only ever resumes a session it wrote itself, keyed by phase+index+provider+
+    model. No lane can resume the dev/master session -- those ids are never
+    written into the reviewer holder. Reuse is Claude-only; a non-Claude
+    reviewer silently ignores the flag.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    reviewer_self_resume: bool = Field(
+        default=False,
+        description=(
+            "Resume a reviewer/synthesis lane's own round-1 Claude session on "
+            "round-2 re-review (never the dev session; Claude-only)"
+        ),
+    )
+
+
+class EpicKnowledgeConfig(BaseModel):
+    """A curated, bounded epic-knowledge brief carried across an epic's stories (L3).
+
+    Off by default. When enabled, at each story's completion the master writes /
+    updates a small ``epic-knowledge-<epic>.md`` brief (architectural decisions,
+    gotchas, file-map deltas, conventions). Subsequent stories in the epic load
+    it inside the stable, cached system-prompt region (see ``compiler.stable_prefix``),
+    so later stories start "smart" without recompiling prior story transcripts.
+
+    Bounded on purpose: an unbounded accumulation would defeat the whole point of
+    context economy. ``max_chars`` hard-caps the written brief; a naive
+    epic-scoped transcript resume is explicitly rejected in favour of this
+    curated artifact.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(
+        default=False,
+        description="Write and inject a curated epic-knowledge brief across the epic's stories",
+    )
+    max_chars: int = Field(
+        default=8000,
+        ge=0,
+        description="Hard character cap on the written brief (~2k tokens); excess is truncated",
+    )
+
+
 class SignoffConfig(BaseModel):
     """Whether a recorded architect sign-off is a precondition of ``done``.
 
@@ -518,6 +575,8 @@ class Config(BaseModel):
     compiler: CompilerConfig = Field(default_factory=CompilerConfig)
     signoff: SignoffConfig = Field(default_factory=SignoffConfig)
     solutions: SolutionsConfig = Field(default_factory=SolutionsConfig)
+    session_reuse: SessionReuseConfig = Field(default_factory=SessionReuseConfig)
+    epic_knowledge: EpicKnowledgeConfig = Field(default_factory=EpicKnowledgeConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     parallel: ParallelConfig | None = Field(
