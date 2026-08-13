@@ -45,6 +45,9 @@ EXPECTED_FIELDS = {
     "total_cost_usd",
     "timed_out",
     "call_count",
+    "provider_session_id",
+    "resumed_session_id",
+    "session_reused",
 }
 
 
@@ -76,6 +79,8 @@ class TestRecordShape:
         assert annotations["story_id"] in (str | None,)
         assert annotations["phase"] is str
         assert annotations["model"] in (str | None,)
+        assert annotations["provider_session_id"] in (str | None,)
+        assert annotations["resumed_session_id"] in (str | None,)
 
     def test_record_is_frozen(self) -> None:
         record = PhaseMetricRecord(phase="dev_story", timestamp=datetime(2026, 8, 11), duration_ms=1)
@@ -399,6 +404,27 @@ class TestProviderHook:
         assert record.input_tokens == 7
         assert record.total_cost_usd == pytest.approx(0.01)
 
+    def test_provider_session_id_flows_from_the_result(self, tmp_path: Path) -> None:
+        """AC(L4) — the session id captured on ProviderResult reaches the row.
+
+        Without this the field is write-only on the result and dropped at the
+        one hook that could persist it.
+        """
+        path = tmp_path / "phase-metrics.jsonl"
+        provider = self._provider(
+            {"provider_session_id": "sess-xyz", "session_reused": True,
+             "resumed_session_id": "sess-prev"}
+        )
+
+        with phase_metrics_context(story_id="2.1", phase="dev_story", path=path) as handle:
+            provider.invoke("prompt", model="opus", timeout=5)
+            handle.set_duration_ms(1_100)
+
+        record = load_records(path)[0]
+        assert record.provider_session_id == "sess-xyz"
+        assert record.resumed_session_id == "sess-prev"
+        assert record.session_reused is True
+
     def test_a_raised_timeout_is_still_recorded_as_timed_out(self, tmp_path: Path) -> None:
         """The raise path never builds a ProviderResult, so without an explicit
         record the most expensive phase in the run would leave no trace at all."""
@@ -420,6 +446,67 @@ class TestProviderHook:
     def test_invocation_outside_a_phase_does_not_raise(self) -> None:
         provider = self._provider()
         assert provider.invoke("prompt", model="opus", timeout=5).stdout == "text"
+
+
+class TestSessionAttribution:
+    """L4 — session ids and the reuse flag fold from the phase's calls to the row."""
+
+    def test_cold_phase_leaves_session_fields_empty(self, tmp_path: Path) -> None:
+        path = tmp_path / "phase-metrics.jsonl"
+        with phase_metrics_context(story_id="1.2", phase="dev_story", path=path) as handle:
+            _full_call()  # reports no session id
+            handle.set_duration_ms(1)
+        record = load_records(path)[0]
+        assert record.provider_session_id is None
+        assert record.resumed_session_id is None
+        assert record.session_reused is False
+
+    def test_single_call_records_its_session(self, tmp_path: Path) -> None:
+        path = tmp_path / "phase-metrics.jsonl"
+        with phase_metrics_context(story_id="1.2", phase="dev_story", path=path) as handle:
+            record_provider_call(model="opus", duration_ms=1, provider_session_id="sess-abc")
+            handle.set_duration_ms(1)
+        record = load_records(path)[0]
+        assert record.provider_session_id == "sess-abc"
+        assert record.session_reused is False
+
+    def test_resume_populates_prior_id_and_flag(self, tmp_path: Path) -> None:
+        path = tmp_path / "phase-metrics.jsonl"
+        with phase_metrics_context(story_id="1.2", phase="fix_quality_gate", path=path) as handle:
+            record_provider_call(
+                model="opus",
+                duration_ms=1,
+                provider_session_id="sess-2",
+                resumed_session_id="sess-1",
+                session_reused=True,
+            )
+            handle.set_duration_ms(1)
+        record = load_records(path)[0]
+        assert record.provider_session_id == "sess-2"
+        assert record.resumed_session_id == "sess-1"
+        assert record.session_reused is True
+
+    def test_fan_out_keeps_every_distinct_session_and_ors_the_flag(self, tmp_path: Path) -> None:
+        """Fan-out folds sessions like ``model`` — distinct ids, call order.
+
+        Comma-joined; the reuse flag is the OR across the phase's calls.
+        """
+        path = tmp_path / "phase-metrics.jsonl"
+        with phase_metrics_context(story_id="1.2", phase="code_review", path=path) as handle:
+            record_provider_call(model="fable", duration_ms=1, provider_session_id="rev-A")
+            record_provider_call(
+                model="opus",
+                duration_ms=1,
+                provider_session_id="rev-B",
+                resumed_session_id="rev-B0",
+                session_reused=True,
+            )
+            record_provider_call(model="fable", duration_ms=1, provider_session_id="rev-A")
+            handle.set_duration_ms(1)
+        record = load_records(path)[0]
+        assert record.provider_session_id == "rev-A,rev-B"
+        assert record.resumed_session_id == "rev-B0"
+        assert record.session_reused is True
 
 
 class TestDispatchPersistence:

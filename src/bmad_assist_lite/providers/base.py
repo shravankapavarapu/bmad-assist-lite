@@ -435,6 +435,12 @@ class ProviderResult:
         cache_creation_tokens: Prompt tokens written into the provider's prompt
             cache by this call.
         total_cost_usd: Provider-reported cost of the call in USD.
+        provider_session_id: The provider's session id for this call, when the
+            provider reports one.
+        resumed_session_id: The prior session id this call resumed, when session
+            reuse was active; None for a cold call.
+        session_reused: True when this call resumed a prior session instead of
+            starting cold.
 
     """
 
@@ -445,6 +451,8 @@ class ProviderResult:
     model: str | None
     command: tuple[str, ...]
     provider_session_id: str | None = None
+    resumed_session_id: str | None = None
+    session_reused: bool = False
     timed_out: bool = False
     api_duration_ms: int | None = None
     input_tokens: int | None = None
@@ -619,6 +627,9 @@ class BaseProvider(ABC):
                 cache_read_tokens=getattr(result, "cache_read_tokens", None),
                 cache_creation_tokens=getattr(result, "cache_creation_tokens", None),
                 total_cost_usd=getattr(result, "total_cost_usd", None),
+                provider_session_id=getattr(result, "provider_session_id", None),
+                resumed_session_id=getattr(result, "resumed_session_id", None),
+                session_reused=bool(getattr(result, "session_reused", False)),
                 timed_out=timed_out or bool(getattr(result, "timed_out", False)),
             )
         except Exception:
