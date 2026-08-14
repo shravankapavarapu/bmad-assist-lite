@@ -9,7 +9,6 @@ import logging
 import re
 from typing import Any
 
-from bmad_assist_lite.core.config import notch_down_effort
 from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
@@ -271,12 +270,6 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
         return decision
 
-    def _lean_effort_kwargs(self) -> dict[str, Any]:
-        """SP-3: lower the synthesis/adjudication effort one notch when lean."""
-        if self.config.speed.lean_review:
-            return {"effort": notch_down_effort(self.config.providers.master.effort)}
-        return {}
-
     def _structured_synthesis(
         self, state: State, reviews: list[dict[str, Any]]
     ) -> PhaseResult | None:
@@ -321,10 +314,14 @@ class CodeReviewSynthesisHandler(BaseHandler):
             f"{prompt}\n\n"
             "<merged-reviewer-findings>\n"
             "The findings below are ALL reviewers' findings, already de-duplicated "
-            "for you — treat them as the authoritative candidate set. Do NOT "
-            "re-derive or re-narrate the cross-reviewer comparison. Verify each "
-            "against the code, apply fixes (steps 4-7), then emit the REMAINING "
-            f"findings in the required block (step 9).\n{candidates}\n"
+            "for you — a starting set, so you need not re-derive the cross-reviewer "
+            "comparison. But you MUST still assign severity and bucket CENTRALLY "
+            "yourself after checking the code (step 9): do NOT just copy a "
+            "reviewer's rating. Escalate a genuine spec ambiguity or unmet "
+            "acceptance criterion to blocking (bad_spec / intent_gap) even if a "
+            "reviewer marked it patch, exactly as a normal synthesis would. Verify "
+            "each against the code, apply fixes (steps 4-7), then emit the REMAINING "
+            f"findings in the required block.\n{candidates}\n"
             "</merged-reviewer-findings>\n\n"
             "<output-economy>\n"
             "Be terse: no step-by-step exploration narration, no file-by-file "
@@ -334,8 +331,11 @@ class CodeReviewSynthesisHandler(BaseHandler):
             "</output-economy>"
         )
 
-        # Full tools (EXECUTE): the synthesis stays the fixer. SP-3 lowers effort.
-        result = self.invoke_provider(full_prompt, **self._lean_effort_kwargs())
+        # Full tools (EXECUTE): the synthesis stays the fixer. It runs at the master
+        # effort (NOT the SP-3 reviewer notch) so its central severity re-judgment
+        # keeps W0's escalation rigor — the speed comes from the merged candidates +
+        # terse report, not from the synthesis thinking less.
+        result = self.invoke_provider(full_prompt)
         if result.exit_code != 0:
             return PhaseResult.fail(
                 result.stderr or f"Provider exited with code {result.exit_code}"
@@ -469,9 +469,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
             resume_id = reviewer_reuse.resume_id_for(
                 state, self.config, provider=master.provider, key=synth_key
             )
-            result = self.invoke_provider(
-                full_prompt, resume=resume_id, **self._lean_effort_kwargs()
-            )
+            result = self.invoke_provider(full_prompt, resume=resume_id)
             reviewer_reuse.capture_session(
                 state,
                 self.config,

@@ -130,7 +130,9 @@ class TestStructuredSynthesisKeepsFixer:
         assert result.outputs["review_blocking_findings"] == 0
         assert result.next_phase is None
 
-    def test_lean_lowers_synthesis_effort(self, tmp_path):
+    def test_synthesis_judges_at_full_effort_even_when_lean(self, tmp_path):
+        # Refinement: SP-3 lowers REVIEWER effort but the synthesis keeps its
+        # central severity re-judgment at master effort (no effort override).
         cfg = dict(CONFIG_STRUCTURED)
         cfg["speed"] = {"structured_review": True, "lean_review": True}
         _seed_reviews(
@@ -141,6 +143,7 @@ class TestStructuredSynthesisKeepsFixer:
 
         def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
             captured.update(kwargs)
+            captured["prompt"] = prompt
             return ProviderResult(
                 stdout=_synthesis_response([]), stderr="", exit_code=0,
                 duration_ms=9, model="opus", command=("claude",),
@@ -151,8 +154,10 @@ class TestStructuredSynthesisKeepsFixer:
         ):
             handler.execute(State(current_epic=3, current_story=STORY))
 
-        # master effort defaults to None -> notch_down -> "low".
-        assert captured.get("effort") == "low"
+        # No effort override -> invoke_provider uses the master effort.
+        assert "effort" not in captured
+        # The prompt demands central re-judgment, not copying reviewer buckets.
+        assert "CENTRALLY" in captured["prompt"] and "Escalate" in captured["prompt"]
 
     def test_falls_back_to_legacy_when_no_block(self, tmp_path):
         _seed_reviews(
