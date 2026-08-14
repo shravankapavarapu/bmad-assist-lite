@@ -16,13 +16,16 @@ drop a distinct finding of any severity — in particular no finding at or above
 ``high`` — which is exactly the SP-1 quality guard, checkable here without an
 LLM (see :func:`high_severity_preserved`).
 
-The adjudication call is deliberately kept unable to lose findings: it decides
-*by reference* to stable ids (``F1``..``Fn``) rather than re-emitting the set, so
-its only lever is each finding's bucket (actionable vs ``defer``/``reject``). The
-final blocking list is still computed downstream by ``decide_review_loop`` via
-``FindingSet.blocking(threshold)``. If the adjudication output cannot be parsed,
-the merged set is used unchanged — a safe, slightly conservative fallback that
-can over-block but never silently under-block.
+The shipped SP-1 path keeps ``code_review_synthesis`` as the round-1 fixer and
+feeds it the merged candidate set (``render_adjudication_candidates``) so it need
+not re-derive the cross-reviewer comparison; the synthesis then applies fixes and
+emits its own remaining-findings block as before. The *by-reference adjudication*
+helpers below (``parse_adjudication`` / ``apply_adjudication`` — a tool-free call
+that only annotates buckets on stable ids ``F1``..``Fn``, never re-emitting the
+set, so it cannot lose a finding) back the alternative "adjudication-only"
+synthesis and are retained as tested infrastructure for it. If that call's output
+cannot be parsed, the merged set is used unchanged — a safe, slightly
+conservative fallback that can over-block but never silently under-block.
 """
 
 from __future__ import annotations

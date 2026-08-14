@@ -17,12 +17,8 @@ from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_loop import ReviewDecision, decide_review_loop
 from bmad_assist_lite.loop.review_merge import (
-    ADJUDICATION_CLOSE_MARKER,
-    ADJUDICATION_OPEN_MARKER,
-    apply_adjudication,
     high_severity_preserved,
     merge_findings,
-    parse_adjudication,
     parse_reviewer_findings,
     render_adjudication_candidates,
 )
@@ -281,73 +277,21 @@ class CodeReviewSynthesisHandler(BaseHandler):
             return {"effort": notch_down_effort(self.config.providers.master.effort)}
         return {}
 
-    def _load_story_text(self, state: State, limit: int = 16000) -> str:
-        """Return the story file text (bounded) for adjudication scope context."""
-        story_id = state.current_story
-        if not story_id:
-            return ""
-        try:
-            for path in sorted(self.project_path.glob(f"**/story-{story_id}.md")):
-                if path.is_file():
-                    return path.read_text(encoding="utf-8")[:limit]
-        except OSError as exc:
-            logger.warning("Could not read story file for adjudication: %s", exc)
-        return ""
-
-    def _build_adjudication_prompt(
-        self, story_id: str, candidates: str, story_text: str
-    ) -> str:
-        """Build the compact, tool-free adjudication prompt for the merged findings.
-
-        Deliberately NOT the compiled synthesis workflow (which instructs fixing +
-        verification + a report — the very output SP-1 removes from this phase).
-        The reviewers already read the code; the adjudicator only assigns each
-        finding a root-cause bucket and gives a one-line verdict, by reference to
-        stable ids so it can neither invent nor drop findings.
-        """
-        story_block = (
-            f"<story>\n{story_text}\n</story>\n\n" if story_text else ""
-        )
-        return (
-            f"<mission>Adjudicate pre-merged multi-reviewer code-review findings "
-            f"for story {story_id}. The reviewers have ALREADY read the code and "
-            f"reported structured findings; duplicates are merged for you below. "
-            f"Do NOT read files, run any tools, or change code — this is a fast "
-            f"adjudication only.</mission>\n\n"
-            f"{story_block}"
-            f"<candidate-findings>\n{candidates}\n</candidate-findings>\n\n"
-            "<task>\n"
-            "For each candidate id, decide its ROOT-CAUSE bucket:\n"
-            "  intent_gap - the code diverges from what the story asked for\n"
-            "  bad_spec   - the story itself is wrong or ambiguous\n"
-            "  patch      - a localized defect with a localized fix\n"
-            "  defer      - real, but out of scope on the story's stated intent\n"
-            "  reject     - not a real problem / false positive\n"
-            "`defer` and `reject` never trigger a fix round, whatever the severity. "
-            "Keep a genuinely blocking defect as `patch`/`intent_gap`/`bad_spec`; "
-            "only `defer`/`reject` when the story's stated intent or the code truly "
-            "warrants it. Do not restate the findings.\n"
-            "</task>\n\n"
-            "<output-contract>\n"
-            "Emit EXACTLY this block and nothing after it (keep the verdict to one "
-            "sentence; one decision object per candidate id):\n"
-            f"{ADJUDICATION_OPEN_MARKER}\n"
-            "```json\n"
-            '{"verdict": "<one sentence>", "decisions": ['
-            '{"id": "F1", "bucket": "patch"}]}\n'
-            "```\n"
-            f"{ADJUDICATION_CLOSE_MARKER}\n"
-            "</output-contract>"
-        )
-
     def _structured_synthesis(
         self, state: State, reviews: list[dict[str, Any]]
     ) -> PhaseResult | None:
-        """SP-1 path: deterministic merge + one capped adjudication call.
+        """Feed the synthesis fixer a pre-merged candidate set + demand terse output.
 
-        Returns a ``PhaseResult`` on success, or ``None`` to signal the caller to
-        fall back to the legacy synthesis (no reviewer produced a parseable block,
-        or the merge would have violated the >= high preservation guard).
+        Keeps the synthesis as the round-1 fixer per the operator's quality
+        decision — it still verifies, applies fixes, updates the story and emits
+        the remaining findings (full EXECUTE tools), so the fix touchpoints
+        (round-1 synthesis-fix -> fix_review -> round-2 synthesis-fix) are all
+        preserved. The speed comes from removing the cross-reviewer re-derivation
+        and the verbose report (the reviewers' findings arrive already merged and
+        deduped) plus SP-3's lower effort.
+
+        Returns None to fall back to the legacy path when no reviewer produced a
+        parseable block, or the merge would drop a >= high finding.
         """
         story_id = state.current_story or "unknown"
         raw_findings, notes = parse_reviewer_findings(reviews)
@@ -366,19 +310,32 @@ class CodeReviewSynthesisHandler(BaseHandler):
             )
             return None
 
-        candidates, id_map = render_adjudication_candidates(merged)
-        story_text = self._load_story_text(state)
-        adj_prompt = self._build_adjudication_prompt(story_id, candidates, story_text)
+        candidates, _id_map = render_adjudication_candidates(merged)
         write_progress(
             f"  Structured review: {len(raw_findings)} reviewer finding(s) -> "
-            f"{len(merged)} merged; adjudicating (tool-free, capped)"
+            f"{len(merged)} merged candidate(s); synthesis fixes from the merged set"
         )
 
-        # Tool-free (allowed_tools=[]): the adjudicator cannot fix or explore, so
-        # its output is a short decisions block, not a multi-turn fix pass.
-        result = self.invoke_provider(
-            adj_prompt, allowed_tools=[], **self._lean_effort_kwargs()
+        prompt = self.render_prompt(state)
+        full_prompt = (
+            f"{prompt}\n\n"
+            "<merged-reviewer-findings>\n"
+            "The findings below are ALL reviewers' findings, already de-duplicated "
+            "for you — treat them as the authoritative candidate set. Do NOT "
+            "re-derive or re-narrate the cross-reviewer comparison. Verify each "
+            "against the code, apply fixes (steps 4-7), then emit the REMAINING "
+            f"findings in the required block (step 9).\n{candidates}\n"
+            "</merged-reviewer-findings>\n\n"
+            "<output-economy>\n"
+            "Be terse: no step-by-step exploration narration, no file-by-file "
+            "walkthrough, no restating the story. Keep the written synthesis report "
+            "to a short summary. The machine BMAD-FINDINGS block is the required "
+            "output.\n"
+            "</output-economy>"
         )
+
+        # Full tools (EXECUTE): the synthesis stays the fixer. SP-3 lowers effort.
+        result = self.invoke_provider(full_prompt, **self._lean_effort_kwargs())
         if result.exit_code != 0:
             return PhaseResult.fail(
                 result.stderr or f"Provider exited with code {result.exit_code}"
@@ -390,23 +347,21 @@ class CodeReviewSynthesisHandler(BaseHandler):
             len(result.stdout) // 4,
         )
 
-        adjudication = parse_adjudication(result.stdout)
-        if adjudication is None:
-            logger.warning(
-                "adjudication block unparseable; keeping reviewer-assigned buckets"
-            )
-        findings = apply_adjudication(id_map, adjudication)
-
         cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
+        diff_stat = git_diff(self.project_path, stat=True)
+        full_diff = git_diff(self.project_path)
+        if diff_stat:
+            write_progress(f"  Code changes by synthesis:\n{diff_stat}")
+        if full_diff:
+            (cache_dir / f"synthesis-diff-review-{story_id}.patch").write_text(
+                full_diff, encoding="utf-8"
+            )
         (cache_dir / f"synthesis-response-review-{story_id}.md").write_text(
             result.stdout, encoding="utf-8"
         )
 
-        decision = self._decide_and_record(state, findings)
-        if adjudication is not None and adjudication.verdict:
-            write_progress(f"  Adjudication verdict: {adjudication.verdict}")
-
+        decision = self._run_review_loop(state, result.stdout)
         outputs: dict[str, Any] = {
             "response": result.stdout,
             "model": result.model,
@@ -414,6 +369,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
             "reviews_synthesized": len(reviews),
             "merged_findings": len(merged),
             "structured_review": True,
+            "code_changes": diff_stat or "(none)",
             "review_outcome": decision.outcome.value,
             "review_finding_hash": decision.finding_hash,
             "review_blocking_findings": decision.blocking_count,

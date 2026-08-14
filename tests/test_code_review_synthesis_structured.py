@@ -1,8 +1,10 @@
 """Tests for the SP-1 structured code-review-synthesis path (goal-run6).
 
-Exercises the wiring end-to-end with a mocked provider: reviewers' structured
-blocks -> deterministic merge -> one tool-free adjudication call -> review loop,
-plus the fallback to the legacy path when no reviewer emits a parseable block.
+Operator decision: keep the synthesis as the round-1 FIXER. SP-1 feeds it the
+deterministically pre-merged reviewer findings + a terse-output directive instead
+of raw N-reviewer prose it must re-derive; the synthesis still applies fixes and
+emits the remaining findings block. These tests exercise the wiring with a mocked
+provider, plus the fallback to the legacy path.
 """
 
 from __future__ import annotations
@@ -16,10 +18,6 @@ from bmad_assist_lite.core.config import load_config
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.handlers.code_review_synthesis import (
     CodeReviewSynthesisHandler,
-)
-from bmad_assist_lite.loop.review_merge import (
-    ADJUDICATION_CLOSE_MARKER,
-    ADJUDICATION_OPEN_MARKER,
 )
 from bmad_assist_lite.providers.base import ProviderResult
 from bmad_assist_lite.validation.findings import (
@@ -58,15 +56,6 @@ def _seed_reviews(project: Path, reviews: list[dict[str, Any]]) -> None:
     )
 
 
-def _adjudication_response(decisions: list[dict[str, str]]) -> str:
-    payload = {"verdict": "one blocking bug", "decisions": decisions}
-    return (
-        "adjudicated.\n"
-        f"{ADJUDICATION_OPEN_MARKER}\n```json\n{json.dumps(payload)}\n```\n"
-        f"{ADJUDICATION_CLOSE_MARKER}\n"
-    )
-
-
 def _review_with_block(label: str, findings: list[Finding]) -> dict[str, Any]:
     return {
         "reviewer": label,
@@ -75,83 +64,107 @@ def _review_with_block(label: str, findings: list[Finding]) -> dict[str, Any]:
     }
 
 
-class TestStructuredSynthesisPath:
-    def test_merges_dedups_and_adjudicates(self, tmp_path):
-        dup = _finding("a.py", "bug A", Severity.HIGH, "def foo")
-        r1 = _review_with_block("Reviewer-1", [dup, _finding("b.py", "bug B", Severity.MEDIUM, "def bar")])
-        r2 = _review_with_block("Reviewer-2", [dup, _finding("c.py", "nit C", Severity.LOW, "x")])
-        _seed_reviews(tmp_path, [r1, r2])
+def _synthesis_response(remaining: list[Finding]) -> str:
+    return "Terse report: applied fixes.\n\n" + render_findings_block(remaining)
 
+
+class TestStructuredSynthesisKeepsFixer:
+    def test_merges_and_feeds_candidates_to_fixer(self, tmp_path):
+        dup = _finding("a.py", "bug A", Severity.HIGH, "def foo")
+        r1 = _review_with_block(
+            "Reviewer-1", [dup, _finding("b.py", "bug B", Severity.MEDIUM, "def bar")]
+        )
+        r2 = _review_with_block(
+            "Reviewer-2", [dup, _finding("c.py", "nit C", Severity.LOW, "x")]
+        )
+        _seed_reviews(tmp_path, [r1, r2])
         handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
         captured: dict[str, Any] = {}
 
         def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
             captured["prompt"] = prompt
             captured["kwargs"] = kwargs
-            # F1 = the high (sorted first); keep as patch (blocks). Defer the low.
+            # The fixer resolved bug B; bug A remains high/patch (blocking).
             return ProviderResult(
-                stdout=_adjudication_response(
-                    [
-                        {"id": "F1", "bucket": "patch"},
-                        {"id": "F2", "bucket": "patch"},
-                        {"id": "F3", "bucket": "reject"},
-                    ]
-                ),
-                stderr="",
-                exit_code=0,
-                duration_ms=5,
-                model="opus",
-                command=("claude",),
+                stdout=_synthesis_response([_finding("a.py", "bug A", Severity.HIGH, "def foo")]),
+                stderr="", exit_code=0, duration_ms=9, model="opus", command=("claude",),
             )
 
-        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke):
+        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke), patch.object(
+            CodeReviewSynthesisHandler, "render_prompt", return_value="SYNTH WORKFLOW PROMPT"
+        ):
             result = handler.execute(State(current_epic=3, current_story=STORY))
 
         assert result.success
         assert result.outputs["structured_review"] is True
-        # 3 distinct findings after dedup of the shared high.
-        assert result.outputs["merged_findings"] == 3
-        # The adjudication call must be tool-free (cannot fix/explore).
-        assert captured["kwargs"]["allowed_tools"] == []
-        # High + medium patch => 2 blocking; the low was rejected.
-        assert result.outputs["review_blocking_findings"] == 2
+        assert result.outputs["merged_findings"] == 3  # shared high deduped
+        # Fixer keeps full tools: the call must NOT be forced tool-free.
+        assert captured["kwargs"].get("allowed_tools") != []
+        # The de-duplicated candidate set is injected into the fixer prompt.
+        assert "merged-reviewer-findings" in captured["prompt"]
+        assert "bug A" in captured["prompt"] and "bug B" in captured["prompt"]
+        # Outcome is driven by the synthesis' OWN remaining-findings block.
+        assert result.outputs["review_blocking_findings"] == 1
 
         artifact = tmp_path / ".bmad-assist-lite" / "cache" / f"review-findings-{STORY}.md"
-        assert artifact.exists()
-        assert "BMAD-FINDINGS" in artifact.read_text(encoding="utf-8")
+        assert artifact.exists() and "BMAD-FINDINGS" in artifact.read_text(encoding="utf-8")
 
-    def test_clean_review_when_all_rejected(self, tmp_path):
-        r1 = _review_with_block("Reviewer-1", [_finding("a.py", "maybe", Severity.HIGH, "def foo")])
-        _seed_reviews(tmp_path, [r1])
+    def test_clean_when_synthesis_reports_no_remaining(self, tmp_path):
+        _seed_reviews(
+            tmp_path, [_review_with_block("Reviewer-1", [_finding("a.py", "x", Severity.HIGH, "f")])]
+        )
         handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
 
         def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
             return ProviderResult(
-                stdout=_adjudication_response([{"id": "F1", "bucket": "reject"}]),
-                stderr="", exit_code=0, duration_ms=5, model="opus", command=("claude",),
+                stdout=_synthesis_response([]), stderr="", exit_code=0,
+                duration_ms=9, model="opus", command=("claude",),
             )
 
-        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke):
+        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke), patch.object(
+            CodeReviewSynthesisHandler, "render_prompt", return_value="P"
+        ):
             result = handler.execute(State(current_epic=3, current_story=STORY))
 
         assert result.success
         assert result.outputs["review_blocking_findings"] == 0
-        assert result.next_phase is None  # clean -> no fix detour
+        assert result.next_phase is None
+
+    def test_lean_lowers_synthesis_effort(self, tmp_path):
+        cfg = dict(CONFIG_STRUCTURED)
+        cfg["speed"] = {"structured_review": True, "lean_review": True}
+        _seed_reviews(
+            tmp_path, [_review_with_block("Reviewer-1", [_finding("a.py", "x", Severity.LOW, "f")])]
+        )
+        handler = CodeReviewSynthesisHandler(load_config(cfg), tmp_path)
+        captured: dict[str, Any] = {}
+
+        def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
+            captured.update(kwargs)
+            return ProviderResult(
+                stdout=_synthesis_response([]), stderr="", exit_code=0,
+                duration_ms=9, model="opus", command=("claude",),
+            )
+
+        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke), patch.object(
+            CodeReviewSynthesisHandler, "render_prompt", return_value="P"
+        ):
+            handler.execute(State(current_epic=3, current_story=STORY))
+
+        # master effort defaults to None -> notch_down -> "low".
+        assert captured.get("effort") == "low"
 
     def test_falls_back_to_legacy_when_no_block(self, tmp_path):
-        # Neither reviewer emits a findings block -> structured returns None.
         _seed_reviews(
             tmp_path,
             [{"reviewer": "Reviewer-1", "response": "just prose, no block", "exit_code": 0}],
         )
         handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
 
-        legacy_stdout = "legacy synthesis\n" + render_findings_block([])
-
         def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
             return ProviderResult(
-                stdout=legacy_stdout, stderr="", exit_code=0, duration_ms=5,
-                model="opus", command=("claude",),
+                stdout="legacy synthesis\n" + render_findings_block([]),
+                stderr="", exit_code=0, duration_ms=9, model="opus", command=("claude",),
             )
 
         with patch.object(handler, "invoke_provider", side_effect=_fake_invoke), patch.object(
@@ -160,23 +173,4 @@ class TestStructuredSynthesisPath:
             result = handler.execute(State(current_epic=3, current_story=STORY))
 
         assert result.success
-        # Legacy path does not set the structured marker.
-        assert "structured_review" not in result.outputs
-
-    def test_unparseable_adjudication_keeps_reviewer_buckets(self, tmp_path):
-        r1 = _review_with_block("Reviewer-1", [_finding("a.py", "bug", Severity.HIGH, "def foo")])
-        _seed_reviews(tmp_path, [r1])
-        handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
-
-        def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
-            return ProviderResult(
-                stdout="no adjudication block at all", stderr="", exit_code=0,
-                duration_ms=5, model="opus", command=("claude",),
-            )
-
-        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke):
-            result = handler.execute(State(current_epic=3, current_story=STORY))
-
-        assert result.success
-        # Reviewer bucket was patch (default) -> the high finding still blocks.
-        assert result.outputs["review_blocking_findings"] == 1
+        assert "structured_review" not in result.outputs  # legacy path
