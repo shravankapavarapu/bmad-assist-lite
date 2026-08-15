@@ -357,6 +357,25 @@ class TestForensicRetention:
         assert deleted == len(ephemeral)
         assert (cache_dir / "story-queue.yaml").exists()
 
+    def test_dev_stream_artifact_archived(self, tmp_path: Path) -> None:
+        """SP-D0: dev-stream-<story>.jsonl survives the transition; others don't."""
+        from bmad_assist_lite.loop.cleanup import FORENSICS_DIR_NAME, clear_story_cache
+
+        cache_dir = _make_cache(tmp_path)
+        dev_stream = cache_dir / "dev-stream-3.1.jsonl"
+        dev_stream.write_text('{"seq":0,"kind":"text"}\n', encoding="utf-8")
+        ephemeral = cache_dir / "validations.json"
+        ephemeral.write_text("x", encoding="utf-8")
+
+        clear_story_cache(tmp_path)
+
+        archived = cache_dir / FORENSICS_DIR_NAME / "3.1" / "dev-stream-3.1.jsonl"
+        assert archived.exists(), "dev-stream artifact did not survive the transition"
+        assert archived.read_text(encoding="utf-8") == '{"seq":0,"kind":"text"}\n'
+        assert not dev_stream.exists()
+        # A non-forensic file is still swept — retention is not a blanket no-op.
+        assert not ephemeral.exists()
+
     def test_multiple_stories_archived_separately(self, tmp_path: Path) -> None:
         """Artifacts are attributable per story across transitions (AC4)."""
         from bmad_assist_lite.loop.cleanup import FORENSICS_DIR_NAME, clear_story_cache

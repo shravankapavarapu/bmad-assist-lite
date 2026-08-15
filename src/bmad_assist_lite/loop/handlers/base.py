@@ -210,6 +210,7 @@ class BaseHandler(ABC):
         resume: str | None = None,
         allowed_tools: Any = _UNSET,
         effort: Any = _UNSET,
+        stream_capture_path: Path | None = None,
     ) -> ProviderResult:
         """Invoke the provider with the given prompt.
 
@@ -221,6 +222,10 @@ class BaseHandler(ABC):
             resume: Session id to resume (session reuse). Claude-only; None starts
                 a fresh session. Retained for the provider-level resume/attribution
                 plumbing (L4); no phase passes it by default.
+            stream_capture_path: Forensic dev-stream capture path (SP-D0),
+                forwarded to the provider verbatim. Claude-only; None (default)
+                disables capture. Only the dev handler sets it, so capture is
+                scoped to the dev_story phase.
             allowed_tools: Override the phase's tool allowlist. Left unset, the
                 phase's declared autonomy resolves it; pass ``[]`` for a tool-free
                 call (e.g. the SP-1 structured adjudication, which must not fix or
@@ -265,14 +270,29 @@ class BaseHandler(ABC):
             effort=effort,
             system_prompt=system_prompt,
             resume=resume,
+            stream_capture_path=stream_capture_path,
         )
+
+    def _stream_capture_path(self, state: State) -> Path | None:
+        """Forensic dev-stream capture path for this phase, or None to disable.
+
+        None (the default) means no capture, so this is a no-op for every phase
+        but the one that overrides it. The dev handler is the only override, so
+        turn-by-turn stream capture is automatically scoped to dev_story.
+        """
+        _ = state
+        return None
 
     def execute(self, state: State) -> PhaseResult:
         """Execute the handler."""
         try:
             prompt = self.render_prompt(state)
             system_prompt = self.build_system_prompt(state)
-            result = self.invoke_provider(prompt, system_prompt=system_prompt)
+            result = self.invoke_provider(
+                prompt,
+                system_prompt=system_prompt,
+                stream_capture_path=self._stream_capture_path(state),
+            )
 
             if result.exit_code != 0:
                 error_msg = result.stderr or f"Provider exited with code {result.exit_code}"

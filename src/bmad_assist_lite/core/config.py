@@ -485,6 +485,14 @@ class ForensicsConfig(BaseModel):
         ge=1,
         description="Retention cap — number of stories kept, oldest evicted first",
     )
+    capture_stream: bool = Field(
+        default=False,
+        description=(
+            "Capture the dev_story call's turn-by-turn stream "
+            "(text/thinking/tool_use/tool_result) as a forensic JSONL for "
+            "overhead decomposition"
+        ),
+    )
 
 
 class LoopConfig(BaseModel):

@@ -99,6 +99,7 @@ class GeminiProvider(BaseProvider):
         color_index: int | None = None,
         system_prompt: str | None = None,
         resume: str | None = None,
+        stream_capture_path: Path | None = None,
     ) -> ProviderResult:
         """Execute Gemini CLI with the given prompt and return the result."""
         if timeout <= 0:
