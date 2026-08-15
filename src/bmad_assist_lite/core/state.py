@@ -188,6 +188,15 @@ class State(BaseModel):
     # SP-A0 real dev gate: one objective verdict per dev_gate run of the current
     # story, appended in order (attempt 0 first, then any SP-A1 fallback retry).
     dev_gate_records: list[dict[str, Any]] = Field(default_factory=list)
+    # SP-A1 lean-first adaptive dev. dev_attempt counts dev_story executions for
+    # the current story (0 = lean-first, 1 = the one lean-off fallback retry).
+    # pre_dev_snapshot is the git tree sha of the pre-dev worktree the retry
+    # resets to; pre_dev_story tags which story it belongs to so the fields reset
+    # cleanly at the next story; adaptive_retry_fired marks the retry has run.
+    dev_attempt: int = 0
+    pre_dev_snapshot: str | None = None
+    pre_dev_story: str | None = None
+    adaptive_retry_fired: bool = False
     started_at: datetime | None = None
     updated_at: datetime | None = None
     story_started_at: datetime | None = None

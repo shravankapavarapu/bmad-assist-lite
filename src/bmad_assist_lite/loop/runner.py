@@ -26,6 +26,7 @@ from bmad_assist_lite.loop.signals import (
 )
 from bmad_assist_lite.loop.transitions import advance_epic, advance_story, skip_to_next_story
 from bmad_assist_lite.loop.types import LoopExitReason
+from bmad_assist_lite.loop.worktree_snapshot import snapshot_worktree
 from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
@@ -199,6 +200,7 @@ def run_loop(
     # its flag is on; with the flag off this equals config.loop.story exactly.
     story_phases = effective_story_phases(config)
     epic_teardown = config.loop.epic_teardown
+    adaptive_dev = config.speed.lean_dev_adaptive  # SP-A1 lean-first fallback
 
     # Run-level budget (all optional; None = unlimited, today's behaviour)
     max_stories = config.loop.max_stories
@@ -322,6 +324,23 @@ def run_loop(
                     state.current_epic,
                     None if is_teardown else state.current_story,
                 )
+
+                # SP-A1: before the first dev attempt of a story, reset the
+                # adaptive story-scoped state and snapshot the pre-dev worktree,
+                # so a lean-first fallback can retry from exactly this point. The
+                # retry re-enters DEV_STORY with pre_dev_story already set, so it
+                # neither resets nor re-snapshots. Guarded by the flag → the loop
+                # is byte-identical when adaptive dev is off.
+                if (
+                    adaptive_dev
+                    and state.current_phase == Phase.DEV_STORY
+                    and state.pre_dev_story != state.current_story
+                ):
+                    state.dev_attempt = 0
+                    state.adaptive_retry_fired = False
+                    state.dev_gate_records = []
+                    state.pre_dev_story = state.current_story
+                    state.pre_dev_snapshot = snapshot_worktree(project_path)
 
                 # Save state before execution so disk reflects the active phase
                 save_state(state, state_path)
@@ -456,6 +475,11 @@ def run_loop(
                     # spent" rather than "reviews run".
                     if result.next_phase == Phase.FIX_REVIEW:
                         state.review_iteration += 1
+                    # SP-A1 lean-first fallback: the dev gate routes back to
+                    # DEV_STORY for the one lean-off retry; count the attempt so
+                    # the mode and the retry cap read off dev_attempt.
+                    if result.next_phase == Phase.DEV_STORY:
+                        state.dev_attempt += 1
                     state = state.with_phase(result.next_phase)
                     continue
 

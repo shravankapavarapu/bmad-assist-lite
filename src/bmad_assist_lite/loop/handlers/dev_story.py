@@ -2,10 +2,24 @@
 
 from typing import Any
 
-from bmad_assist_lite.core.config import LeanDev
+from bmad_assist_lite.core.config import Config, LeanDev
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
+
+
+def resolve_dev_lean_mode(config: Config, state: State) -> LeanDev:
+    """The lean-dev mode the current dev_story attempt uses.
+
+    Under SP-A1 adaptive mode the mode is decided by the attempt, not the static
+    config: the first attempt is forced ``full`` (lean-first) and any fallback
+    retry (``dev_attempt`` >= 1) is forced ``off``. Outside adaptive mode the
+    static ``speed.lean_dev`` mode applies unchanged. Shared by the dev prompt
+    and the dev-gate record so both agree on what actually ran.
+    """
+    if config.speed.lean_dev_adaptive:
+        return LeanDev.FULL if state.dev_attempt == 0 else LeanDev.OFF
+    return config.speed.lean_dev
 
 
 class DevStoryHandler(BaseHandler):
@@ -32,7 +46,7 @@ class DevStoryHandler(BaseHandler):
         report-scoped variant (SP-D1b).
         """
         prompt = super().render_prompt(state)
-        mode = self.config.speed.lean_dev
+        mode = resolve_dev_lean_mode(self.config, state)
         if mode is LeanDev.FULL:
             prompt = f"{prompt}\n\n{self._lean_dev_addendum()}"
         elif mode is LeanDev.REPORT_ONLY:

@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from bmad_assist_lite.core.exceptions import ConfigError
 from bmad_assist_lite.parallel.config import ParallelConfig
@@ -514,6 +521,17 @@ class SpeedConfig(BaseModel):
             "bool true/false coerces to full/off."
         ),
     )
+    lean_dev_adaptive: bool = Field(
+        default=False,
+        description=(
+            "SP-A1: lean-first with an automatic quality-gated fallback. dev_story "
+            "runs with the lean addendum ON (full); if the real dev gate then "
+            "FAILS, the story is re-run ONCE with lean OFF from the pre-dev "
+            "worktree state, and the retry's result stands. Requires "
+            "quality_gate.real_dev_gate (the gate is the tripwire). Off (default) "
+            "leaves dev_story byte-identical."
+        ),
+    )
 
     @field_validator("lean_dev", mode="before")
     @classmethod
@@ -714,6 +732,23 @@ class Config(BaseModel):
     parallel: ParallelConfig | None = Field(
         default=None, description="Parallel story execution configuration"
     )
+
+    @model_validator(mode="after")
+    def _validate_adaptive_requires_real_gate(self) -> "Config":
+        """SP-A1 keys its fallback off the real dev gate, so it requires it.
+
+        Without the gate there is no objective verdict to trip the retry, so a
+        `lean_dev_adaptive` run would silently be a plain lean-first run with no
+        fallback — the exact regression the net exists to prevent. Reject it.
+        """
+        if self.speed.lean_dev_adaptive and not (
+            self.quality_gate is not None and self.quality_gate.real_dev_gate
+        ):
+            raise ValueError(
+                "speed.lean_dev_adaptive requires quality_gate.real_dev_gate=true: "
+                "the adaptive lean-first fallback keys off the real dev gate's verdict."
+            )
+        return self
 
 
 # ============================================================================

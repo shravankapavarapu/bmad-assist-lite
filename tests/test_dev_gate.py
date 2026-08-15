@@ -103,9 +103,9 @@ class TestDevGateHandler:
             result = handler.execute(state)
         assert result.outputs["dev_gate_action"] == "pass"
         assert result.next_phase is None
-        assert state.dev_gate_records == [
-            {"passed": True, "failed": [], "classification": "pass"}
-        ]
+        rec = state.dev_gate_records[0]
+        assert rec["passed"] is True and rec["failed"] == []
+        assert rec["classification"] == "pass" and rec["retry_fired"] is False
 
     def test_records_fail_but_advances(self, tmp_path) -> None:
         cfg = _cfg(

@@ -168,6 +168,10 @@ _FORENSIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     # (`dev-stream-...` for dev_story); archived rather than swept so overhead
     # decomposition — dev and, for run9, create_story — survives the transition.
     re.compile(r"^[a-z_]+-stream-(?P<story_id>.+)\.jsonl$"),
+    # SP-A1 adaptive-dev per-attempt records (mode, retry fired, gate verdict)
+    # written by the dev gate; archived so the epic harvest keeps per-story
+    # telemetry after the transition wipes the story-scoped cache.
+    re.compile(r"^dev-adaptive-(?P<story_id>.+)\.jsonl$"),
 )
 
 _UNATTRIBUTED_STORY_ID = "_unattributed"
