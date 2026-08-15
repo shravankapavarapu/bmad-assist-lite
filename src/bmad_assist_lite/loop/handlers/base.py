@@ -22,6 +22,10 @@ from bmad_assist_lite.providers.base import BaseProvider, ProviderResult, write_
 
 logger = logging.getLogger(__name__)
 
+#: Sentinel for ``invoke_provider`` overrides, so an explicit ``None`` / ``[]``
+#: (e.g. "no tools") is distinguishable from "caller did not override".
+_UNSET: Any = object()
+
 
 class BaseHandler(ABC):
     """Abstract base class for phase handlers.
@@ -125,6 +129,7 @@ class BaseHandler(ABC):
             output_folder=paths.output_folder,
             project_knowledge=paths.project_knowledge,
             resolved_variables=resolved_variables,
+            stable_prefix=self.config.compiler.stable_prefix,
         )
 
         try:
@@ -164,8 +169,54 @@ class BaseHandler(ABC):
         """
         return allowed_tools_for(self.autonomy)
 
+    def build_system_prompt(self, state: State) -> str | None:
+        """The epic's stable context as an appended, cached system prompt, or None.
+
+        Gated on ``compiler.stable_prefix``. The block is byte-identical across the
+        epic's phases and stories, so it caches once and is read cheaply on every
+        later call. Off by default, in which case the CLI's default system prompt
+        is used unchanged.
+        """
+        if not self.config.compiler.stable_prefix:
+            return None
+
+        from bmad_assist_lite.compiler.stable_context import build_stable_system_prompt
+
+        paths = get_paths()
+        context = CompilerContext(
+            project_root=self.project_path,
+            output_folder=paths.output_folder,
+            project_knowledge=paths.project_knowledge,
+            resolved_variables={
+                "epic_num": state.current_epic,
+                "story_num": self._extract_story_num(state.current_story),
+                "planning_artifacts": str(paths.planning_artifacts),
+                "implementation_artifacts": str(paths.implementation_artifacts),
+            },
+        )
+        return build_stable_system_prompt(context)
+
+    def _reviewer_stagger(self, system_prompt: str | None) -> float:
+        """Seconds to delay each successive reviewer lane's start.
+
+        The stagger only ever existed to let reviewer-1 warm the L1 stable-context
+        cache before the others begin; it is already 0 when no system prompt is in
+        play. SP-4 (``speed.remove_stagger``) drops it unconditionally.
+        """
+        if self.config.speed.remove_stagger:
+            return 0.0
+        return self.config.parallel_delay if system_prompt else 0.0
+
     def invoke_provider(
-        self, prompt: str, *, model: str | None = None, attempt: int = 1
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        attempt: int = 1,
+        system_prompt: str | None = None,
+        resume: str | None = None,
+        allowed_tools: Any = _UNSET,
+        effort: Any = _UNSET,
     ) -> ProviderResult:
         """Invoke the provider with the given prompt.
 
@@ -173,12 +224,24 @@ class BaseHandler(ABC):
             prompt: The compiled prompt to send.
             model: Per-invocation model override, honoured only for routable phases.
             attempt: 1-based attempt number; a retry escalates back to the master model.
+            system_prompt: Stable context to append as a cached system prompt, or None.
+            resume: Session id to resume (session reuse). Claude-only; None starts
+                a fresh session. Used by the synthesis lane's round-2 self-resume.
+            allowed_tools: Override the phase's tool allowlist. Left unset, the
+                phase's declared autonomy resolves it; pass ``[]`` for a tool-free
+                call (e.g. the SP-1 structured adjudication, which must not fix or
+                explore). Still checked against the declared level.
+            effort: Override the reasoning effort. Left unset, the master effort is
+                used; SP-3 lowers it a notch for the lean review path.
 
         """
         provider = self.get_provider()
         model = self.get_model(model=model, attempt=attempt)
         timeout = get_phase_timeout(self.config, self.phase_name)
-        allowed_tools = self.get_allowed_tools()
+        if allowed_tools is _UNSET:
+            allowed_tools = self.get_allowed_tools()
+        if effort is _UNSET:
+            effort = self.config.providers.master.effort
 
         # G12: the declaration above is a class attribute and the resolver is an
         # overridable method, so neither proves anything on its own. This is the
@@ -205,14 +268,17 @@ class BaseHandler(ABC):
             timeout=timeout,
             cwd=self.project_path,
             allowed_tools=allowed_tools,
-            effort=self.config.providers.master.effort,
+            effort=effort,
+            system_prompt=system_prompt,
+            resume=resume,
         )
 
     def execute(self, state: State) -> PhaseResult:
         """Execute the handler."""
         try:
             prompt = self.render_prompt(state)
-            result = self.invoke_provider(prompt)
+            system_prompt = self.build_system_prompt(state)
+            result = self.invoke_provider(prompt, system_prompt=system_prompt)
 
             if result.exit_code != 0:
                 error_msg = result.stderr or f"Provider exited with code {result.exit_code}"

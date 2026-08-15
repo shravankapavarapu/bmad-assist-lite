@@ -7,13 +7,20 @@ Evidence Score context injected into the prompt.
 import json
 import logging
 import re
-import subprocess
 from typing import Any
 
+from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
+from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_loop import ReviewDecision, decide_review_loop
+from bmad_assist_lite.loop.review_merge import (
+    high_severity_preserved,
+    merge_findings,
+    parse_reviewer_findings,
+    render_adjudication_candidates,
+)
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers.base import write_progress
 from bmad_assist_lite.validation.findings import (
@@ -213,10 +220,22 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
     def _run_review_loop(self, state: State, response: str) -> ReviewDecision:
         """Decide whether this story earns another fix round, and record it."""
+        findings = self._parse_review_findings(response)
+        return self._decide_and_record(state, findings)
+
+    def _decide_and_record(
+        self, state: State, findings: FindingSet | None
+    ) -> ReviewDecision:
+        """Run the bounded review decision over an already-parsed finding set.
+
+        Split from ``_run_review_loop`` so the decision core is independent of
+        where the findings came from; every current caller (legacy and
+        structured paths alike) parses a synthesis response first. ``None``
+        findings mean a parse failure, never a clean review.
+        """
         story_id = state.current_story or "unknown"
         self._reset_review_state_for_story(state)
 
-        findings = self._parse_review_findings(response)
         decision = decide_review_loop(
             findings,
             iteration=state.review_iteration,
@@ -252,33 +271,151 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
         return decision
 
-    def _capture_git_diff_stat(self) -> str | None:
-        """Capture git diff --stat to show what files changed."""
-        try:
-            result = subprocess.run(
-                ["git", "diff", "--stat"],
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                timeout=10,
+    def _structured_synthesis(
+        self,
+        state: State,
+        reviews: list[dict[str, Any]],
+        evidence_data: dict[str, Any] | None,
+    ) -> PhaseResult | None:
+        """Feed the synthesis fixer a pre-merged candidate set + demand terse output.
+
+        Keeps the synthesis as the round-1 fixer per the operator's quality
+        decision — it still verifies, applies fixes, updates the story and emits
+        the remaining findings (full EXECUTE tools), so the fix touchpoints
+        (round-1 synthesis-fix -> fix_review -> round-2 synthesis-fix) are all
+        preserved. The speed comes from removing the cross-reviewer re-derivation
+        and the verbose report (the reviewers' findings arrive already merged and
+        deduped) plus SP-3's lower effort.
+
+        Returns None to fall back to the legacy path — each fallback site emits
+        its own accurate operator message — when: any successful lane's findings
+        block failed to parse (its findings would be LOST to the merge; the
+        legacy path reads the raw prose and so cannot lose them — operator
+        quality decision), when no lane succeeded at all, or when the merge
+        guard would drop a >= high finding. A parsed-but-empty finding set from
+        every lane is a CLEAN review and stays on the fast path.
+        """
+        story_id = state.current_story or "unknown"
+        raw_findings, notes = parse_reviewer_findings(reviews)
+        if notes:
+            for note in notes:
+                logger.warning("structured_review: %s", note)
+            write_progress(
+                "  structured_review: reviewer lane(s) without a usable findings "
+                f"block ({'; '.join(notes)}) — using legacy synthesis so no "
+                "finding is lost"
             )
-            return result.stdout.strip() if result.returncode == 0 else None
-        except Exception:
+            return None
+        if not any(r.get("exit_code") == 0 for r in reviews):
+            write_progress(
+                "  structured_review: no successful reviewer lane — using legacy synthesis"
+            )
             return None
 
-    def _capture_git_diff(self) -> str | None:
-        """Capture full git diff for saving to cache."""
-        try:
-            result = subprocess.run(
-                ["git", "diff"],
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                timeout=15,
+        merged = merge_findings(raw_findings)
+        # SP-1 quality guard, code-checkable: the deterministic merge must drop no
+        # round-1 finding of severity >= high. True by construction; enforced so a
+        # regression falls back to the safe path rather than shipping a silent drop.
+        if not high_severity_preserved(raw_findings, merged):
+            logger.error(
+                "structured merge would drop a >= high finding; using legacy path"
             )
-            return result.stdout if result.returncode == 0 else None
-        except Exception:
+            write_progress(
+                "  structured_review: merge guard tripped (would drop a >= high "
+                "finding) — using legacy synthesis"
+            )
             return None
+
+        candidates, _id_map = render_adjudication_candidates(merged)
+        if merged:
+            write_progress(
+                f"  Structured review: {len(raw_findings)} reviewer finding(s) -> "
+                f"{len(merged)} merged candidate(s); synthesis fixes from the merged set"
+            )
+        else:
+            # Every lane parsed clean ([]): keep the fast path — this is where
+            # it is cheapest — and tell the synthesis exactly that.
+            candidates = (
+                "(no candidates — every reviewer reported a clean review; "
+                "spot-check the changes and emit an empty findings block unless "
+                "you find a defect yourself)"
+            )
+            write_progress(
+                "  Structured review: all reviewer lanes clean — synthesis verifies and closes"
+            )
+
+        prompt = self.render_prompt(state)
+        evidence_context = self._format_evidence_context(evidence_data)
+        full_prompt = (
+            f"{prompt}\n\n"
+            f"{evidence_context}\n\n"
+            "<merged-reviewer-findings>\n"
+            "The findings below are ALL reviewers' findings, already de-duplicated "
+            "for you — a starting set, so you need not re-derive the cross-reviewer "
+            "comparison. But you MUST still assign severity and bucket CENTRALLY "
+            "yourself after checking the code (step 9): do NOT just copy a "
+            "reviewer's rating. Escalate a genuine spec ambiguity or unmet "
+            "acceptance criterion to blocking (bad_spec / intent_gap) even if a "
+            "reviewer marked it patch, exactly as a normal synthesis would. Verify "
+            "each against the code, apply fixes (steps 4-7), then emit the REMAINING "
+            f"findings in the required block.\n{candidates}\n"
+            "</merged-reviewer-findings>\n\n"
+            "<output-economy>\n"
+            "Be terse: no step-by-step exploration narration, no file-by-file "
+            "walkthrough, no restating the story. Keep the written synthesis report "
+            "to a short summary. The machine BMAD-FINDINGS block is the required "
+            "output.\n"
+            "</output-economy>"
+        )
+
+        # Full tools (EXECUTE): the synthesis stays the fixer. It runs at the master
+        # effort (NOT the SP-3 reviewer notch) so its central severity re-judgment
+        # keeps W0's escalation rigor — the speed comes from the merged candidates +
+        # terse report, not from the synthesis thinking less.
+        result = self.invoke_provider(full_prompt)
+        if result.exit_code != 0:
+            return PhaseResult.fail(
+                result.stderr or f"Provider exited with code {result.exit_code}"
+            )
+
+        logger.info(
+            "code_review_synthesis (structured) output: %d chars (~%d tokens)",
+            len(result.stdout),
+            len(result.stdout) // 4,
+        )
+
+        cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        diff_stat = git_diff(self.project_path, stat=True)
+        full_diff = git_diff(self.project_path)
+        if diff_stat:
+            write_progress(f"  Code changes by synthesis:\n{diff_stat}")
+        if full_diff:
+            (cache_dir / f"synthesis-diff-review-{story_id}.patch").write_text(
+                full_diff, encoding="utf-8"
+            )
+        (cache_dir / f"synthesis-response-review-{story_id}.md").write_text(
+            result.stdout, encoding="utf-8"
+        )
+
+        decision = self._run_review_loop(state, result.stdout)
+        outputs: dict[str, Any] = {
+            "response": result.stdout,
+            "model": result.model,
+            "duration_ms": result.duration_ms,
+            "reviews_synthesized": len(reviews),
+            "merged_findings": len(merged),
+            "structured_review": True,
+            "code_changes": diff_stat or "(none)",
+            "review_outcome": decision.outcome.value,
+            "review_finding_hash": decision.finding_hash,
+            "review_blocking_findings": decision.blocking_count,
+        }
+        return PhaseResult(
+            success=True,
+            next_phase=decision.next_phase,
+            outputs=outputs,
+        )
 
     def execute(self, state: State) -> PhaseResult:
         """Execute synthesis with cached reviews and Evidence Score context."""
@@ -296,6 +433,16 @@ class CodeReviewSynthesisHandler(BaseHandler):
                 pass
             elif isinstance(reviews, dict):
                 reviews = reviews.get("reviews", [])
+
+            # SP-1: deterministic merge feeding the synthesis fixer a pre-merged
+            # candidate set. Falls through to the legacy path on any lane parse
+            # failure or guard trip — _structured_synthesis reports the specific
+            # reason at each fallback site.
+            if self.config.speed.structured_review:
+                structured = self._structured_synthesis(state, reviews, evidence_data)
+                if structured is not None:
+                    return structured
+                logger.info("structured_review: using the legacy synthesis path")
 
             prompt = self.render_prompt(state)
 
@@ -342,7 +489,26 @@ class CodeReviewSynthesisHandler(BaseHandler):
                     len(resp) // 4,
                 )
 
-            result = self.invoke_provider(full_prompt)
+            # L2: synthesis resumes its OWN round-1 synthesis session on a round-2
+            # re-synthesis (keyed by story so it never crosses a story boundary;
+            # this is the master provider's synthesis lane -- never the dev
+            # session, which is a separate phase/invoke and is never captured here).
+            master = self.config.providers.master
+            synth_key = reviewer_reuse.lane_key(
+                state.current_story, self.phase_name, 0, master.provider, master.model
+            )
+            resume_id = reviewer_reuse.resume_id_for(
+                state, self.config, provider=master.provider, key=synth_key
+            )
+            result = self.invoke_provider(full_prompt, resume=resume_id)
+            reviewer_reuse.capture_session(
+                state,
+                self.config,
+                story_id=state.current_story,
+                provider=master.provider,
+                key=synth_key,
+                result=result,
+            )
 
             if result.exit_code != 0:
                 return PhaseResult.fail(
@@ -361,8 +527,8 @@ class CodeReviewSynthesisHandler(BaseHandler):
             cache_dir.mkdir(parents=True, exist_ok=True)
             story_id = state.current_story or "unknown"
 
-            diff_stat_after = self._capture_git_diff_stat()
-            full_diff = self._capture_git_diff()
+            diff_stat_after = git_diff(self.project_path, stat=True)
+            full_diff = git_diff(self.project_path)
 
             if diff_stat_after:
                 write_progress(f"  Code changes by synthesis:\n{diff_stat_after}")

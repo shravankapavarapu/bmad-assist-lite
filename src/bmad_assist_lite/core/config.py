@@ -128,6 +128,11 @@ NON_ROUTABLE_LLM_PHASES: frozenset[str] = frozenset(
         "fix_review",
     }
 )
+# Note: the L3 epic-knowledge writer (``write_epic_knowledge``) is intentionally
+# absent from every set here. It is invoked from a story-completion hook, not the
+# phase loop, so it is not a ``Phase`` enum member and must not appear in the
+# classification that partitions that enum. It runs at master capability by
+# construction (the hook uses ``providers.master.model`` directly).
 
 # Deterministic phases that invoke no LLM at all, so there is no model to route.
 NON_LLM_PHASES: frozenset[str] = frozenset(
@@ -242,6 +247,7 @@ class TimeoutsConfig(BaseModel):
     fix_review: int | None = None
     epic_quality_gate: int | None = None
     retrospective: int | None = None
+    write_epic_knowledge: int | None = None
 
     # Phases that need longer timeouts than default (300s)
     _PHASE_DEFAULTS: ClassVar[dict[str, int]] = {
@@ -256,6 +262,7 @@ class TimeoutsConfig(BaseModel):
         "fix_review": 900,
         "epic_quality_gate": 600,
         "retrospective": 600,
+        "write_epic_knowledge": 600,
     }
 
     def get_timeout(self, phase: str) -> int:
@@ -315,6 +322,25 @@ class AutoCommitConfig(BaseModel):
     enabled: bool = Field(default=True, description="Auto-commit after code_review_synthesis")
 
 
+class CompilerConfig(BaseModel):
+    """Prompt-compiler knobs.
+
+    ``stable_prefix`` carries the epic's stable, unfiltered artifacts (project
+    context, PRD, UX, architecture, epic) as an *appended* system prompt so their
+    bytes form a warm, byte-identical prompt-cache prefix shared across every
+    phase and story of the epic. It cannot ride a shared user-message prefix: the
+    CLI keys the user-message cache on the whole prompt, so a stable prefix with a
+    differing tail misses entirely (measured). Off by default.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stable_prefix: bool = Field(
+        default=False,
+        description="Carry stable epic artifacts as a cached (appended) system prompt",
+    )
+
+
 class SolutionsConfig(BaseModel):
     """The compounding solutions store: off by default, bounded when on.
 
@@ -335,6 +361,130 @@ class SolutionsConfig(BaseModel):
     )
     max_injected_chars: int = Field(
         default=4000, ge=0, description="Hard character cap on the injected block"
+    )
+
+
+class SessionReuseConfig(BaseModel):
+    """Reuse a reviewer/synthesis Claude session across review rounds (L2).
+
+    Off by default and backward-compatible: when disabled, every review round
+    cold-starts a fresh session exactly as today. When enabled, each reviewer
+    lane in the multi-LLM fan-out (``code_review`` / ``validate_story``) keeps
+    its own round-1 session id, and a round-2 re-review resumes *that same
+    reviewer's* session (``resume=<id>``) so it re-reads only the fix diff
+    instead of recompiling the full story context. ``code_review_synthesis``
+    likewise resumes its own round-1 synthesis session on round 2.
+
+    The reviewer independence rule (F-13) is preserved *structurally*: a lane
+    only ever resumes a session it wrote itself, keyed by phase+index+provider+
+    model. No lane can resume the dev/master session -- those ids are never
+    written into the reviewer holder. Reuse is Claude-only; a non-Claude
+    reviewer silently ignores the flag.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    reviewer_self_resume: bool = Field(
+        default=False,
+        description=(
+            "Resume a reviewer/synthesis lane's own round-1 Claude session on "
+            "round-2 re-review (never the dev session; Claude-only)"
+        ),
+    )
+
+
+class EpicKnowledgeConfig(BaseModel):
+    """A curated, bounded epic-knowledge brief carried across an epic's stories (L3).
+
+    Off by default. When enabled, at each story's completion the master writes /
+    updates a small ``epic-knowledge-<epic>.md`` brief (architectural decisions,
+    gotchas, file-map deltas, conventions). Subsequent stories in the epic load
+    it inside the stable, cached system-prompt region (see ``compiler.stable_prefix``),
+    so later stories start "smart" without recompiling prior story transcripts.
+
+    Bounded on purpose: an unbounded accumulation would defeat the whole point of
+    context economy. ``max_chars`` hard-caps the written brief; a naive
+    epic-scoped transcript resume is explicitly rejected in favour of this
+    curated artifact.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(
+        default=False,
+        description="Write and inject a curated epic-knowledge brief across the epic's stories",
+    )
+    max_chars: int = Field(
+        default=8000,
+        ge=0,
+        description="Hard character cap on the written brief (~2k tokens); excess is truncated",
+    )
+
+
+class SpeedConfig(BaseModel):
+    """Wall-clock speed pack for the review pipeline (goal-run6).
+
+    All off by default and backward-compatible: with every flag ``False`` the
+    review chain runs exactly as today. The measured physics is that every
+    single-lane phase is 100% API time at a fixed output-tokens/sec, so
+    ``wall ~= critical-path output tokens / tps``. Each flag removes
+    critical-path output tokens from a distinct phase family:
+
+    - ``structured_review`` (SP-1): reviewer/validator lanes additionally emit a
+      strict machine findings block; ``code_review_synthesis`` and
+      ``validate_story_synthesis`` are then fed a deterministic code-side
+      merge/dedup of those findings plus a terse-output directive, instead of
+      every lane's full prose to re-derive. The synthesis REMAINS the fixer,
+      with full tools at master effort. If any lane's block fails to parse, the
+      phase falls back to the legacy prose path so no finding can be lost.
+    - ``delta_round2`` (SP-2): the round-2 re-review gets a fresh session scoped
+      to round-1 findings + the handler-inlined fix ``git diff`` + the story
+      file -- not the full artifact set, not a resumed transcript (fresh is
+      enforced even when reviewer self-resume is enabled). Targets the round-2
+      ``code_review`` phase; falls back to a full (still fresh) re-review when
+      the round-1 findings are unavailable.
+    - ``lean_review`` (SP-3): REVIEWER lanes run one effort notch lower, with
+      findings-only output and diff-scoped reading ("review the inlined diff;
+      open files only when it is insufficient"). Synthesis effort is
+      deliberately NOT lowered -- the n=1 refinement showed the central
+      severity re-judgment needs full effort (under-escalation otherwise).
+    - ``remove_stagger`` (SP-4): drop the reviewer fan-out stagger (it only ever
+      fired to warm the dead L1 system-prompt cache).
+
+    Quality is guarded in the A/B, not here: the deterministic merge must drop no
+    round-1 finding of severity >= high, and the final severity mix must stay
+    within +/-1 of the all-off anchor.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    structured_review: bool = Field(
+        default=False,
+        description=(
+            "SP-1: reviewer/validator lanes emit structured findings; the "
+            "synthesis (still the fixer, full effort) is fed a deterministic "
+            "merged candidate set + terse-output directive; legacy fallback on "
+            "any lane parse failure"
+        ),
+    )
+    delta_round2: bool = Field(
+        default=False,
+        description=(
+            "SP-2: round-2 re-review runs a fresh session scoped to round-1 "
+            "findings + inlined fix diff + story (no full artifacts, no resume; "
+            "full fresh re-review if round-1 findings are unavailable)"
+        ),
+    )
+    lean_review: bool = Field(
+        default=False,
+        description=(
+            "SP-3: reviewer lanes one effort notch down (synthesis effort "
+            "unchanged), findings-only output, diff-scoped reading"
+        ),
+    )
+    remove_stagger: bool = Field(
+        default=False,
+        description="SP-4: drop the reviewer fan-out stagger (was only for the dead L1 cache)",
     )
 
 
@@ -496,8 +646,12 @@ class Config(BaseModel):
         default=None, description="Fallback quality gate commands"
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
+    compiler: CompilerConfig = Field(default_factory=CompilerConfig)
     signoff: SignoffConfig = Field(default_factory=SignoffConfig)
     solutions: SolutionsConfig = Field(default_factory=SolutionsConfig)
+    session_reuse: SessionReuseConfig = Field(default_factory=SessionReuseConfig)
+    epic_knowledge: EpicKnowledgeConfig = Field(default_factory=EpicKnowledgeConfig)
+    speed: SpeedConfig = Field(default_factory=SpeedConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     parallel: ParallelConfig | None = Field(
@@ -765,6 +919,26 @@ def load_config_with_project(
             sources.append(f"project ({project_config_path})")
         merged_str = " + ".join(sources)
         raise ConfigError(f"Invalid configuration (from {merged_str}): {e}") from e
+
+
+#: The Claude effort ladder, low -> high. An unset effort is treated as the
+#: ``medium`` the master runs at, so a notch-down is a single, defined step.
+_EFFORT_LADDER: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
+def notch_down_effort(effort: str | None) -> str:
+    """Return the effort one notch below ``effort`` (SP-3 lean review).
+
+    ``None`` (provider default) is read as ``medium`` — the level the master
+    runs at — so lowering it yields ``low``. An unrecognised value floors to
+    ``low``. Never goes below ``low``.
+    """
+    current = (effort or "medium").strip().lower()
+    try:
+        index = _EFFORT_LADDER.index(current)
+    except ValueError:
+        return "low"
+    return _EFFORT_LADDER[max(0, index - 1)]
 
 
 def get_phase_timeout(config: Config, phase: str) -> int:

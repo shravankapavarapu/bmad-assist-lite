@@ -46,6 +46,8 @@ class _RecordingProvider(BaseProvider):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         color_index: int | None = None,
+        system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         self.received = {
             "prompt": prompt,

@@ -118,6 +118,15 @@ class PhaseMetricRecord(BaseModel):
             measurement — and the measurement protocol rejects any snapshot
             containing one.
         call_count: Provider calls the sums cover. Zero for non-LLM phases.
+        provider_session_id: Provider session id(s) the phase's calls ran under,
+            distinct and comma-separated in call order — one session for a
+            master-chain phase, one per reviewer lane for a multi-LLM fan-out.
+            None when no call reported one. A short identifier, never prompt text.
+        resumed_session_id: The prior session id(s) a call resumed when session
+            reuse was active; None for cold phases. Distinct, comma-separated in
+            call order.
+        session_reused: True when any call in the phase resumed a prior session
+            instead of starting cold.
 
     """
 
@@ -136,6 +145,9 @@ class PhaseMetricRecord(BaseModel):
     total_cost_usd: float | None = None
     timed_out: bool = False
     call_count: int = 0
+    provider_session_id: str | None = None
+    resumed_session_id: str | None = None
+    session_reused: bool = False
 
 
 PHASE_METRIC_FIELDS: frozenset[str] = frozenset(PhaseMetricRecord.model_fields)
@@ -347,6 +359,9 @@ class _Call:
         "cache_creation_tokens",
         "total_cost_usd",
         "timed_out",
+        "provider_session_id",
+        "resumed_session_id",
+        "session_reused",
     )
 
     def __init__(
@@ -360,6 +375,9 @@ class _Call:
         cache_creation_tokens: int | None,
         total_cost_usd: float | None,
         timed_out: bool,
+        provider_session_id: str | None = None,
+        resumed_session_id: str | None = None,
+        session_reused: bool = False,
     ) -> None:
         self.model = model
         self.api_duration_ms = api_duration_ms
@@ -369,6 +387,9 @@ class _Call:
         self.cache_creation_tokens = cache_creation_tokens
         self.total_cost_usd = total_cost_usd
         self.timed_out = timed_out
+        self.provider_session_id = provider_session_id
+        self.resumed_session_id = resumed_session_id
+        self.session_reused = session_reused
 
 
 class PhaseMetricsHandle:
@@ -415,9 +436,15 @@ class PhaseMetricsHandle:
             phase = self._phase
 
         models: list[str] = []
+        sessions: list[str] = []
+        resumed: list[str] = []
         for call in calls:
             if call.model and call.model not in models:
                 models.append(call.model)
+            if call.provider_session_id and call.provider_session_id not in sessions:
+                sessions.append(call.provider_session_id)
+            if call.resumed_session_id and call.resumed_session_id not in resumed:
+                resumed.append(call.resumed_session_id)
 
         return PhaseMetricRecord(
             story_id=story_id,
@@ -433,6 +460,9 @@ class PhaseMetricsHandle:
             total_cost_usd=_sum_float(call.total_cost_usd for call in calls),
             timed_out=any(call.timed_out for call in calls),
             call_count=len(calls),
+            provider_session_id=",".join(sessions) if sessions else None,
+            resumed_session_id=",".join(resumed) if resumed else None,
+            session_reused=any(call.session_reused for call in calls),
         )
 
 
@@ -463,6 +493,9 @@ def record_provider_call(
     cache_creation_tokens: Any = None,
     total_cost_usd: Any = None,
     timed_out: bool = False,
+    provider_session_id: Any = None,
+    resumed_session_id: Any = None,
+    session_reused: bool = False,
 ) -> None:
     """Report one provider invocation to the open phase, if any.
 
@@ -483,6 +516,10 @@ def record_provider_call(
         cache_creation_tokens: Prompt tokens written to cache.
         total_cost_usd: Provider-reported cost in USD.
         timed_out: True when this call timed out.
+        provider_session_id: The provider's session id for this call, if reported.
+        resumed_session_id: The prior session id this call resumed, when session
+            reuse was active; None for a cold call.
+        session_reused: True when this call resumed a prior session.
 
     """
     try:
@@ -501,6 +538,9 @@ def record_provider_call(
                 cache_creation_tokens=_as_int(cache_creation_tokens),
                 total_cost_usd=_as_float(total_cost_usd),
                 timed_out=bool(timed_out),
+                provider_session_id=_as_str(provider_session_id),
+                resumed_session_id=_as_str(resumed_session_id),
+                session_reused=bool(session_reused),
             )
         )
     except Exception:

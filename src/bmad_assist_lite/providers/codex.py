@@ -277,6 +277,8 @@ class CodexProvider(BaseProvider):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         color_index: int | None = None,
+        system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Execute Codex CLI with NDJSON streaming and collector integration.
 

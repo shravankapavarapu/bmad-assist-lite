@@ -46,3 +46,4 @@ class CompilerContext:
     file_contents: dict[str, str] = field(default_factory=dict)
     per_file_contents: dict[str, str] = field(default_factory=dict)
     links_only: bool = False
+    stable_prefix: bool = False

@@ -88,7 +88,7 @@ class ValidateStorySynthesisCompiler:
 
         # Generate XML output
         output = generate_output(
-            compiled, context.project_root, context.file_contents, context.links_only
+            compiled, context.project_root, context.file_contents, context.links_only, context.stable_prefix
         )
 
         return CompiledWorkflow(

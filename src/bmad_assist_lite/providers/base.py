@@ -435,6 +435,12 @@ class ProviderResult:
         cache_creation_tokens: Prompt tokens written into the provider's prompt
             cache by this call.
         total_cost_usd: Provider-reported cost of the call in USD.
+        provider_session_id: The provider's session id for this call, when the
+            provider reports one.
+        resumed_session_id: The prior session id this call resumed, when session
+            reuse was active; None for a cold call.
+        session_reused: True when this call resumed a prior session instead of
+            starting cold.
 
     """
 
@@ -445,6 +451,8 @@ class ProviderResult:
     model: str | None
     command: tuple[str, ...]
     provider_session_id: str | None = None
+    resumed_session_id: str | None = None
+    session_reused: bool = False
     timed_out: bool = False
     api_duration_ms: int | None = None
     input_tokens: int | None = None
@@ -512,6 +520,8 @@ class BaseProvider(ABC):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         color_index: int | None = None,
+        system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Execute LLM provider with the given prompt.
 
@@ -528,6 +538,11 @@ class BaseProvider(ABC):
             effort: Reasoning-effort hint, forwarded to _do_invoke() verbatim.
                 Provider-specific; providers that do not support it ignore it.
             color_index: Index for ANSI color differentiation in output.
+            resume: Session id to resume (session reuse). Provider-specific;
+                only Claude acts on it, other providers ignore it. None (default)
+                starts a fresh session, i.e. current behaviour. When a Claude call
+                resumes, the returned result carries resumed_session_id=<id> and
+                session_reused=True (L4 attribution).
 
         Returns:
             ProviderResult with timed_out=False on success, or timed_out=True
@@ -557,6 +572,8 @@ class BaseProvider(ABC):
                     allowed_tools=allowed_tools,
                     effort=effort,
                     color_index=color_index,
+                    system_prompt=system_prompt,
+                    resume=resume,
                 )
             except TimeoutError:
                 timed_out = True
@@ -619,6 +636,9 @@ class BaseProvider(ABC):
                 cache_read_tokens=getattr(result, "cache_read_tokens", None),
                 cache_creation_tokens=getattr(result, "cache_creation_tokens", None),
                 total_cost_usd=getattr(result, "total_cost_usd", None),
+                provider_session_id=getattr(result, "provider_session_id", None),
+                resumed_session_id=getattr(result, "resumed_session_id", None),
+                session_reused=bool(getattr(result, "session_reused", False)),
                 timed_out=timed_out or bool(getattr(result, "timed_out", False)),
             )
         except Exception:
@@ -637,6 +657,8 @@ class BaseProvider(ABC):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         color_index: int | None = None,
+        system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Provider-specific invocation that must call collector.add() as chunks arrive.
 
@@ -655,6 +677,12 @@ class BaseProvider(ABC):
                 unsupported. Implementations that cannot act on it must still
                 accept the keyword so invoke() can forward it unconditionally.
             color_index: Index for ANSI color differentiation in output.
+            system_prompt: Stable text to carry as the provider's system prompt
+                (append mode), enabling cross-call prompt-cache reuse. Providers
+                that cannot act on it must still accept the keyword.
+            resume: Session id to resume. Provider-specific; ignore if
+                unsupported. Implementations that cannot act on it must still
+                accept the keyword so invoke() can forward it unconditionally.
 
         Returns:
             ProviderResult on successful completion.

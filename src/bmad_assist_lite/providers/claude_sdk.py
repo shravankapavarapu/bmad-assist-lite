@@ -9,6 +9,8 @@ Implements the BaseProvider Template Method contract (Story 7.3):
 import asyncio
 import logging
 import math
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -428,6 +430,8 @@ class ClaudeSDKProvider(BaseProvider):
         collector: ResultCollector,
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
+        system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> str:
         """Stream the SDK query, returning the collected text.
 
@@ -456,6 +460,23 @@ class ClaudeSDKProvider(BaseProvider):
         # the CLI loads the target's .mcp.json exactly as it does today.
         hermetic = is_hermetic()
 
+        # Carry the stable context as an *appended* system prompt via a FILE.
+        # The SDK maps append to --append-system-prompt (a CLI *argument*), which
+        # overflows ARG_MAX for a large block (measured: "[Errno 7] Argument list
+        # too long"). --append-system-prompt-file keeps append mode -- Claude
+        # Code's default system prompt, and with it the agent/tool behaviour, is
+        # preserved -- while the block is read from disk. Cross-call prompt-cache
+        # reuse hits on the block's *content* (byte-identical across phases and
+        # stories), not on a user-message prefix (measured: a shared user-message
+        # prefix with any differing tail misses entirely) and not on the temp
+        # path. None => the CLI's default system prompt, unchanged.
+        sys_prompt_file: str | None = None
+        if system_prompt:
+            fd, sys_prompt_file = tempfile.mkstemp(prefix="bmad-sysprompt-", suffix=".txt")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(system_prompt)
+            extra_args["append-system-prompt-file"] = sys_prompt_file
+
         options = ClaudeAgentOptions(
             model=model,
             permission_mode="acceptEdits",
@@ -465,9 +486,12 @@ class ClaudeSDKProvider(BaseProvider):
             extra_args=extra_args,
             cli_path=self._resolve_cli_path(),
             strict_mcp_config=hermetic,
+            resume=resume,
         )
         if hermetic:
             logger.debug("Hermetic run: strict_mcp_config=True, project MCP servers not loaded.")
+        if resume:
+            logger.info("Claude SDK resuming session %s (reviewer self-resume).", resume)
 
         result_message: ResultMessage | None = None
 
@@ -509,6 +533,14 @@ class ClaudeSDKProvider(BaseProvider):
                 )
             else:
                 raise
+        finally:
+            if sys_prompt_file:
+                try:
+                    os.unlink(sys_prompt_file)
+                except OSError:
+                    logger.debug(
+                        "Could not remove temp system-prompt file %s", sys_prompt_file
+                    )
 
         if collector.is_empty:
             raise ProviderError("No response received from SDK")
@@ -527,8 +559,17 @@ class ClaudeSDKProvider(BaseProvider):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         color_index: int | None = None,
+        system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
-        """Execute Claude SDK with the given prompt and return the result."""
+        """Execute Claude SDK with the given prompt and return the result.
+
+        When ``resume`` is a session id, the SDK continues that conversation
+        (``ClaudeAgentOptions.resume``) instead of cold-starting a fresh session,
+        so context is not recompiled. The returned result then carries
+        ``resumed_session_id``/``session_reused`` for L4 attribution. None
+        (default) is the fresh-session path.
+        """
         _ = color_index
 
         if timeout <= 0:
@@ -570,6 +611,8 @@ class ClaudeSDKProvider(BaseProvider):
                         collector,
                         allowed_tools,
                         effort,
+                        system_prompt,
+                        resume,
                     ),
                     timeout=timeout,
                 )
@@ -611,6 +654,8 @@ class ClaudeSDKProvider(BaseProvider):
             model=effective_model,
             command=(self.provider_name, model or "default"),
             provider_session_id=metrics.session_id,
+            resumed_session_id=resume,
+            session_reused=bool(resume),
             api_duration_ms=metrics.api_duration_ms,
             input_tokens=metrics.input_tokens,
             output_tokens=metrics.output_tokens,

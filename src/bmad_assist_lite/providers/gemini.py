@@ -97,6 +97,8 @@ class GeminiProvider(BaseProvider):
         allowed_tools: list[str] | None = None,
         effort: str | None = None,
         color_index: int | None = None,
+        system_prompt: str | None = None,
+        resume: str | None = None,
     ) -> ProviderResult:
         """Execute Gemini CLI with the given prompt and return the result."""
         if timeout <= 0:

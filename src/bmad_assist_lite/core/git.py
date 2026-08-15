@@ -9,6 +9,69 @@ from bmad_assist_lite.providers._windows import get_subprocess_kwargs
 logger = logging.getLogger(__name__)
 
 
+#: Heading for the untracked-files listing appended to :func:`git_diff` output.
+#: New files a dev/fixer created are invisible to ``git diff``; the listing keeps
+#: them inside the review scope the diff is now load-bearing for.
+UNTRACKED_HEADING = "# Untracked new files (not in the diff above; read them directly):"
+
+
+def _run_git(args: list[str], project_path: Path, timeout: int) -> str | None:
+    """Run a git command, returning stdout or None on any failure.
+
+    Output is decoded with ``errors="replace"`` so invalid UTF-8 in a diff can
+    never raise out of here — callers treat None as "no diff available" and a
+    replaced character is strictly better than losing the whole diff.
+    """
+    try:
+        result = subprocess.run(
+            args,
+            cwd=project_path,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            **get_subprocess_kwargs(),
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+        logger.warning("git %s failed: %s", " ".join(args[1:3]), exc)
+        return None
+    if result.returncode != 0:
+        logger.warning("git %s failed: %s", " ".join(args[1:3]), result.stderr.strip())
+        return None
+    output: str = result.stdout
+    return output
+
+
+def git_diff(project_path: Path, *, stat: bool = False, timeout: int = 15) -> str | None:
+    """Return the uncommitted diff vs HEAD, or its ``--stat``, or None on error.
+
+    Staged and unstaged changes are both included (``git diff HEAD``), and
+    untracked files are appended as a listing under ``UNTRACKED_HEADING`` —
+    a fixer that created or ``git add``-ed a file must not silently shrink the
+    review scope. After ``code_review_synthesis`` auto-commits the dev +
+    synthesis work, this is exactly the ``fix_review`` changes a round-2 delta
+    review (SP-2) needs to scope to — reviewers are read-only and cannot run git
+    themselves, so the handler inlines this into the prompt. Falls back to the
+    index diff on an unborn HEAD (no commits yet).
+    """
+    head_args = ["git", "diff", "--stat", "HEAD"] if stat else ["git", "diff", "HEAD"]
+    output = _run_git(head_args, project_path, timeout)
+    if output is None:
+        fallback = ["git", "diff", "--stat"] if stat else ["git", "diff"]
+        output = _run_git(fallback, project_path, timeout)
+        if output is None:
+            return None
+    untracked = _run_git(
+        ["git", "ls-files", "--others", "--exclude-standard"], project_path, timeout
+    )
+    if untracked and untracked.strip():
+        listing = "\n".join(f"  {name}" for name in untracked.strip().splitlines())
+        if output and not output.endswith("\n"):
+            output += "\n"
+        output += f"{UNTRACKED_HEADING}\n{listing}\n"
+    return output.strip() if stat else output
+
+
 def _title_from_story_key(story_key: str) -> str:
     """Extract human-readable title from a story key.
 

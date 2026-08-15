@@ -4,14 +4,18 @@ import pytest
 
 from bmad_assist_lite.core.config import (
     Config,
+    EpicKnowledgeConfig,
     LoopConfig,
     QualityGateConfig,
+    SessionReuseConfig,
+    SpeedConfig,
     TimeoutsConfig,
     _deep_merge,
     _reset_config,
     get_config,
     get_phase_timeout,
     load_config,
+    notch_down_effort,
 )
 from bmad_assist_lite.core.exceptions import ConfigError
 from bmad_assist_lite.core.state import Phase
@@ -558,3 +562,139 @@ class TestSelfReviewWarningDoesNotOverFire:
             {"providers": {"master": {"provider": "claude", "model": "claude-opus-5"}}}
         )
         assert self_review_warning(config) is not None
+
+
+# ============================================================================
+# L2/L3 context-economy flags (goal-run5 Phase 2)
+# ============================================================================
+
+
+class TestSessionReuseConfig:
+    """session_reuse.reviewer_self_resume (L2) — default OFF, opt-in."""
+
+    def test_default_off(self):
+        assert SessionReuseConfig().reviewer_self_resume is False
+
+    def test_minimal_config_defaults_off(self):
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        assert cfg.session_reuse.reviewer_self_resume is False
+
+    def test_opt_in_via_config(self):
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "session_reuse": {"reviewer_self_resume": True},
+            }
+        )
+        assert cfg.session_reuse.reviewer_self_resume is True
+
+    def test_frozen(self):
+        with pytest.raises((TypeError, ValueError, AttributeError)):
+            SessionReuseConfig().reviewer_self_resume = True  # type: ignore[misc]
+
+
+class TestEpicKnowledgeConfig:
+    """epic_knowledge (L3) — default OFF, bounded when on."""
+
+    def test_defaults(self):
+        cfg = EpicKnowledgeConfig()
+        assert cfg.enabled is False
+        assert cfg.max_chars == 8000
+
+    def test_minimal_config_defaults_off(self):
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        assert cfg.epic_knowledge.enabled is False
+
+    def test_opt_in_via_config(self):
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "epic_knowledge": {"enabled": True, "max_chars": 4000},
+            }
+        )
+        assert cfg.epic_knowledge.enabled is True
+        assert cfg.epic_knowledge.max_chars == 4000
+
+    def test_max_chars_non_negative(self):
+        with pytest.raises((ValueError, ConfigError)):
+            EpicKnowledgeConfig(max_chars=-1)
+
+
+class TestSpeedConfig:
+    """speed.* (goal-run6 speed pack) — every flag default OFF, opt-in."""
+
+    def test_defaults_all_off(self):
+        cfg = SpeedConfig()
+        assert cfg.structured_review is False
+        assert cfg.delta_round2 is False
+        assert cfg.lean_review is False
+        assert cfg.remove_stagger is False
+
+    def test_minimal_config_defaults_off(self):
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        assert cfg.speed.structured_review is False
+        assert cfg.speed.delta_round2 is False
+        assert cfg.speed.lean_review is False
+        assert cfg.speed.remove_stagger is False
+
+    def test_opt_in_via_config(self):
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "speed": {
+                    "structured_review": True,
+                    "delta_round2": True,
+                    "lean_review": True,
+                    "remove_stagger": True,
+                },
+            }
+        )
+        assert cfg.speed.structured_review is True
+        assert cfg.speed.delta_round2 is True
+        assert cfg.speed.lean_review is True
+        assert cfg.speed.remove_stagger is True
+
+    def test_partial_opt_in_leaves_rest_off(self):
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "speed": {"delta_round2": True},
+            }
+        )
+        assert cfg.speed.delta_round2 is True
+        assert cfg.speed.structured_review is False
+        assert cfg.speed.lean_review is False
+        assert cfg.speed.remove_stagger is False
+
+    def test_frozen(self):
+        with pytest.raises((TypeError, ValueError, AttributeError)):
+            SpeedConfig().structured_review = True  # type: ignore[misc]
+
+
+class TestNotchDownEffort:
+    """SP-3 effort ladder: one defined step lower, floored at low."""
+
+    def test_none_reads_as_medium(self):
+        assert notch_down_effort(None) == "low"
+
+    def test_each_notch(self):
+        assert notch_down_effort("max") == "xhigh"
+        assert notch_down_effort("xhigh") == "high"
+        assert notch_down_effort("high") == "medium"
+        assert notch_down_effort("medium") == "low"
+
+    def test_floors_at_low(self):
+        assert notch_down_effort("low") == "low"
+
+    def test_unknown_floors_to_low(self):
+        assert notch_down_effort("bogus") == "low"
+
+    def test_case_insensitive(self):
+        assert notch_down_effort("HIGH") == "medium"

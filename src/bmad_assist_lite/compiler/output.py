@@ -207,10 +207,26 @@ def generate_output(
     project_root: Path | None = None,
     context_files: dict[str, str] | None = None,
     links_only: bool = False,
+    stable_prefix: bool = False,
 ) -> GeneratedOutput:
-    """Generate XML output from compiled workflow."""
+    """Generate XML output from compiled workflow.
+
+    When ``stable_prefix`` is set, the stable epic artifacts are omitted from the
+    user-message ``<context>`` because they are carried once as a cached system
+    prompt (see ``compiler/stable_context.py``); leaving them here too would pay
+    for them twice. Story-specific and volatile files are kept.
+    """
     if project_root is None:
         project_root = Path.cwd()
+
+    if stable_prefix and context_files is not None:
+        from bmad_assist_lite.compiler.stable_context import STABLE_SUPERSET_PATTERNS
+
+        context_files = {
+            key: value
+            for key, value in context_files.items()
+            if key not in STABLE_SUPERSET_PATTERNS
+        }
 
     parts: list[str] = []
     path_to_id: dict[str, str] = {}
