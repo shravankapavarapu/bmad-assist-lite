@@ -8,14 +8,20 @@ from typing import Any
 from unittest.mock import patch
 
 from bmad_assist_lite.core.config import load_config
-from bmad_assist_lite.core.git import git_diff
+from bmad_assist_lite.core.git import UNTRACKED_HEADING, git_diff
+from bmad_assist_lite.core.paths import _reset_paths, init_paths
 from bmad_assist_lite.core.state import State
-from bmad_assist_lite.loop.handlers.code_review import CodeReviewHandler
+from bmad_assist_lite.loop.handlers.code_review import (
+    _MAX_INLINE_DIFF_CHARS,
+    CodeReviewHandler,
+)
 
 BASE_PROVIDERS: dict[str, Any] = {
     "master": {"provider": "claude", "model": "opus"},
     "multi": [{"provider": "claude", "model": "fable"}],
 }
+
+STORY = "3.1"
 
 
 def _handler(project: Path, speed: dict[str, Any]) -> CodeReviewHandler:
@@ -29,54 +35,113 @@ def _seed_findings(project: Path, story: str, text: str) -> None:
     (cache / f"review-findings-{story}.md").write_text(text, encoding="utf-8")
 
 
+def _round2_state(story: str = STORY) -> State:
+    """A state that is genuinely in round 2 of the CURRENT story."""
+    state = State(current_epic=3, current_story=story)
+    state.review_iteration = 1
+    state.review_story_id = story
+    return state
+
+
 class TestReviewPromptSelection:
     def test_round1_uses_full_prompt(self, tmp_path):
         handler = _handler(tmp_path, {"delta_round2": True})
         with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
-            prompt = handler._review_prompt(State(current_epic=3, current_story="3.1"))
+            prompt = handler._review_prompt(State(current_epic=3, current_story=STORY))
         assert prompt == "FULL PROMPT"
 
     def test_round2_uses_delta_prompt(self, tmp_path):
-        _seed_findings(tmp_path, "3.1", "R1 blocking finding X")
+        _seed_findings(tmp_path, STORY, "R1 blocking finding X")
         handler = _handler(tmp_path, {"delta_round2": True})
-        state = State(current_epic=3, current_story="3.1")
-        state.review_iteration = 1
         with patch("bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="DIFF BODY"), patch.object(
             CodeReviewHandler, "render_prompt", side_effect=AssertionError("should not compile full prompt")
         ):
-            prompt = handler._review_prompt(state)
+            prompt = handler._review_prompt(_round2_state())
         assert "Round-2 re-review" in prompt
         assert "R1 blocking finding X" in prompt
         assert "DIFF BODY" in prompt
 
     def test_delta_off_round2_still_full(self, tmp_path):
         handler = _handler(tmp_path, {})  # delta_round2 default off
-        state = State(current_epic=3, current_story="3.1")
+        with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
+            prompt = handler._review_prompt(_round2_state())
+        assert prompt == "FULL PROMPT"
+
+    def test_stale_iteration_from_previous_story_uses_full_prompt(self, tmp_path):
+        # review_iteration is only reset by the synthesis AFTER code_review runs,
+        # so a new story's round-1 arrives with the previous story's counter.
+        # The review_story_id guard must keep it on the full prompt.
+        _seed_findings(tmp_path, "2.9", "previous story's findings")
+        handler = _handler(tmp_path, {"delta_round2": True})
+        state = State(current_epic=3, current_story=STORY)
         state.review_iteration = 1
+        state.review_story_id = "2.9"  # stale: synthesis has not seen 3.1 yet
         with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
             prompt = handler._review_prompt(state)
         assert prompt == "FULL PROMPT"
 
+    def test_missing_findings_falls_back_to_full_prompt(self, tmp_path):
+        # A scoped "verify the fixes" prompt with no findings to verify is
+        # vacuous; the handler must run a full re-review instead.
+        handler = _handler(tmp_path, {"delta_round2": True})
+        with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
+            prompt = handler._review_prompt(_round2_state())
+        assert prompt == "FULL PROMPT"
+
     def test_structured_addendum_appended_to_delta(self, tmp_path):
-        _seed_findings(tmp_path, "3.1", "R1 finding")
+        _seed_findings(tmp_path, STORY, "R1 finding")
         handler = _handler(tmp_path, {"delta_round2": True, "structured_review": True})
-        state = State(current_epic=3, current_story="3.1")
-        state.review_iteration = 1
         with patch("bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="DIFF"):
-            prompt = handler._review_prompt(state)
+            prompt = handler._review_prompt(_round2_state())
         assert "Round-2 re-review" in prompt
         assert "BMAD-FINDINGS" in prompt  # SP-1 addendum rides along
 
 
 class TestDeltaPromptContent:
     def test_missing_diff_is_tolerated(self, tmp_path):
-        _seed_findings(tmp_path, "3.1", "R1 finding")
+        _seed_findings(tmp_path, STORY, "R1 finding")
         handler = _handler(tmp_path, {"delta_round2": True})
-        state = State(current_epic=3, current_story="3.1")
-        state.review_iteration = 1
         with patch("bmad_assist_lite.loop.handlers.code_review.git_diff", return_value=None):
-            prompt = handler._build_delta_review_prompt(state)
+            prompt = handler._build_delta_review_prompt(_round2_state())
+        assert prompt is not None
         assert "no uncommitted diff detected" in prompt
+
+    def test_missing_findings_returns_none(self, tmp_path):
+        handler = _handler(tmp_path, {"delta_round2": True})
+        with patch("bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="DIFF"):
+            assert handler._build_delta_review_prompt(_round2_state()) is None
+
+    def test_oversized_diff_is_capped(self, tmp_path):
+        _seed_findings(tmp_path, STORY, "R1 finding")
+        handler = _handler(tmp_path, {"delta_round2": True})
+        huge = "x" * (_MAX_INLINE_DIFF_CHARS + 10_000)
+        with patch("bmad_assist_lite.loop.handlers.code_review.git_diff", return_value=huge):
+            prompt = handler._build_delta_review_prompt(_round2_state())
+        assert prompt is not None
+        assert "diff truncated for length" in prompt
+        assert len(prompt) < len(huge)
+
+    def test_story_resolved_via_shared_resolver_alternate_form(self, tmp_path):
+        # The repo's story resolver knows the alternate `{epic}-{story}-*.md`
+        # naming form; the delta prompt must use it, not its own glob.
+        _reset_paths()
+        try:
+            paths = init_paths(tmp_path)
+            stories = paths.stories_dir
+            stories.mkdir(parents=True, exist_ok=True)
+            (stories / "3-1-blog-ui.md").write_text(
+                "STORY BODY WITH ACCEPTANCE CRITERIA", encoding="utf-8"
+            )
+            _seed_findings(tmp_path, STORY, "R1 finding")
+            handler = _handler(tmp_path, {"delta_round2": True})
+            with patch(
+                "bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="DIFF"
+            ):
+                prompt = handler._build_delta_review_prompt(_round2_state())
+        finally:
+            _reset_paths()
+        assert prompt is not None
+        assert "STORY BODY WITH ACCEPTANCE CRITERIA" in prompt
 
 
 class TestLeanReview:
@@ -85,30 +150,58 @@ class TestLeanReview:
         with patch(
             "bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="THE DIFF"
         ), patch.object(CodeReviewHandler, "render_prompt", return_value="FULL"):
-            prompt = handler._review_prompt(State(current_epic=3, current_story="3.1"))
+            prompt = handler._review_prompt(State(current_epic=3, current_story=STORY))
         assert "FULL" in prompt
         assert "changed-code-diff" in prompt and "THE DIFF" in prompt
         assert "findings ONLY" in prompt
+        # The diff-scoped instruction explicitly supersedes the compiled
+        # workflow's "read every file" requirement.
+        assert "supersedes" in prompt
+
+    def test_lean_without_diff_keeps_discovery_instructions(self, tmp_path):
+        # No diff to scope to: the addendum keeps the findings-only economy but
+        # must not reference a diff that is not there, nor supersede discovery.
+        handler = _handler(tmp_path, {"lean_review": True})
+        with patch(
+            "bmad_assist_lite.loop.handlers.code_review.git_diff", return_value=None
+        ), patch.object(CodeReviewHandler, "render_prompt", return_value="FULL"):
+            prompt = handler._review_prompt(State(current_epic=3, current_story=STORY))
+        assert "findings ONLY" in prompt
+        assert "changed-code-diff" not in prompt
+        assert "diff above" not in prompt
 
     def test_lean_off_adds_no_addendum(self, tmp_path):
         handler = _handler(tmp_path, {})
         with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL"):
-            prompt = handler._review_prompt(State(current_epic=3, current_story="3.1"))
+            prompt = handler._review_prompt(State(current_epic=3, current_story=STORY))
         assert prompt == "FULL"
 
     def test_delta_round2_skips_lean_addendum(self, tmp_path):
         # When both delta_round2 and lean_review are on, round-2 uses the delta
         # prompt (already lean) and must NOT also append the lean addendum.
-        _seed_findings(tmp_path, "3.1", "R1 finding")
+        _seed_findings(tmp_path, STORY, "R1 finding")
         handler = _handler(tmp_path, {"delta_round2": True, "lean_review": True})
-        state = State(current_epic=3, current_story="3.1")
-        state.review_iteration = 1
         with patch(
             "bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="DIFF"
         ):
-            prompt = handler._review_prompt(state)
+            prompt = handler._review_prompt(_round2_state())
         assert "Round-2 re-review" in prompt
         assert "<lean-review>" not in prompt
+
+
+def _git(tmp_path: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=tmp_path, check=True)
+
+
+def _init_repo(tmp_path: Path) -> Path:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    f = tmp_path / "a.txt"
+    f.write_text("one\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-qm", "init")
+    return f
 
 
 class TestGitDiffHelper:
@@ -117,15 +210,26 @@ class TestGitDiffHelper:
         assert git_diff(tmp_path) is None
 
     def test_captures_working_tree_diff(self, tmp_path):
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
-        subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
-        f = tmp_path / "a.txt"
-        f.write_text("one\n")
-        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-        subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, check=True)
+        f = _init_repo(tmp_path)
         f.write_text("two\n")
         diff = git_diff(tmp_path)
         assert diff is not None and "-one" in diff and "+two" in diff
         stat = git_diff(tmp_path, stat=True)
         assert stat is not None and "a.txt" in stat
+
+    def test_captures_staged_changes(self, tmp_path):
+        # The diff is load-bearing for review scope: a change the fixer staged
+        # must not become invisible.
+        f = _init_repo(tmp_path)
+        f.write_text("two\n")
+        _git(tmp_path, "add", ".")
+        diff = git_diff(tmp_path)
+        assert diff is not None and "-one" in diff and "+two" in diff
+
+    def test_lists_untracked_files(self, tmp_path):
+        _init_repo(tmp_path)
+        (tmp_path / "brand_new.py").write_text("print('hi')\n")
+        diff = git_diff(tmp_path)
+        assert diff is not None
+        assert UNTRACKED_HEADING in diff
+        assert "brand_new.py" in diff

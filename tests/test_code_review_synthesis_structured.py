@@ -159,6 +159,66 @@ class TestStructuredSynthesisKeepsFixer:
         # The prompt demands central re-judgment, not copying reviewer buckets.
         assert "CENTRALLY" in captured["prompt"] and "Escalate" in captured["prompt"]
 
+    def test_all_lanes_clean_stays_on_fast_path(self, tmp_path):
+        # Every reviewer parsed a valid EMPTY block: that is a clean review, and
+        # exactly where the fast path is cheapest — it must NOT fall back to the
+        # legacy prose synthesis.
+        _seed_reviews(
+            tmp_path,
+            [_review_with_block("Reviewer-1", []), _review_with_block("Reviewer-2", [])],
+        )
+        handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
+        captured: dict[str, Any] = {}
+
+        def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
+            captured["prompt"] = prompt
+            return ProviderResult(
+                stdout=_synthesis_response([]), stderr="", exit_code=0,
+                duration_ms=9, model="opus", command=("claude",),
+            )
+
+        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke), patch.object(
+            CodeReviewSynthesisHandler, "render_prompt", return_value="P"
+        ):
+            result = handler.execute(State(current_epic=3, current_story=STORY))
+
+        assert result.success
+        assert result.outputs["structured_review"] is True
+        assert result.outputs["merged_findings"] == 0
+        assert "clean review" in captured["prompt"]
+
+    def test_evidence_context_injected_into_structured_prompt(self, tmp_path):
+        cache = tmp_path / ".bmad-assist-lite" / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        reviews = [_review_with_block("Reviewer-1", [_finding("a.py", "x", Severity.LOW, "f")])]
+        (cache / "reviews.json").write_text(
+            json.dumps(
+                {
+                    "reviews": reviews,
+                    "evidence_score": {"total_score": 7.5, "verdict": "PASS"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
+        captured: dict[str, Any] = {}
+
+        def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
+            captured["prompt"] = prompt
+            return ProviderResult(
+                stdout=_synthesis_response([]), stderr="", exit_code=0,
+                duration_ms=9, model="opus", command=("claude",),
+            )
+
+        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke), patch.object(
+            CodeReviewSynthesisHandler, "render_prompt", return_value="P"
+        ):
+            result = handler.execute(State(current_epic=3, current_story=STORY))
+
+        assert result.success and result.outputs["structured_review"] is True
+        # The pre-calculated Evidence Score reaches the structured prompt too.
+        assert "Evidence Score" in captured["prompt"]
+
     def test_falls_back_to_legacy_when_no_block(self, tmp_path):
         _seed_reviews(
             tmp_path,
@@ -179,3 +239,36 @@ class TestStructuredSynthesisKeepsFixer:
 
         assert result.success
         assert "structured_review" not in result.outputs  # legacy path
+
+    def test_one_unparseable_lane_falls_back_so_no_finding_is_lost(self, tmp_path):
+        # Operator quality decision: if ANY lane's block fails to parse, its
+        # findings would be lost to the merge — the whole story falls back to
+        # the legacy prose synthesis, which reads the raw reviews.
+        _seed_reviews(
+            tmp_path,
+            [
+                _review_with_block(
+                    "Reviewer-1", [_finding("a.py", "real bug", Severity.HIGH, "f")]
+                ),
+                {"reviewer": "Reviewer-2", "response": "prose only, no block", "exit_code": 0},
+            ],
+        )
+        handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
+        captured: dict[str, Any] = {}
+
+        def _fake_invoke(prompt: str, **kwargs: Any) -> ProviderResult:
+            captured["prompt"] = prompt
+            return ProviderResult(
+                stdout="legacy synthesis\n" + render_findings_block([]),
+                stderr="", exit_code=0, duration_ms=9, model="opus", command=("claude",),
+            )
+
+        with patch.object(handler, "invoke_provider", side_effect=_fake_invoke), patch.object(
+            CodeReviewSynthesisHandler, "render_prompt", return_value="LEGACY PROMPT"
+        ):
+            result = handler.execute(State(current_epic=3, current_story=STORY))
+
+        assert result.success
+        assert "structured_review" not in result.outputs  # legacy path took over
+        # Legacy prompt embeds the raw reviewer prose, so nothing was lost.
+        assert "code-review-reports" in captured["prompt"]

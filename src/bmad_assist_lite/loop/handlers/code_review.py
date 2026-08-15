@@ -17,11 +17,27 @@ from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_merge import reviewer_findings_addendum
+from bmad_assist_lite.loop.story_paths import resolve_story_path
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
 from bmad_assist_lite.providers.base import READ_ONLY_TOOLS, write_progress
 
 logger = logging.getLogger(__name__)
+
+#: Hard cap on a diff inlined into a reviewer prompt (~15K tokens). A
+#: lockfile-sized change set must not blow the very prompt these levers exist
+#: to shrink; reviewers can Read the files for anything past the cap.
+_MAX_INLINE_DIFF_CHARS = 60_000
+
+
+def _cap_inline_diff(diff: str) -> str:
+    """Truncate an inlined diff at the cap, with an explicit marker."""
+    if len(diff) <= _MAX_INLINE_DIFF_CHARS:
+        return diff
+    return (
+        diff[:_MAX_INLINE_DIFF_CHARS]
+        + "\n... [diff truncated for length — read the remaining files directly]\n"
+    )
 
 
 class CodeReviewHandler(BaseHandler):
@@ -114,16 +130,37 @@ class CodeReviewHandler(BaseHandler):
             logger.warning("Evidence Score calculation failed: %s", e)
             return None
 
+    def _is_delta_round(self, state: State) -> bool:
+        """True when this call is a round-2+ re-review of the CURRENT story.
+
+        ``review_iteration`` is only reset by the synthesis handler when it
+        notices a story change — and the synthesis runs AFTER this phase. On the
+        first review of a new story the counter therefore still holds the
+        previous story's rounds; the ``review_story_id`` guard keeps that stale
+        counter from turning a fresh story's round-1 into a scoped delta review.
+        """
+        return (
+            self.config.speed.delta_round2
+            and state.review_iteration >= 1
+            and state.review_story_id == state.current_story
+        )
+
     def _review_prompt(self, state: State) -> str:
         """Select and decorate the reviewer prompt for this round.
 
         Round-1 (or SP-2 off): the full compiled workflow. Round-2 with SP-2 on:
-        a scoped delta prompt. SP-1 appends the structured-findings contract in
-        either case.
+        a scoped delta prompt — unless the round-1 findings are unavailable, in
+        which case the full prompt is used so the re-review is never vacuous.
+        SP-1 appends the structured-findings contract in either case.
         """
-        if self.config.speed.delta_round2 and state.review_iteration >= 1:
+        delta_prompt = (
+            self._build_delta_review_prompt(state)
+            if self._is_delta_round(state)
+            else None
+        )
+        if delta_prompt is not None:
             # The delta prompt is already lean + diff-scoped; no lean addendum.
-            prompt = self._build_delta_review_prompt(state)
+            prompt = delta_prompt
             write_progress(
                 "  Round-2 delta review: scoped to the fix diff + round-1 findings"
             )
@@ -140,22 +177,35 @@ class CodeReviewHandler(BaseHandler):
     def _lean_review_addendum(self) -> str:
         """SP-3: inline the changed-code diff + findings-only, diff-scoped guidance."""
         diff = git_diff(self.project_path)
-        diff_block = (
-            f"<changed-code-diff>\n{diff}\n</changed-code-diff>\n\n" if diff else ""
-        )
+        if diff and diff.strip():
+            diff_block = (
+                f"<changed-code-diff>\n{_cap_inline_diff(diff)}\n</changed-code-diff>\n\n"
+            )
+            scope_text = (
+                "Review the changed-code diff above; open a file with Read ONLY when "
+                "the diff is insufficient to judge a specific finding. This "
+                "supersedes any earlier instruction to read every file in the File "
+                "List. Do not sweep the whole tree.\n"
+            )
+        else:
+            # No diff to scope to (work already committed, or git unavailable):
+            # keep the findings-only economy but leave discovery instructions alone.
+            diff_block = ""
+            scope_text = (
+                "Scope your reading to the story's changed files; do not sweep the "
+                "whole tree.\n"
+            )
         return (
             f"{diff_block}"
             "<lean-review>\n"
             "Output findings ONLY — no step-by-step narration, no file-by-file "
             "walkthrough, no restating the story. Each finding is a specific "
             "file:line plus <= 25 words of claim/evidence.\n"
-            "Review the changed-code diff above; open a file with Read ONLY when "
-            "the diff is insufficient to judge a specific finding. Do not sweep the "
-            "whole tree.\n"
+            f"{scope_text}"
             "</lean-review>"
         )
 
-    def _build_delta_review_prompt(self, state: State) -> str:
+    def _build_delta_review_prompt(self, state: State) -> str | None:
         """SP-2: a fresh, scoped round-2 review prompt (no full artifacts, no resume).
 
         Reviewers are read-only and cannot run git, so the round-1 instruction to
@@ -163,6 +213,10 @@ class CodeReviewHandler(BaseHandler):
         instead. The re-review checks only "were the round-1 blocking findings
         fixed, and did the fix break anything in the diff", per the review-ROI
         evidence that round-2 changes decisions without needing full context.
+
+        Returns None when the round-1 findings are missing or empty — a scoped
+        "verify the fixes" prompt with nothing to verify is worse than a full
+        re-review, so the caller falls back to the full prompt.
         """
         story_id = state.current_story or "unknown"
         cache = self.project_path / ".bmad-assist-lite" / "cache"
@@ -171,17 +225,34 @@ class CodeReviewHandler(BaseHandler):
         try:
             if findings_path.is_file():
                 findings_text = findings_path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             logger.warning("delta round-2: could not read round-1 findings: %s", exc)
-        diff = git_diff(self.project_path) or "(no uncommitted diff detected)"
+        if not findings_text.strip():
+            logger.warning(
+                "delta round-2: no round-1 findings for story %s; "
+                "falling back to the full review prompt",
+                story_id,
+            )
+            write_progress(
+                "  Round-2: round-1 findings unavailable — running a full re-review"
+            )
+            return None
+        diff = git_diff(self.project_path)
+        diff = _cap_inline_diff(diff) if diff else "(no uncommitted diff detected)"
         story_text = ""
         try:
-            for path in sorted(self.project_path.glob(f"**/story-{story_id}.md")):
-                if path.is_file():
-                    story_text = path.read_text(encoding="utf-8")[:16000]
-                    break
-        except OSError as exc:
-            logger.warning("delta round-2: could not read story file: %s", exc)
+            story_path = resolve_story_path(story_id)
+        except RuntimeError:
+            # Paths not initialized (tests / standalone tooling): skip the story
+            # block rather than fail the phase.
+            story_path = None
+        if story_path is not None:
+            try:
+                story_text = story_path.read_text(encoding="utf-8")[:16000]
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning("delta round-2: could not read story file: %s", exc)
+        else:
+            logger.warning("delta round-2: no story file resolved for %s", story_id)
         story_block = f"<story>\n{story_text}\n</story>\n\n" if story_text else ""
         return (
             f"<mission>Round-2 re-review for story {story_id}. The round-1 findings "
@@ -205,6 +276,14 @@ class CodeReviewHandler(BaseHandler):
             self._warn_if_self_review()
             prompt = self._review_prompt(state)
             system_prompt = self.build_system_prompt(state)
+            # SP-2 contract: a delta round-2 runs in a FRESH session even when
+            # reviewer self-resume (run5 L2) is enabled — resuming the round-1
+            # transcript would silently re-carry the full context the delta
+            # prompt exists to avoid. Applies to the whole round, including the
+            # full-prompt fallback when round-1 findings are unavailable.
+            force_fresh = (
+                self.config.speed.delta_round2 and state.review_iteration >= 1
+            )
 
             multi_configs = self.config.providers.multi
             if not multi_configs:
@@ -265,8 +344,15 @@ class CodeReviewHandler(BaseHandler):
                     for idx, mc in enumerate(multi_configs):
                         provider = get_provider(mc.provider)
                         providers.append(provider)
-                        resume_id = reviewer_reuse.resume_id_for(
-                            state, self.config, provider=mc.provider, key=lane_keys[idx]
+                        resume_id = (
+                            None
+                            if force_fresh
+                            else reviewer_reuse.resume_id_for(
+                                state,
+                                self.config,
+                                provider=mc.provider,
+                                key=lane_keys[idx],
+                            )
                         )
                         if idx > 0 and stagger > 0:
                             await asyncio.sleep(stagger)

@@ -76,6 +76,19 @@ class TestParseReviewerFindings:
         assert [f.title for f in findings] == ["bug B"]
         assert notes == []
 
+    def test_missing_exit_code_is_noted_not_silently_skipped(self):
+        # A lane dict WITHOUT the exit_code key means a producer-side change;
+        # skipping it silently would quietly disable the structured path.
+        reviews = [
+            {
+                "reviewer": "Reviewer-1",
+                "response": render_findings_block([_finding("a.py", "bug A")]),
+            }
+        ]
+        findings, notes = parse_reviewer_findings(reviews)
+        assert findings == []
+        assert len(notes) == 1 and "exit_code" in notes[0]
+
     def test_validator_key_supported(self):
         reviews = [
             {

@@ -11,6 +11,7 @@ from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
+from bmad_assist_lite.loop.review_merge import reviewer_findings_addendum
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
 from bmad_assist_lite.providers.base import READ_ONLY_TOOLS, write_progress
@@ -114,6 +115,11 @@ class ValidateStoryHandler(BaseHandler):
         try:
             self._warn_if_self_review()
             prompt = self.render_prompt(state)
+            # SP-1: validators additionally emit the machine findings block so
+            # the validation synthesis can merge in code — the same contract the
+            # code-review lanes follow.
+            if self.config.speed.structured_review:
+                prompt = f"{prompt}\n\n{reviewer_findings_addendum()}"
             system_prompt = self.build_system_prompt(state)
 
             # Get multi-provider configs

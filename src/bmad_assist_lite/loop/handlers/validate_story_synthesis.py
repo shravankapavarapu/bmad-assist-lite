@@ -15,6 +15,12 @@ from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
+from bmad_assist_lite.loop.review_merge import (
+    high_severity_preserved,
+    merge_findings,
+    parse_reviewer_findings,
+    render_adjudication_candidates,
+)
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers.base import write_progress
 
@@ -93,6 +99,75 @@ class ValidateStorySynthesisHandler(BaseHandler):
                 f"## Evidence Score: {score} -> {verdict}\n"
                 f"<!-- END PRE-CALCULATED EVIDENCE SCORE -->\n"
             )
+
+    def _structured_reports_block(
+        self, validations: list[dict[str, Any]]
+    ) -> tuple[str, int] | None:
+        """SP-1: merged candidate block replacing the inlined validator prose.
+
+        The synthesis keeps its full legacy flow (evidence context, story diff
+        tracking, outputs); only the ``<validation-reports>`` prose — the bulk of
+        the prompt and the driver of the re-derivation — is replaced by the
+        deterministically merged, de-duplicated candidate set plus a terse-output
+        directive.
+
+        Returns ``(block_text, merged_count)``, or None to fall back to the full
+        prose reports — when any successful lane lacks a parseable findings
+        block (its findings would be lost to the merge), when no lane succeeded,
+        or when the merge guard would drop a >= high finding.
+        """
+        raw_findings, notes = parse_reviewer_findings(validations)
+        if notes:
+            for note in notes:
+                logger.warning("structured_review: %s", note)
+            write_progress(
+                "  structured_review: validator lane(s) without a usable findings "
+                f"block ({'; '.join(notes)}) — using full validation reports so "
+                "no finding is lost"
+            )
+            return None
+        if not any(v.get("exit_code") == 0 for v in validations):
+            return None
+
+        merged = merge_findings(raw_findings)
+        if not high_severity_preserved(raw_findings, merged):
+            logger.error(
+                "structured merge would drop a >= high validator finding; "
+                "using full validation reports"
+            )
+            write_progress(
+                "  structured_review: merge guard tripped — using full validation reports"
+            )
+            return None
+
+        candidates, _id_map = render_adjudication_candidates(merged)
+        if merged:
+            write_progress(
+                f"  Structured validation: {len(raw_findings)} validator finding(s) -> "
+                f"{len(merged)} merged candidate(s)"
+            )
+        else:
+            candidates = (
+                "(no candidates — every validator reported a clean validation)"
+            )
+            write_progress(
+                "  Structured validation: all validator lanes clean"
+            )
+        block = (
+            "<merged-validator-findings>\n"
+            "The findings below are ALL validators' findings, already "
+            "de-duplicated for you — you need not re-derive the cross-validator "
+            "comparison, but you MUST still judge each against the story and "
+            "assign the final disposition centrally yourself.\n"
+            f"{candidates}\n"
+            "</merged-validator-findings>\n\n"
+            "<output-economy>\n"
+            "Be terse: no per-validator recap, no restating the story. Keep the "
+            "written synthesis to a short summary plus the required story "
+            "updates.\n"
+            "</output-economy>"
+        )
+        return block, len(merged)
 
     def _find_story_file(self, state: State) -> Path | None:
         """Find story file for before/after diff."""
@@ -188,25 +263,37 @@ class ValidateStorySynthesisHandler(BaseHandler):
             # Format Evidence Score context for injection
             evidence_context = self._format_evidence_context(evidence_data)
 
-            # Build validation reports text
-            validation_text = "\n\n".join(
-                f"=== {v.get('validator', 'Unknown')} ===\n"
-                f"{v.get('response', v.get('error', 'No output'))}"
-                for v in validations
-            )
+            # Build the reports section: SP-1 swaps the inlined validator prose
+            # for the merged candidate set (falls back to prose on any lane
+            # parse failure so no finding can be lost).
+            structured: tuple[str, int] | None = None
+            if self.config.speed.structured_review:
+                structured = self._structured_reports_block(validations)
+            if structured is not None:
+                reports_block, merged_count = structured
+            else:
+                merged_count = -1
+                validation_text = "\n\n".join(
+                    f"=== {v.get('validator', 'Unknown')} ===\n"
+                    f"{v.get('response', v.get('error', 'No output'))}"
+                    for v in validations
+                )
+                reports_block = (
+                    f"<validation-reports>\n{validation_text}\n</validation-reports>"
+                )
 
             # Compose full prompt with evidence context + validation reports
             full_prompt = (
                 f"{prompt}\n\n"
                 f"{evidence_context}\n\n"
-                f"<validation-reports>\n{validation_text}\n</validation-reports>"
+                f"{reports_block}"
             )
 
             # Log prompt composition breakdown
             prompt_tokens = len(full_prompt) // 4
             base_tokens = len(prompt) // 4
             evidence_tokens = len(evidence_context) // 4
-            validation_tokens = len(validation_text) // 4
+            validation_tokens = len(reports_block) // 4
             logger.info(
                 "validate_story_synthesis prompt: total=~%d tokens "
                 "(base=%d + evidence=%d + validations=%d)",
@@ -269,6 +356,9 @@ class ValidateStorySynthesisHandler(BaseHandler):
                 "prompt_tokens_estimate": prompt_tokens,
                 "story_diff": diff_stats,
             }
+            if structured is not None:
+                outputs["structured_review"] = True
+                outputs["merged_findings"] = merged_count
             if evidence_data:
                 outputs["evidence_score"] = evidence_data.get("total_score")
                 outputs["evidence_verdict"] = evidence_data.get("verdict")

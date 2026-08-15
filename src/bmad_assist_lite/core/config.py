@@ -430,17 +430,24 @@ class SpeedConfig(BaseModel):
     ``wall ~= critical-path output tokens / tps``. Each flag removes
     critical-path output tokens from a distinct phase family:
 
-    - ``structured_review`` (SP-1): reviewers emit a strict findings block; the
-      ``*_synthesis`` phases become a deterministic code-side merge/dedup plus one
-      short capped adjudication call instead of a multi-thousand-token
-      re-narration. Targets the three synthesis phases (~35% of wall).
+    - ``structured_review`` (SP-1): reviewer/validator lanes additionally emit a
+      strict machine findings block; ``code_review_synthesis`` and
+      ``validate_story_synthesis`` are then fed a deterministic code-side
+      merge/dedup of those findings plus a terse-output directive, instead of
+      every lane's full prose to re-derive. The synthesis REMAINS the fixer,
+      with full tools at master effort. If any lane's block fails to parse, the
+      phase falls back to the legacy prose path so no finding can be lost.
     - ``delta_round2`` (SP-2): the round-2 re-review gets a fresh session scoped
       to round-1 findings + the handler-inlined fix ``git diff`` + the story
-      file -- not the full artifact set, not a resumed transcript. Targets the
-      round-2 ``code_review`` phase.
-    - ``lean_review`` (SP-3): reviewer + synthesis effort one notch lower,
-      findings-only output with length guidance, and diff-scoped reading
-      ("review the inlined diff; open files only when it is insufficient").
+      file -- not the full artifact set, not a resumed transcript (fresh is
+      enforced even when reviewer self-resume is enabled). Targets the round-2
+      ``code_review`` phase; falls back to a full (still fresh) re-review when
+      the round-1 findings are unavailable.
+    - ``lean_review`` (SP-3): REVIEWER lanes run one effort notch lower, with
+      findings-only output and diff-scoped reading ("review the inlined diff;
+      open files only when it is insufficient"). Synthesis effort is
+      deliberately NOT lowered -- the n=1 refinement showed the central
+      severity re-judgment needs full effort (under-escalation otherwise).
     - ``remove_stagger`` (SP-4): drop the reviewer fan-out stagger (it only ever
       fired to warm the dead L1 system-prompt cache).
 
@@ -454,22 +461,25 @@ class SpeedConfig(BaseModel):
     structured_review: bool = Field(
         default=False,
         description=(
-            "SP-1: reviewers emit structured findings; synthesis becomes a "
-            "deterministic merge + one capped adjudication call"
+            "SP-1: reviewer/validator lanes emit structured findings; the "
+            "synthesis (still the fixer, full effort) is fed a deterministic "
+            "merged candidate set + terse-output directive; legacy fallback on "
+            "any lane parse failure"
         ),
     )
     delta_round2: bool = Field(
         default=False,
         description=(
             "SP-2: round-2 re-review runs a fresh session scoped to round-1 "
-            "findings + inlined fix diff + story (no full artifacts, no resume)"
+            "findings + inlined fix diff + story (no full artifacts, no resume; "
+            "full fresh re-review if round-1 findings are unavailable)"
         ),
     )
     lean_review: bool = Field(
         default=False,
         description=(
-            "SP-3: reviewer/synthesis effort one notch down, findings-only "
-            "output, diff-scoped reading"
+            "SP-3: reviewer lanes one effort notch down (synthesis effort "
+            "unchanged), findings-only output, diff-scoped reading"
         ),
     )
     remove_stagger: bool = Field(

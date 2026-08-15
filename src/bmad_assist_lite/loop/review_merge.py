@@ -126,22 +126,33 @@ def parse_reviewer_findings(
     """Parse each successful reviewer's structured findings block.
 
     A reviewer whose output lacks or breaks the block is recorded in ``notes``
-    but never fails the merge — one lane's missing block must not lose another
-    lane's findings. Each parsed finding is tagged with its reviewer label in
-    ``source`` (excluded from the identity hash, so tagging is free).
+    and its findings are absent from the returned list — the calling handler
+    treats a non-empty ``notes`` as its cue to fall back to the legacy prose
+    synthesis, so a lane's findings are never silently lost to the merge. Each
+    parsed finding is tagged with its reviewer label in ``source`` (excluded
+    from the identity hash, so tagging is free).
+
+    A lane that failed outright (non-zero ``exit_code``) is skipped without a
+    note — the fan-out already reported it. A lane MISSING the ``exit_code``
+    key entirely is noted, not silently skipped: that shape means a
+    producer-side change, and dropping every lane without a signal would
+    quietly disable the structured path.
 
     Returns:
         ``(findings, notes)`` where ``findings`` carries every parsed finding
-        across all lanes (pre-merge) and ``notes`` explains any lane that
-        produced no parseable block.
+        across all lanes (pre-merge) and ``notes`` explains any lane whose
+        findings could not be used.
 
     """
     findings: list[Finding] = []
     notes: list[str] = []
     for review in reviews:
-        if review.get("exit_code") != 0:
-            continue
         label = review.get("reviewer") or review.get("validator") or "Unknown"
+        exit_code = review.get("exit_code")
+        if exit_code != 0:
+            if exit_code is None:
+                notes.append(f"{label}: no exit_code recorded; lane skipped")
+            continue
         text = review.get("response") or ""
         try:
             parsed = parse_findings(text)

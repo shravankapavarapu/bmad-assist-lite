@@ -228,9 +228,10 @@ class CodeReviewSynthesisHandler(BaseHandler):
     ) -> ReviewDecision:
         """Run the bounded review decision over an already-parsed finding set.
 
-        Shared by the legacy prose path (which parses the synthesis response) and
-        the SP-1 structured path (which supplies the merged/adjudicated set
-        directly). ``None`` findings mean a parse failure, never a clean review.
+        Split from ``_run_review_loop`` so the decision core is independent of
+        where the findings came from; every current caller (legacy and
+        structured paths alike) parses a synthesis response first. ``None``
+        findings mean a parse failure, never a clean review.
         """
         story_id = state.current_story or "unknown"
         self._reset_review_state_for_story(state)
@@ -271,7 +272,10 @@ class CodeReviewSynthesisHandler(BaseHandler):
         return decision
 
     def _structured_synthesis(
-        self, state: State, reviews: list[dict[str, Any]]
+        self,
+        state: State,
+        reviews: list[dict[str, Any]],
+        evidence_data: dict[str, Any] | None,
     ) -> PhaseResult | None:
         """Feed the synthesis fixer a pre-merged candidate set + demand terse output.
 
@@ -283,14 +287,29 @@ class CodeReviewSynthesisHandler(BaseHandler):
         and the verbose report (the reviewers' findings arrive already merged and
         deduped) plus SP-3's lower effort.
 
-        Returns None to fall back to the legacy path when no reviewer produced a
-        parseable block, or the merge would drop a >= high finding.
+        Returns None to fall back to the legacy path — each fallback site emits
+        its own accurate operator message — when: any successful lane's findings
+        block failed to parse (its findings would be LOST to the merge; the
+        legacy path reads the raw prose and so cannot lose them — operator
+        quality decision), when no lane succeeded at all, or when the merge
+        guard would drop a >= high finding. A parsed-but-empty finding set from
+        every lane is a CLEAN review and stays on the fast path.
         """
         story_id = state.current_story or "unknown"
         raw_findings, notes = parse_reviewer_findings(reviews)
-        for note in notes:
-            logger.info("structured_review: %s", note)
-        if not raw_findings:
+        if notes:
+            for note in notes:
+                logger.warning("structured_review: %s", note)
+            write_progress(
+                "  structured_review: reviewer lane(s) without a usable findings "
+                f"block ({'; '.join(notes)}) — using legacy synthesis so no "
+                "finding is lost"
+            )
+            return None
+        if not any(r.get("exit_code") == 0 for r in reviews):
+            write_progress(
+                "  structured_review: no successful reviewer lane — using legacy synthesis"
+            )
             return None
 
         merged = merge_findings(raw_findings)
@@ -301,17 +320,35 @@ class CodeReviewSynthesisHandler(BaseHandler):
             logger.error(
                 "structured merge would drop a >= high finding; using legacy path"
             )
+            write_progress(
+                "  structured_review: merge guard tripped (would drop a >= high "
+                "finding) — using legacy synthesis"
+            )
             return None
 
         candidates, _id_map = render_adjudication_candidates(merged)
-        write_progress(
-            f"  Structured review: {len(raw_findings)} reviewer finding(s) -> "
-            f"{len(merged)} merged candidate(s); synthesis fixes from the merged set"
-        )
+        if merged:
+            write_progress(
+                f"  Structured review: {len(raw_findings)} reviewer finding(s) -> "
+                f"{len(merged)} merged candidate(s); synthesis fixes from the merged set"
+            )
+        else:
+            # Every lane parsed clean ([]): keep the fast path — this is where
+            # it is cheapest — and tell the synthesis exactly that.
+            candidates = (
+                "(no candidates — every reviewer reported a clean review; "
+                "spot-check the changes and emit an empty findings block unless "
+                "you find a defect yourself)"
+            )
+            write_progress(
+                "  Structured review: all reviewer lanes clean — synthesis verifies and closes"
+            )
 
         prompt = self.render_prompt(state)
+        evidence_context = self._format_evidence_context(evidence_data)
         full_prompt = (
             f"{prompt}\n\n"
+            f"{evidence_context}\n\n"
             "<merged-reviewer-findings>\n"
             "The findings below are ALL reviewers' findings, already de-duplicated "
             "for you — a starting set, so you need not re-derive the cross-reviewer "
@@ -397,21 +434,15 @@ class CodeReviewSynthesisHandler(BaseHandler):
             elif isinstance(reviews, dict):
                 reviews = reviews.get("reviews", [])
 
-            # SP-1: structured deterministic merge + one capped adjudication call,
-            # replacing the LLM re-narration/fix pass. Falls through to the legacy
-            # path if no reviewer emitted a parseable findings block.
+            # SP-1: deterministic merge feeding the synthesis fixer a pre-merged
+            # candidate set. Falls through to the legacy path on any lane parse
+            # failure or guard trip — _structured_synthesis reports the specific
+            # reason at each fallback site.
             if self.config.speed.structured_review:
-                structured = self._structured_synthesis(state, reviews)
+                structured = self._structured_synthesis(state, reviews, evidence_data)
                 if structured is not None:
                     return structured
-                logger.warning(
-                    "structured_review on but no usable reviewer findings block; "
-                    "falling back to the legacy synthesis path"
-                )
-                write_progress(
-                    "  structured_review: no parseable reviewer findings — "
-                    "using legacy synthesis"
-                )
+                logger.info("structured_review: using the legacy synthesis path")
 
             prompt = self.render_prompt(state)
 
