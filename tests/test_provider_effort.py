@@ -48,6 +48,7 @@ class _RecordingProvider(BaseProvider):
         color_index: int | None = None,
         system_prompt: str | None = None,
         resume: str | None = None,
+        stream_capture_path: Path | None = None,
     ) -> ProviderResult:
         self.received = {
             "prompt": prompt,

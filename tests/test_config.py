@@ -7,7 +7,6 @@ from bmad_assist_lite.core.config import (
     EpicKnowledgeConfig,
     LoopConfig,
     QualityGateConfig,
-    SessionReuseConfig,
     SpeedConfig,
     TimeoutsConfig,
     _deep_merge,
@@ -565,34 +564,8 @@ class TestSelfReviewWarningDoesNotOverFire:
 
 
 # ============================================================================
-# L2/L3 context-economy flags (goal-run5 Phase 2)
+# L3 context-economy flag (goal-run5 Phase 2)
 # ============================================================================
-
-
-class TestSessionReuseConfig:
-    """session_reuse.reviewer_self_resume (L2) — default OFF, opt-in."""
-
-    def test_default_off(self):
-        assert SessionReuseConfig().reviewer_self_resume is False
-
-    def test_minimal_config_defaults_off(self):
-        _reset_config()
-        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
-        assert cfg.session_reuse.reviewer_self_resume is False
-
-    def test_opt_in_via_config(self):
-        _reset_config()
-        cfg = load_config(
-            {
-                "providers": {"master": {"provider": "claude", "model": "opus"}},
-                "session_reuse": {"reviewer_self_resume": True},
-            }
-        )
-        assert cfg.session_reuse.reviewer_self_resume is True
-
-    def test_frozen(self):
-        with pytest.raises((TypeError, ValueError, AttributeError)):
-            SessionReuseConfig().reviewer_self_resume = True  # type: ignore[misc]
 
 
 class TestEpicKnowledgeConfig:

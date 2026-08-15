@@ -322,25 +322,6 @@ class AutoCommitConfig(BaseModel):
     enabled: bool = Field(default=True, description="Auto-commit after code_review_synthesis")
 
 
-class CompilerConfig(BaseModel):
-    """Prompt-compiler knobs.
-
-    ``stable_prefix`` carries the epic's stable, unfiltered artifacts (project
-    context, PRD, UX, architecture, epic) as an *appended* system prompt so their
-    bytes form a warm, byte-identical prompt-cache prefix shared across every
-    phase and story of the epic. It cannot ride a shared user-message prefix: the
-    CLI keys the user-message cache on the whole prompt, so a stable prefix with a
-    differing tail misses entirely (measured). Off by default.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    stable_prefix: bool = Field(
-        default=False,
-        description="Carry stable epic artifacts as a cached (appended) system prompt",
-    )
-
-
 class SolutionsConfig(BaseModel):
     """The compounding solutions store: off by default, bounded when on.
 
@@ -364,43 +345,15 @@ class SolutionsConfig(BaseModel):
     )
 
 
-class SessionReuseConfig(BaseModel):
-    """Reuse a reviewer/synthesis Claude session across review rounds (L2).
-
-    Off by default and backward-compatible: when disabled, every review round
-    cold-starts a fresh session exactly as today. When enabled, each reviewer
-    lane in the multi-LLM fan-out (``code_review`` / ``validate_story``) keeps
-    its own round-1 session id, and a round-2 re-review resumes *that same
-    reviewer's* session (``resume=<id>``) so it re-reads only the fix diff
-    instead of recompiling the full story context. ``code_review_synthesis``
-    likewise resumes its own round-1 synthesis session on round 2.
-
-    The reviewer independence rule (F-13) is preserved *structurally*: a lane
-    only ever resumes a session it wrote itself, keyed by phase+index+provider+
-    model. No lane can resume the dev/master session -- those ids are never
-    written into the reviewer holder. Reuse is Claude-only; a non-Claude
-    reviewer silently ignores the flag.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    reviewer_self_resume: bool = Field(
-        default=False,
-        description=(
-            "Resume a reviewer/synthesis lane's own round-1 Claude session on "
-            "round-2 re-review (never the dev session; Claude-only)"
-        ),
-    )
-
-
 class EpicKnowledgeConfig(BaseModel):
     """A curated, bounded epic-knowledge brief carried across an epic's stories (L3).
 
     Off by default. When enabled, at each story's completion the master writes /
     updates a small ``epic-knowledge-<epic>.md`` brief (architectural decisions,
     gotchas, file-map deltas, conventions). Subsequent stories in the epic load
-    it inside the stable, cached system-prompt region (see ``compiler.stable_prefix``),
-    so later stories start "smart" without recompiling prior story transcripts.
+    it as a dedicated, cached system prompt (see
+    ``loop/handlers/base.py::BaseHandler.build_system_prompt``), so later stories
+    start "smart" without recompiling prior story transcripts.
 
     Bounded on purpose: an unbounded accumulation would defeat the whole point of
     context economy. ``max_chars`` hard-caps the written brief; a naive
@@ -422,10 +375,10 @@ class EpicKnowledgeConfig(BaseModel):
 
 
 class SpeedConfig(BaseModel):
-    """Wall-clock speed pack for the review pipeline (goal-run6).
+    """Wall-clock speed pack (goal-run6 review pipeline + goal-run7 dev economy).
 
     All off by default and backward-compatible: with every flag ``False`` the
-    review chain runs exactly as today. The measured physics is that every
+    chain runs exactly as today. The measured physics is that every
     single-lane phase is 100% API time at a fixed output-tokens/sec, so
     ``wall ~= critical-path output tokens / tps``. Each flag removes
     critical-path output tokens from a distinct phase family:
@@ -439,17 +392,26 @@ class SpeedConfig(BaseModel):
       phase falls back to the legacy prose path so no finding can be lost.
     - ``delta_round2`` (SP-2): the round-2 re-review gets a fresh session scoped
       to round-1 findings + the handler-inlined fix ``git diff`` + the story
-      file -- not the full artifact set, not a resumed transcript (fresh is
-      enforced even when reviewer self-resume is enabled). Targets the round-2
-      ``code_review`` phase; falls back to a full (still fresh) re-review when
-      the round-1 findings are unavailable.
+      file -- not the full artifact set, not a resumed transcript. Targets the
+      round-2 ``code_review`` phase; falls back to a full (still fresh)
+      re-review when the round-1 findings are unavailable.
     - ``lean_review`` (SP-3): REVIEWER lanes run one effort notch lower, with
       findings-only output and diff-scoped reading ("review the inlined diff;
       open files only when it is insufficient"). Synthesis effort is
       deliberately NOT lowered -- the n=1 refinement showed the central
       severity re-judgment needs full effort (under-escalation otherwise).
-    - ``remove_stagger`` (SP-4): drop the reviewer fan-out stagger (it only ever
-      fired to warm the dead L1 system-prompt cache).
+    - ``remove_stagger`` (SP-4): drop the reviewer fan-out stagger. The stagger
+      only ever fired to let the first lane warm a shared cached system prompt
+      before the others begin (and is already 0 when no system prompt is in
+      play); SP-4 drops it unconditionally.
+    - ``lean_dev`` (SP-D1, goal-run7): append an output-economy addendum to the
+      ``dev_story`` prompt -- no between-tool narration, no restating the
+      story/plan, one Write per new file over incremental Edit chains, minimal
+      Edit context, and a findings-only final report that does not re-print code.
+      It trims how the work is DESCRIBED, never the work: it does not lower dev
+      effort, skip tests, or reduce delivered code. Guarded in the A/B by
+      tokens-per-delivered-line + the SP-D0 stream decomposition (thinking share
+      must not drop -- an effort notch in disguise) + the offline replay/AC layers.
 
     Quality is guarded in the A/B, not here: the deterministic merge must drop no
     round-1 finding of severity >= high, and the final severity mix must stay
@@ -484,7 +446,17 @@ class SpeedConfig(BaseModel):
     )
     remove_stagger: bool = Field(
         default=False,
-        description="SP-4: drop the reviewer fan-out stagger (was only for the dead L1 cache)",
+        description="SP-4: drop the reviewer fan-out stagger (only ever warmed a cached system prompt)",
+    )
+    lean_dev: bool = Field(
+        default=False,
+        description=(
+            "SP-D1: append an output-economy addendum to the dev_story prompt "
+            "(no narration, no restating the story, one Write per new file over "
+            "incremental Edits, minimal Edit context, findings-only final report "
+            "that does not re-print code). Trims description of the work, not the "
+            "work: does not lower effort, skip tests, or reduce delivered code"
+        ),
     )
 
 
@@ -530,6 +502,14 @@ class ForensicsConfig(BaseModel):
         default=20,
         ge=1,
         description="Retention cap — number of stories kept, oldest evicted first",
+    )
+    capture_stream: bool = Field(
+        default=False,
+        description=(
+            "Capture the dev_story call's turn-by-turn stream "
+            "(text/thinking/tool_use/tool_result) as a forensic JSONL for "
+            "overhead decomposition"
+        ),
     )
 
 
@@ -646,10 +626,8 @@ class Config(BaseModel):
         default=None, description="Fallback quality gate commands"
     )
     auto_commit: AutoCommitConfig = Field(default_factory=AutoCommitConfig)
-    compiler: CompilerConfig = Field(default_factory=CompilerConfig)
     signoff: SignoffConfig = Field(default_factory=SignoffConfig)
     solutions: SolutionsConfig = Field(default_factory=SolutionsConfig)
-    session_reuse: SessionReuseConfig = Field(default_factory=SessionReuseConfig)
     epic_knowledge: EpicKnowledgeConfig = Field(default_factory=EpicKnowledgeConfig)
     speed: SpeedConfig = Field(default_factory=SpeedConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)

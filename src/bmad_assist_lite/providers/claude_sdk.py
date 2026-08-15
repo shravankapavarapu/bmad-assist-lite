@@ -7,6 +7,8 @@ Implements the BaseProvider Template Method contract (Story 7.3):
 """
 
 import asyncio
+import contextlib
+import json
 import logging
 import math
 import os
@@ -15,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import claude_agent_sdk as _claude_agent_sdk
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -38,6 +41,15 @@ from bmad_assist_lite.providers.base import (
 from bmad_assist_lite.providers.result_collector import CallMetrics, ResultCollector
 
 logger = logging.getLogger(__name__)
+
+# Optional SDK content-block types, used only by the forensic dev-stream capture
+# (forensics.capture_stream). Resolved defensively via getattr so a future SDK
+# that drops one leaves a None sentinel — whose isinstance check is then skipped
+# — rather than breaking import of this module, which every provider call needs.
+_ThinkingBlock: Any = getattr(_claude_agent_sdk, "ThinkingBlock", None)
+_ToolUseBlock: Any = getattr(_claude_agent_sdk, "ToolUseBlock", None)
+_ToolResultBlock: Any = getattr(_claude_agent_sdk, "ToolResultBlock", None)
+_UserMessage: Any = getattr(_claude_agent_sdk, "UserMessage", None)
 
 SUPPORTED_MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
@@ -375,6 +387,149 @@ def _format_metric_suffix(metrics: CallMetrics) -> str:
     return ", " + ", ".join(parts) if parts else ""
 
 
+class _StreamCapture:
+    """Best-effort forensic capture of a provider call's turn-by-turn stream.
+
+    Writes one JSONL line per content block — assistant ``text`` / ``thinking`` /
+    ``tool_use`` blocks and user ``tool_result`` blocks — flushing per line so a
+    call cancelled by the timeout still leaves a partial artifact on disk.
+
+    Capture is purely additive instrumentation and MUST never fail or slow the
+    provider call it observes, so every operation swallows its own exceptions.
+    A file that cannot be opened disables capture silently (all methods no-op).
+    ``tool_result`` content is *not* stored — it is model input (often huge Read
+    output), so only its character count and error flag are recorded.
+    """
+
+    def __init__(self, path: Path) -> None:
+        """Open ``path`` for capture, truncating it (artifact = last attempt)."""
+        self._fh: Any = None
+        self._seq = 0
+        self._turn = 0
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._fh = path.open("w", encoding="utf-8")
+        except Exception as e:
+            logger.warning(
+                "Dev-stream forensic capture disabled: could not open %s (%s).", path, e
+            )
+            self._fh = None
+
+    def _emit(self, record: dict[str, Any]) -> None:
+        """Write one JSONL line and flush; disable capture on any write failure."""
+        fh = self._fh
+        if fh is None:
+            return
+        try:
+            fh.write(json.dumps(record, ensure_ascii=False))
+            fh.write("\n")
+            fh.flush()
+        except Exception as e:
+            logger.warning(
+                "Dev-stream forensic capture write failed (%s); disabling capture.", e
+            )
+            self.close()
+
+    def record_assistant(self, message: Any) -> None:
+        """Append the assistant turn's text/thinking/tool_use blocks, in order."""
+        if self._fh is None:
+            return
+        self._turn += 1
+        try:
+            blocks = list(getattr(message, "content", None) or [])
+        except Exception as e:  # pragma: no cover - hostile content attribute
+            logger.debug("Dev-stream capture could not read assistant content (%s).", e)
+            return
+        for block in blocks:
+            try:
+                record = self._assistant_record(block)
+            except Exception as e:  # pragma: no cover - hostile block shape
+                logger.debug("Dev-stream capture skipped an assistant block (%s).", e)
+                continue
+            if record is not None:
+                self._emit(record)
+                self._seq += 1
+
+    def _assistant_record(self, block: Any) -> dict[str, Any] | None:
+        """Build the JSONL record for one assistant block, or None to skip it."""
+        if isinstance(block, TextBlock):
+            text = block.text
+            return {
+                "seq": self._seq,
+                "turn": self._turn,
+                "role": "assistant",
+                "kind": "text",
+                "chars": len(text),
+                "text": text,
+            }
+        if _ThinkingBlock is not None and isinstance(block, _ThinkingBlock):
+            thinking = block.thinking
+            return {
+                "seq": self._seq,
+                "turn": self._turn,
+                "role": "assistant",
+                "kind": "thinking",
+                "chars": len(thinking),
+                "text": thinking,
+            }
+        if _ToolUseBlock is not None and isinstance(block, _ToolUseBlock):
+            payload = json.dumps(block.input)
+            return {
+                "seq": self._seq,
+                "turn": self._turn,
+                "role": "assistant",
+                "kind": "tool_use",
+                "name": block.name,
+                "chars": len(payload),
+                "input": block.input,
+            }
+        return None
+
+    def record_user(self, message: Any) -> None:
+        """Append the user turn's tool_result blocks (char count + is_error only)."""
+        if self._fh is None or _ToolResultBlock is None:
+            return
+        try:
+            content = getattr(message, "content", None)
+        except Exception as e:  # pragma: no cover - hostile content attribute
+            logger.debug("Dev-stream capture could not read user content (%s).", e)
+            return
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, _ToolResultBlock):
+                continue
+            try:
+                record = self._tool_result_record(block)
+            except Exception as e:  # pragma: no cover - hostile block shape
+                logger.debug("Dev-stream capture skipped a tool_result block (%s).", e)
+                continue
+            self._emit(record)
+            self._seq += 1
+
+    def _tool_result_record(self, block: Any) -> dict[str, Any]:
+        """Build the JSONL record for one tool_result block (no content stored)."""
+        content = getattr(block, "content", None)
+        chars = len(content) if isinstance(content, str) else len(json.dumps(content))
+        is_error = getattr(block, "is_error", None)
+        return {
+            "seq": self._seq,
+            "turn": self._turn,
+            "role": "user",
+            "kind": "tool_result",
+            "chars": chars,
+            "is_error": is_error if isinstance(is_error, bool) else None,
+        }
+
+    def close(self) -> None:
+        """Close the capture file, swallowing any error. Idempotent."""
+        fh = self._fh
+        self._fh = None
+        if fh is not None:
+            with contextlib.suppress(Exception):  # best-effort close
+                fh.close()
+
+
 class ClaudeSDKProvider(BaseProvider):
     """Claude Code SDK-based provider implementation.
 
@@ -432,6 +587,7 @@ class ClaudeSDKProvider(BaseProvider):
         effort: str | None = None,
         system_prompt: str | None = None,
         resume: str | None = None,
+        stream_capture_path: Path | None = None,
     ) -> str:
         """Stream the SDK query, returning the collected text.
 
@@ -495,9 +651,16 @@ class ClaudeSDKProvider(BaseProvider):
 
         result_message: ResultMessage | None = None
 
+        # Forensic dev-stream capture (forensics.capture_stream). None keeps the
+        # path below byte-identical to before; capture is additive and never
+        # touches the collector or the returned text.
+        capture = _StreamCapture(stream_capture_path) if stream_capture_path is not None else None
+
         try:
             async for message in query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
+                    if capture is not None:
+                        capture.record_assistant(message)
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             collector.add(block.text)
@@ -519,6 +682,14 @@ class ClaudeSDKProvider(BaseProvider):
                             _read_attr(result_message, "session_id"),
                             _read_attr(message, "session_id"),
                         )
+                elif (
+                    capture is not None
+                    and _UserMessage is not None
+                    and isinstance(message, _UserMessage)
+                ):
+                    # tool_result blocks travel on UserMessage; capture-only,
+                    # never fed to the collector (they are model input).
+                    capture.record_user(message)
         except Exception as e:
             # Swallow only the benign "error result: success" escalation, and
             # only when the turn produced real output. Everything else (real
@@ -534,6 +705,8 @@ class ClaudeSDKProvider(BaseProvider):
             else:
                 raise
         finally:
+            if capture is not None:
+                capture.close()
             if sys_prompt_file:
                 try:
                     os.unlink(sys_prompt_file)
@@ -561,6 +734,7 @@ class ClaudeSDKProvider(BaseProvider):
         color_index: int | None = None,
         system_prompt: str | None = None,
         resume: str | None = None,
+        stream_capture_path: Path | None = None,
     ) -> ProviderResult:
         """Execute Claude SDK with the given prompt and return the result.
 
@@ -613,6 +787,7 @@ class ClaudeSDKProvider(BaseProvider):
                         effort,
                         system_prompt,
                         resume,
+                        stream_capture_path,
                     ),
                     timeout=timeout,
                 )

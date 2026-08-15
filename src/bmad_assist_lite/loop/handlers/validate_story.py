@@ -9,7 +9,6 @@ from bmad_assist_lite.core.async_utils import run_async_in_thread
 from bmad_assist_lite.core.config import get_phase_timeout, self_review_warning
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
-from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_merge import reviewer_findings_addendum
 from bmad_assist_lite.loop.types import PhaseResult
@@ -148,7 +147,7 @@ class ValidateStoryHandler(BaseHandler):
                 read_only_tools = list(READ_ONLY_TOOLS)
 
                 def _make_invoker(
-                    p: Any, m: str, t: int, e: str | None, r: str | None
+                    p: Any, m: str, t: int, e: str | None
                 ) -> Any:
                     return lambda: p.invoke(
                         prompt,
@@ -158,20 +157,7 @@ class ValidateStoryHandler(BaseHandler):
                         allowed_tools=read_only_tools,
                         effort=e,
                         system_prompt=system_prompt,
-                        resume=r,
                     )
-
-                # L2: same reviewer self-resume plumbing as code_review, applied
-                # symmetrically. validate_story runs once per story in the default
-                # loop, so this seeds a session that nothing resumes -- harmless and
-                # backward-safe, and correct the moment a re-validate round exists.
-                story_id = state.current_story
-                lane_keys = [
-                    reviewer_reuse.lane_key(
-                        story_id, self.phase_name, idx, mc.provider, mc.model
-                    )
-                    for idx, mc in enumerate(multi_configs)
-                ]
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(multi_configs)
@@ -179,21 +165,18 @@ class ValidateStoryHandler(BaseHandler):
                     futures = []
                     providers: list[Any] = []
                     # Stagger reviewer starts so validator-1 warms the shared
-                    # stable-context cache before the others begin (SP-4 drops it).
+                    # cached system prompt before the others begin (SP-4 drops it).
                     stagger = self._reviewer_stagger(system_prompt)
                     for idx, mc in enumerate(multi_configs):
                         provider = get_provider(mc.provider)
                         providers.append(provider)
-                        resume_id = reviewer_reuse.resume_id_for(
-                            state, self.config, provider=mc.provider, key=lane_keys[idx]
-                        )
                         if idx > 0 and stagger > 0:
                             await asyncio.sleep(stagger)
                         futures.append(
                             loop.run_in_executor(
                                 executor,
                                 _make_invoker(
-                                    provider, mc.model, timeout, mc.effort, resume_id
+                                    provider, mc.model, timeout, mc.effort
                                 ),
                             )
                         )
@@ -209,14 +192,6 @@ class ValidateStoryHandler(BaseHandler):
                             {"validator": label, "error": str(raw), "exit_code": 1}
                         )
                     else:
-                        reviewer_reuse.capture_session(
-                            state,
-                            self.config,
-                            story_id=story_id,
-                            provider=multi_configs[i].provider,
-                            key=lane_keys[i],
-                            result=raw,
-                        )
                         response = providers[i].parse_output(raw)
                         results.append(
                             {

@@ -129,7 +129,6 @@ class BaseHandler(ABC):
             output_folder=paths.output_folder,
             project_knowledge=paths.project_knowledge,
             resolved_variables=resolved_variables,
-            stable_prefix=self.config.compiler.stable_prefix,
         )
 
         try:
@@ -170,38 +169,32 @@ class BaseHandler(ABC):
         return allowed_tools_for(self.autonomy)
 
     def build_system_prompt(self, state: State) -> str | None:
-        """The epic's stable context as an appended, cached system prompt, or None.
+        """The epic-knowledge brief as a dedicated, cached system prompt, or None (L3).
 
-        Gated on ``compiler.stable_prefix``. The block is byte-identical across the
-        epic's phases and stories, so it caches once and is read cheaply on every
-        later call. Off by default, in which case the CLI's default system prompt
-        is used unchanged.
+        Gated on ``epic_knowledge.enabled``. When enabled and a non-empty brief
+        has been written for the current epic, it is carried as its own system
+        prompt so the CLI caches that region once and reads it cheaply on every
+        later call, letting later stories start "smart" without recompiling prior
+        story transcripts. Off by default (returns None), in which case the CLI's
+        default system prompt is used unchanged.
         """
-        if not self.config.compiler.stable_prefix:
+        if not self.config.epic_knowledge.enabled:
             return None
 
-        from bmad_assist_lite.compiler.stable_context import build_stable_system_prompt
+        from bmad_assist_lite.core.epic_knowledge import read_epic_knowledge
 
-        paths = get_paths()
-        context = CompilerContext(
-            project_root=self.project_path,
-            output_folder=paths.output_folder,
-            project_knowledge=paths.project_knowledge,
-            resolved_variables={
-                "epic_num": state.current_epic,
-                "story_num": self._extract_story_num(state.current_story),
-                "planning_artifacts": str(paths.planning_artifacts),
-                "implementation_artifacts": str(paths.implementation_artifacts),
-            },
-        )
-        return build_stable_system_prompt(context)
+        brief = read_epic_knowledge(state.current_epic)
+        if not brief:
+            return None
+        return f"<epic-knowledge>\n{brief}\n</epic-knowledge>"
 
     def _reviewer_stagger(self, system_prompt: str | None) -> float:
         """Seconds to delay each successive reviewer lane's start.
 
-        The stagger only ever existed to let reviewer-1 warm the L1 stable-context
-        cache before the others begin; it is already 0 when no system prompt is in
-        play. SP-4 (``speed.remove_stagger``) drops it unconditionally.
+        The stagger only ever existed to let reviewer-1 warm the shared cached
+        system prompt before the others begin; it is already 0 when no system
+        prompt is in play. SP-4 (``speed.remove_stagger``) drops it
+        unconditionally.
         """
         if self.config.speed.remove_stagger:
             return 0.0
@@ -217,6 +210,7 @@ class BaseHandler(ABC):
         resume: str | None = None,
         allowed_tools: Any = _UNSET,
         effort: Any = _UNSET,
+        stream_capture_path: Path | None = None,
     ) -> ProviderResult:
         """Invoke the provider with the given prompt.
 
@@ -224,9 +218,14 @@ class BaseHandler(ABC):
             prompt: The compiled prompt to send.
             model: Per-invocation model override, honoured only for routable phases.
             attempt: 1-based attempt number; a retry escalates back to the master model.
-            system_prompt: Stable context to append as a cached system prompt, or None.
+            system_prompt: Cached system prompt to append, or None.
             resume: Session id to resume (session reuse). Claude-only; None starts
-                a fresh session. Used by the synthesis lane's round-2 self-resume.
+                a fresh session. Retained for the provider-level resume/attribution
+                plumbing (L4); no phase passes it by default.
+            stream_capture_path: Forensic dev-stream capture path (SP-D0),
+                forwarded to the provider verbatim. Claude-only; None (default)
+                disables capture. Only the dev handler sets it, so capture is
+                scoped to the dev_story phase.
             allowed_tools: Override the phase's tool allowlist. Left unset, the
                 phase's declared autonomy resolves it; pass ``[]`` for a tool-free
                 call (e.g. the SP-1 structured adjudication, which must not fix or
@@ -271,14 +270,29 @@ class BaseHandler(ABC):
             effort=effort,
             system_prompt=system_prompt,
             resume=resume,
+            stream_capture_path=stream_capture_path,
         )
+
+    def _stream_capture_path(self, state: State) -> Path | None:
+        """Forensic dev-stream capture path for this phase, or None to disable.
+
+        None (the default) means no capture, so this is a no-op for every phase
+        but the one that overrides it. The dev handler is the only override, so
+        turn-by-turn stream capture is automatically scoped to dev_story.
+        """
+        _ = state
+        return None
 
     def execute(self, state: State) -> PhaseResult:
         """Execute the handler."""
         try:
             prompt = self.render_prompt(state)
             system_prompt = self.build_system_prompt(state)
-            result = self.invoke_provider(prompt, system_prompt=system_prompt)
+            result = self.invoke_provider(
+                prompt,
+                system_prompt=system_prompt,
+                stream_capture_path=self._stream_capture_path(state),
+            )
 
             if result.exit_code != 0:
                 error_msg = result.stderr or f"Provider exited with code {result.exit_code}"

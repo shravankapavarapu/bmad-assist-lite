@@ -77,6 +77,7 @@ class FakeProvider(BaseProvider):
         color_index: int | None = None,
         system_prompt: str | None = None,
         resume: str | None = None,
+        stream_capture_path: Path | None = None,
     ) -> ProviderResult:
         """Simulate provider invocation with configurable behavior."""
         self._do_invoke_called = True

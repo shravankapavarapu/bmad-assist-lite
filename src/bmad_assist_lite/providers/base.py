@@ -522,6 +522,7 @@ class BaseProvider(ABC):
         color_index: int | None = None,
         system_prompt: str | None = None,
         resume: str | None = None,
+        stream_capture_path: Path | None = None,
     ) -> ProviderResult:
         """Execute LLM provider with the given prompt.
 
@@ -543,6 +544,11 @@ class BaseProvider(ABC):
                 starts a fresh session, i.e. current behaviour. When a Claude call
                 resumes, the returned result carries resumed_session_id=<id> and
                 session_reused=True (L4 attribution).
+            stream_capture_path: When set, the Claude provider retains the call's
+                turn-by-turn stream as a forensic JSONL at this path (SP-D0
+                dev-stream capture). Provider-specific; only Claude acts on it,
+                other providers ignore it. None (default) disables capture and
+                leaves the result byte-identical to before.
 
         Returns:
             ProviderResult with timed_out=False on success, or timed_out=True
@@ -574,6 +580,7 @@ class BaseProvider(ABC):
                     color_index=color_index,
                     system_prompt=system_prompt,
                     resume=resume,
+                    stream_capture_path=stream_capture_path,
                 )
             except TimeoutError:
                 timed_out = True
@@ -659,6 +666,7 @@ class BaseProvider(ABC):
         color_index: int | None = None,
         system_prompt: str | None = None,
         resume: str | None = None,
+        stream_capture_path: Path | None = None,
     ) -> ProviderResult:
         """Provider-specific invocation that must call collector.add() as chunks arrive.
 

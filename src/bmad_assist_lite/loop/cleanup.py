@@ -162,6 +162,11 @@ _FORENSIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     # being swept — post-merge gate failures are precisely the env-vs-real classification data
     # WS6 needs, so losing them would have defeated half the point of retention.
     re.compile(r"^post-merge-qg-failures-(?P<story_id>.+)\.md$"),
+    # SP-D0 dev-stream forensic capture (forensics.capture_stream). The dev
+    # call's turn-by-turn stream, written into the story-scoped cache by the
+    # dev handler; archived rather than swept so overhead decomposition can run
+    # after the story transition.
+    re.compile(r"^dev-stream-(?P<story_id>.+)\.jsonl$"),
 )
 
 _UNATTRIBUTED_STORY_ID = "_unattributed"

@@ -69,9 +69,9 @@ def _run_review_fanout(
 
 
 class TestDeltaRound2FreshSession:
-    def test_round2_forces_fresh_even_with_self_resume_on(self, tmp_path: Any) -> None:
-        # SP-2 contract: a delta round-2 must NOT resume the round-1 transcript,
-        # even when reviewer self-resume (run5 L2) is enabled.
+    def test_round2_runs_fresh_scoped_session(self, tmp_path: Any) -> None:
+        # SP-2 contract: a delta round-2 runs a FRESH session (no resumed
+        # transcript) scoped to a delta review prompt.
         cfg = load_config(
             {
                 "providers": {
@@ -81,20 +81,18 @@ class TestDeltaRound2FreshSession:
                         {"provider": "claude", "model": "haiku"},
                     ],
                 },
-                "session_reuse": {"reviewer_self_resume": True},
                 "speed": {"delta_round2": True},
             }
         )
         handler = CodeReviewHandler(cfg, tmp_path)
         state = State(current_epic=3, current_story="3.1")
 
-        # Round 1: cold, captures per-lane sessions (self-resume machinery live).
+        # Round 1: cold.
         rec1 = _Recorder()
         _run_review_fanout(handler, state, rec1)
         assert rec1.resumes == [None, None]
-        assert len(state.reviewer_session_ids) == 2
 
-        # Round 2 with delta_round2 on: sessions exist but must NOT be resumed.
+        # Round 2 with delta_round2 on: still fresh, scoped delta prompt.
         state.review_iteration = 1
         state.review_story_id = "3.1"
         cache = tmp_path / ".bmad-assist-lite" / "cache"
