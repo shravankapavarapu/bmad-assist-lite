@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from bmad_assist_lite.compiler.stable_context import build_stable_system_prompt
-from bmad_assist_lite.compiler.types import CompilerContext
 from bmad_assist_lite.core.config import load_config
 from bmad_assist_lite.core.epic_knowledge import (
     _bound,
@@ -50,27 +48,6 @@ def _fake_provider(brief: str) -> MagicMock:
     )
     provider.parse_output.side_effect = lambda r: r.stdout.strip()
     return provider
-
-
-def _ctx(root: Path, epic: int = 3, story: int = 2) -> CompilerContext:
-    return CompilerContext(
-        project_root=root,
-        output_folder=root / "_bmad-output",
-        resolved_variables={
-            "epic_num": epic,
-            "story_num": story,
-            "planning_artifacts": str(root / "_bmad-output" / "planning-artifacts"),
-        },
-    )
-
-
-def _seed_stable(root: Path) -> None:
-    pa = root / "_bmad-output" / "planning-artifacts"
-    pa.mkdir(parents=True)
-    (root / "_bmad-output" / "implementation-artifacts").mkdir(parents=True)
-    (root / "project-context.md").write_text("# Project\nFIXED_CONTEXT\n", encoding="utf-8")
-    (pa / "architecture.md").write_text("# Arch\nFIXED_ARCH\n", encoding="utf-8")
-    (pa / "epic-3.md").write_text("# Epic 3\nFULL_EPIC_BODY\n", encoding="utf-8")
 
 
 # ============================================================================
@@ -263,46 +240,51 @@ class TestWriterBestEffort:
 
 
 # ============================================================================
-# Injector — the brief rides the stable system prompt, last, only when enabled
+# Injector — the brief rides a dedicated system prompt, only when enabled
 # ============================================================================
+
+
+def _handler(cfg: Any, root: Path) -> Any:
+    """A concrete handler whose ``build_system_prompt`` is the L3 injection site."""
+    from bmad_assist_lite.loop.handlers.code_review import CodeReviewHandler
+
+    return CodeReviewHandler(cfg, root)
+
+
+def _sys_prompt(cfg: Any, root: Path) -> str | None:
+    return _handler(cfg, root).build_system_prompt(
+        State(current_epic=3, current_story="3.2")
+    )
 
 
 class TestInjector:
     def test_absent_when_flag_off(self, tmp_path: Path) -> None:
-        _seed_stable(tmp_path)
         init_paths(tmp_path)
-        _config(enabled=False)
-        p = epic_knowledge_path(3)
-        assert p is not None
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("BRIEF_BODY", encoding="utf-8")
-
-        block = build_stable_system_prompt(_ctx(tmp_path))
-        assert block is not None
-        assert "BRIEF_BODY" not in block
-
-    def test_absent_when_no_brief(self, tmp_path: Path) -> None:
-        _seed_stable(tmp_path)
-        init_paths(tmp_path)
-        _config(enabled=True)
-        block = build_stable_system_prompt(_ctx(tmp_path))
-        assert block is not None
-        assert 'name="epic_knowledge"' not in block
-
-    def test_present_and_last_when_enabled(self, tmp_path: Path) -> None:
-        _seed_stable(tmp_path)
-        init_paths(tmp_path)
-        _config(enabled=True)
+        cfg = _config(enabled=False)
         p = epic_knowledge_path(3)
         assert p is not None
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("# brief\nBRIEF_BODY\n", encoding="utf-8")
 
-        block = build_stable_system_prompt(_ctx(tmp_path))
+        # Off by default: no system prompt even when a brief exists on disk.
+        assert _sys_prompt(cfg, tmp_path) is None
+
+    def test_absent_when_no_brief(self, tmp_path: Path) -> None:
+        init_paths(tmp_path)
+        cfg = _config(enabled=True)
+        # Enabled but nothing written yet: still no system prompt.
+        assert _sys_prompt(cfg, tmp_path) is None
+
+    def test_present_when_enabled(self, tmp_path: Path) -> None:
+        init_paths(tmp_path)
+        cfg = _config(enabled=True)
+        p = epic_knowledge_path(3)
+        assert p is not None
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# brief\nBRIEF_BODY\n", encoding="utf-8")
+
+        block = _sys_prompt(cfg, tmp_path)
         assert block is not None
         assert "BRIEF_BODY" in block
-        assert 'name="epic_knowledge"' in block
-        # The volatile brief must sit AFTER the epic-invariant artifacts so the
-        # invariant prefix stays byte-identical across stories.
-        assert block.index("BRIEF_BODY") > block.index("FULL_EPIC_BODY")
-        assert block.index("BRIEF_BODY") > block.index("FIXED_CONTEXT")
+        assert block.startswith("<epic-knowledge>")
+        assert block.endswith("</epic-knowledge>")

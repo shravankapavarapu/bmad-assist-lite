@@ -14,7 +14,6 @@ from bmad_assist_lite.core.config import (
 from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
-from bmad_assist_lite.loop.handlers import reviewer_reuse
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_merge import reviewer_findings_addendum
 from bmad_assist_lite.loop.story_paths import resolve_story_path
@@ -276,14 +275,6 @@ class CodeReviewHandler(BaseHandler):
             self._warn_if_self_review()
             prompt = self._review_prompt(state)
             system_prompt = self.build_system_prompt(state)
-            # SP-2 contract: a delta round-2 runs in a FRESH session even when
-            # reviewer self-resume (run5 L2) is enabled — resuming the round-1
-            # transcript would silently re-carry the full context the delta
-            # prompt exists to avoid. Applies to the whole round, including the
-            # full-prompt fallback when round-1 findings are unavailable.
-            force_fresh = (
-                self.config.speed.delta_round2 and state.review_iteration >= 1
-            )
 
             multi_configs = self.config.providers.multi
             if not multi_configs:
@@ -309,7 +300,7 @@ class CodeReviewHandler(BaseHandler):
                 read_only_tools = list(READ_ONLY_TOOLS)
 
                 def _make_invoker(
-                    p: Any, m: str, t: int, e: str | None, r: str | None
+                    p: Any, m: str, t: int, e: str | None
                 ) -> Any:
                     return lambda: p.invoke(
                         prompt,
@@ -319,19 +310,7 @@ class CodeReviewHandler(BaseHandler):
                         allowed_tools=read_only_tools,
                         effort=e,
                         system_prompt=system_prompt,
-                        resume=r,
                     )
-
-                # L2: each reviewer lane may resume its OWN round-1 session on a
-                # round-2 re-review. Keyed by story+phase+index+provider+model so
-                # it can never cross a story/phase/lane boundary (F-13 structural).
-                story_id = state.current_story
-                lane_keys = [
-                    reviewer_reuse.lane_key(
-                        story_id, self.phase_name, idx, mc.provider, mc.model
-                    )
-                    for idx, mc in enumerate(multi_configs)
-                ]
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(multi_configs)
@@ -339,21 +318,11 @@ class CodeReviewHandler(BaseHandler):
                     futures = []
                     providers: list[Any] = []
                     # Stagger reviewer starts so reviewer-1 can warm the shared
-                    # stable-context cache before the others begin (SP-4 drops it).
+                    # cached system prompt before the others begin (SP-4 drops it).
                     stagger = self._reviewer_stagger(system_prompt)
                     for idx, mc in enumerate(multi_configs):
                         provider = get_provider(mc.provider)
                         providers.append(provider)
-                        resume_id = (
-                            None
-                            if force_fresh
-                            else reviewer_reuse.resume_id_for(
-                                state,
-                                self.config,
-                                provider=mc.provider,
-                                key=lane_keys[idx],
-                            )
-                        )
                         if idx > 0 and stagger > 0:
                             await asyncio.sleep(stagger)
                         # SP-3: reviewer lanes run one effort notch lower.
@@ -366,7 +335,7 @@ class CodeReviewHandler(BaseHandler):
                             loop.run_in_executor(
                                 executor,
                                 _make_invoker(
-                                    provider, mc.model, timeout, lane_effort, resume_id
+                                    provider, mc.model, timeout, lane_effort
                                 ),
                             )
                         )
@@ -382,15 +351,6 @@ class CodeReviewHandler(BaseHandler):
                             {"reviewer": label, "error": str(raw), "exit_code": 1}
                         )
                     else:
-                        # Carry this lane's session id forward for a round-2 resume.
-                        reviewer_reuse.capture_session(
-                            state,
-                            self.config,
-                            story_id=story_id,
-                            provider=multi_configs[i].provider,
-                            key=lane_keys[i],
-                            result=raw,
-                        )
                         response = providers[i].parse_output(raw)
                         results.append(
                             {

@@ -3,9 +3,10 @@
 At each story's completion the master writes/updates a small
 ``.bmad-assist-lite/epic-knowledge-<epic>.md`` brief -- architectural decisions,
 gotchas, file-map deltas, conventions established. Later stories in the epic load
-it inside the stable, cached system-prompt region (see
-``compiler/stable_context.py``), so they start "smart" without recompiling prior
-story transcripts. This is the *artifact* form of epic accumulation; a naive
+it as a dedicated, cached system prompt (see
+``loop/handlers/base.py::BaseHandler.build_system_prompt``), so they start "smart"
+without recompiling prior story transcripts. This is the *artifact* form of epic
+accumulation; a naive
 epic-scoped transcript resume is explicitly rejected (it re-carries every prior
 story's history each turn -- the measured fix-phase regression at scale).
 

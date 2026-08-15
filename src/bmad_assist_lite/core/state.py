@@ -184,13 +184,6 @@ class State(BaseModel):
     review_finding_hashes: list[str] = Field(default_factory=list)
     review_blocked_stories: list[str] = Field(default_factory=list)
     review_story_id: str | None = None
-    # L2 (goal-run5): per-reviewer-lane Claude session ids, so a round-2
-    # re-review resumes its OWN round-1 session. Keyed by
-    # ``story#phase#index#provider#model`` so a session can NEVER be resumed
-    # across stories, phases, or reviewer lanes -- the F-13 independence rule
-    # made structural. Written and read only by the reviewer/synthesis lanes
-    # (never the dev/master chain); stale-story entries are pruned on write.
-    reviewer_session_ids: dict[str, str] = Field(default_factory=dict)
     started_at: datetime | None = None
     updated_at: datetime | None = None
     story_started_at: datetime | None = None
