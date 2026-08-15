@@ -375,10 +375,10 @@ class EpicKnowledgeConfig(BaseModel):
 
 
 class SpeedConfig(BaseModel):
-    """Wall-clock speed pack for the review pipeline (goal-run6).
+    """Wall-clock speed pack (goal-run6 review pipeline + goal-run7 dev economy).
 
     All off by default and backward-compatible: with every flag ``False`` the
-    review chain runs exactly as today. The measured physics is that every
+    chain runs exactly as today. The measured physics is that every
     single-lane phase is 100% API time at a fixed output-tokens/sec, so
     ``wall ~= critical-path output tokens / tps``. Each flag removes
     critical-path output tokens from a distinct phase family:
@@ -404,6 +404,14 @@ class SpeedConfig(BaseModel):
       only ever fired to let the first lane warm a shared cached system prompt
       before the others begin (and is already 0 when no system prompt is in
       play); SP-4 drops it unconditionally.
+    - ``lean_dev`` (SP-D1, goal-run7): append an output-economy addendum to the
+      ``dev_story`` prompt -- no between-tool narration, no restating the
+      story/plan, one Write per new file over incremental Edit chains, minimal
+      Edit context, and a findings-only final report that does not re-print code.
+      It trims how the work is DESCRIBED, never the work: it does not lower dev
+      effort, skip tests, or reduce delivered code. Guarded in the A/B by
+      tokens-per-delivered-line + the SP-D0 stream decomposition (thinking share
+      must not drop -- an effort notch in disguise) + the offline replay/AC layers.
 
     Quality is guarded in the A/B, not here: the deterministic merge must drop no
     round-1 finding of severity >= high, and the final severity mix must stay
@@ -439,6 +447,16 @@ class SpeedConfig(BaseModel):
     remove_stagger: bool = Field(
         default=False,
         description="SP-4: drop the reviewer fan-out stagger (only ever warmed a cached system prompt)",
+    )
+    lean_dev: bool = Field(
+        default=False,
+        description=(
+            "SP-D1: append an output-economy addendum to the dev_story prompt "
+            "(no narration, no restating the story, one Write per new file over "
+            "incremental Edits, minimal Edit context, findings-only final report "
+            "that does not re-print code). Trims description of the work, not the "
+            "work: does not lower effort, skip tests, or reduce delivered code"
+        ),
     )
 
 
