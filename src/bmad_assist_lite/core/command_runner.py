@@ -8,8 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bmad_assist_lite.providers._windows import get_subprocess_kwargs, terminate_process
+from bmad_assist_lite.providers.base import ExitStatus
 
 logger = logging.getLogger(__name__)
+
+COMMAND_NOT_FOUND_EXIT_CODE: int = 127
+"""Synthesised for ``FileNotFoundError`` on every platform.
+
+``ExitStatus.from_code`` therefore keeps 127 mapped to ``NOT_FOUND`` on Windows too,
+alongside ``cmd.exe``'s native 9009.
+"""
+
+COMMAND_TIMEOUT_EXIT_CODE: int = 124
 
 
 @dataclass(frozen=True)
@@ -26,6 +36,15 @@ class CommandResult:
     def success(self) -> bool:
         """Return True if the command exited with code 0."""
         return self.exit_code == 0
+
+    @property
+    def exit_status(self) -> ExitStatus:
+        """Classify this result's exit code with the shared semantic classifier.
+
+        This is the single classification vocabulary in the tool — no module on the
+        gate path may define a second exit-code map.
+        """
+        return ExitStatus.from_code(self.exit_code)
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -88,7 +107,7 @@ def run_command(command: str, cwd: Path, timeout: int = 120) -> CommandResult:
             logger.warning("Command timed out after %ds: %s", timeout, command)
             return CommandResult(
                 command=command,
-                exit_code=124,
+                exit_code=COMMAND_TIMEOUT_EXIT_CODE,
                 stdout=stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else "",
                 stderr=f"Command timed out after {timeout}s",
                 duration_ms=duration_ms,
@@ -107,7 +126,7 @@ def run_command(command: str, cwd: Path, timeout: int = 120) -> CommandResult:
         logger.warning("Command not found: %s (%s)", command, e)
         return CommandResult(
             command=command,
-            exit_code=127,
+            exit_code=COMMAND_NOT_FOUND_EXIT_CODE,
             stdout="",
             stderr=f"Command not found: {e}",
             duration_ms=duration_ms,

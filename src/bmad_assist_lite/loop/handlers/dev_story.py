@@ -3,11 +3,15 @@
 from typing import Any
 
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 
 
 class DevStoryHandler(BaseHandler):
     """Master LLM implements the story."""
+
+    autonomy = AutonomyLevel.EXECUTE
+    """Implements the story and runs its tests."""
 
     @property
     def phase_name(self) -> str:

@@ -34,9 +34,30 @@ class ParallelConfig(BaseModel):
         description="Number of retry attempts for post-merge quality gate fixes",
     )
     conflict_resolution_timeout: int = Field(
-        default=120,
+        default=600,
         ge=10,
-        description="Timeout in seconds for Claude CLI conflict resolution",
+        description=(
+            "Timeout in seconds for AI conflict resolution. The default is 600, "
+            "not the 120 at which resolution was measured to time out. Resolution "
+            "runs outside the merge lock, so a long budget costs latency for that "
+            "story alone, never for the queue."
+        ),
+    )
+    max_rebase_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description=(
+            "How many times a candidate may be rebased and re-attempted before the "
+            "merge ladder ends in park"
+        ),
+    )
+    integration_branch: str | None = Field(
+        default=None,
+        description=(
+            "Reference stories land on. None means the branch currently checked out "
+            "in the project root — nothing hard-codes main"
+        ),
     )
     worktree_base_dir: Path | None = Field(
         default=None,

@@ -130,6 +130,16 @@ class ProjectPaths:
         return self.bmad_assist_dir / "state.yaml"
 
     @cached_property
+    def phase_metrics_file(self) -> Path:
+        """Return the per-phase provider metrics record path (JSON Lines).
+
+        Kept beside state.yaml rather than under cache/, which the story
+        transition sweep clears — a measurement that a phase transition deletes
+        is not a measurement.
+        """
+        return self.bmad_assist_dir / "phase-metrics.jsonl"
+
+    @cached_property
     def sprint_status_file(self) -> Path:
         """Return the sprint-status.yaml file path."""
         return self.implementation_artifacts / "sprint-status.yaml"

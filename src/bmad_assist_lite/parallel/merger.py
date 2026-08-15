@@ -32,18 +32,46 @@ import logging
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
-from bmad_assist_lite.core.command_runner import clean_test_output, run_command
+from bmad_assist_lite.core.command_runner import clean_test_output
+from bmad_assist_lite.core.gate_runner import (
+    GateClassification,
+    GateCommand,
+    make_base_bootstrap,
+    run_gates,
+)
 from bmad_assist_lite.core.quality_gates import QualityGateEntry
 from bmad_assist_lite.core.toolchain import detect_toolchain
 from bmad_assist_lite.parallel.exceptions import ParallelError
-from bmad_assist_lite.parallel.git_ops import _run_git
+from bmad_assist_lite.parallel.git_ops import (
+    _run_git,
+    count_ahead_behind,
+    find_checkout_dir,
+    rebase_branch,
+    ref_exists,
+    rev_parse,
+    tree_sha,
+)
+from bmad_assist_lite.parallel.merge_guard import (
+    assert_merge_lock_not_held,
+    branch_deletion_decision,
+    enter_merge_lock,
+    exit_merge_lock,
+)
+from bmad_assist_lite.parallel.parked import ParkedMerge, record_parked_merge
+from bmad_assist_lite.parallel.state import (
+    GateObservation,
+    MergeAttempt,
+    MergeTier,
+)
 from bmad_assist_lite.parallel.worktree_manager import (
     _branch_name,
+    _normalize_story_id,
     cleanup_worktree,
 )
 from bmad_assist_lite.providers._windows import (
@@ -74,6 +102,8 @@ class GateResult(BaseModel):
         stdout: Captured standard output.
         stderr: Captured standard error.
         duration_ms: Wall-clock execution time in milliseconds.
+        classification: Env-vs-real classification from the shared gate runner
+            (``real``, ``env`` or ``env-blocked``). Empty when the gate passed.
 
     """
 
@@ -86,6 +116,12 @@ class GateResult(BaseModel):
     stdout: str
     stderr: str
     duration_ms: int
+    classification: str = ""
+
+    @property
+    def status_label(self) -> str:
+        """Return ``PASS`` or ``FAIL`` \u2014 never ``unknown``."""
+        return "PASS" if self.passed else "FAIL"
 
 
 class PostMergeQGResult(BaseModel):
@@ -96,6 +132,13 @@ class PostMergeQGResult(BaseModel):
         story_id: The story identifier the QG ran for.
         gate_results: Per-gate execution results.
         duration_ms: Total wall-clock time across all gates.
+        env_blocked: ``True`` when the run ended blocked on the environment
+            rather than on the code.
+        classification: Overall ``real``/``env`` classification, or ``None``
+            when nothing failed.
+        failure_reason: Why the run failed when no gate command ever ran.
+            Never empty on a failed run \u2014 that emptiness is what produced
+            "failed gates: unknown".
 
     """
 
@@ -105,6 +148,9 @@ class PostMergeQGResult(BaseModel):
     story_id: str
     gate_results: list[GateResult] = []
     duration_ms: int = 0
+    env_blocked: bool = False
+    classification: str | None = None
+    failure_reason: str = ""
 
 
 class MergeResult(BaseModel):
@@ -127,6 +173,12 @@ class MergeResult(BaseModel):
     conflict_files: list[str] = []
     error: str | None = None
     qg_result: PostMergeQGResult | None = None
+    landed: bool = False
+    parked: bool = False
+    tier: MergeTier | None = None
+    attempts: list[MergeAttempt] = []
+    gate_observations: list[GateObservation] = []
+    landed_commit_sha: str | None = None
 
 
 # ============================================================================
@@ -330,6 +382,14 @@ def resolve_conflicts(
         prompt = _build_resolution_prompt(story_context, conflict_files, file_contents)
         logger.info("%s Invoking Claude CLI with timeout=%ds", tag, timeout)
 
+        # AI conflict resolution is speculative work and MUST NOT run inside
+        # the merge critical section: one conflicted story would otherwise
+        # hold the merge lock for the whole resolution budget while every
+        # other finished story waited. The check is a runtime one because a
+        # static walk of the lock body cannot see this call through the
+        # asyncio.to_thread hop and the helpers between.
+        assert_merge_lock_not_held("conflict resolver (claude --print)")
+
         try:
             proc = subprocess.Popen(
                 ["claude", "--print"],
@@ -428,6 +488,173 @@ def resolve_conflicts(
 
 
 # ============================================================================
+# Resolution branch — AI conflict resolution, outside the merge lock
+# ============================================================================
+
+
+class ResolutionOutcome(BaseModel):
+    """Immutable result of an out-of-lock conflict-resolution attempt.
+
+    Attributes:
+        ok: ``True`` when a landable resolution branch was produced.
+        resolution_branch: Name of the fresh branch carrying the
+            resolution, or ``None``.
+        worktree_path: Where that branch is checked out, or ``None``.
+        base_sha: Integration head the resolution was built on. The
+            in-lock recompute compares against this: if the base moved,
+            the candidate is discarded.
+        conflict_files: Files the resolver was asked to reconcile.
+        error: Human-readable failure description, or ``None``.
+
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ok: bool
+    resolution_branch: str | None = None
+    worktree_path: Path | None = None
+    base_sha: str = ""
+    conflict_files: list[str] = []
+    error: str | None = None
+
+
+def _resolution_branch_name(story_id: str, attempt: int) -> str:
+    """Compute the branch name for a resolution attempt."""
+    return f"parallel-resolve/{_normalize_story_id(story_id)}-{attempt}"
+
+
+def resolve_on_resolution_branch(
+    story_id: str,
+    project_root: Path,
+    candidate_branch: str,
+    integration_ref: str,
+    *,
+    attempt: int = 1,
+    story_context: str = "",
+    timeout: int = 600,
+    base_dir: Path | None = None,
+) -> ResolutionOutcome:
+    """Resolve a merge conflict on a fresh branch, outside the merge lock.
+
+    A throwaway worktree is created at ``integration_ref`` on a new
+    resolution branch, ``candidate_branch`` is merged into it, and the
+    resolver is asked to reconcile the conflicts there.  The story branch
+    is never checked out and never modified, so a failed resolution leaves
+    it byte-identical and still mergeable.
+
+    On success the resolution branch is a landable candidate that must
+    still survive the in-lock recompute like any other; on failure
+    everything the attempt created is removed.
+
+    Args:
+        story_id: Story identifier.
+        project_root: Path to the main git repository.
+        candidate_branch: The branch whose changes need reconciling.
+        integration_ref: Integration head to resolve against.
+        attempt: 1-based attempt number, used in the branch name.
+        story_context: Story title/description for resolver context.
+        timeout: Resolver budget in seconds.
+        base_dir: Parent directory for the resolution worktree.
+
+    Returns:
+        A :class:`ResolutionOutcome`.
+
+    """
+    tag = f"[MERGE|{story_id}]"
+    branch = _resolution_branch_name(story_id, attempt)
+    parent = base_dir if base_dir is not None else project_root.parent
+    wt_path = (parent / f"{project_root.resolve().name}-resolve-"
+               f"{_normalize_story_id(story_id)}-{attempt}").resolve()
+
+    try:
+        base_sha = rev_parse(project_root, integration_ref)
+    except ParallelError as exc:
+        return ResolutionOutcome(ok=False, error=f"cannot resolve {integration_ref}: {exc}")
+
+    # A stale resolution branch/worktree from a previous attempt must not
+    # block this one; both only ever carry throwaway work.
+    _discard_resolution(project_root, branch, wt_path)
+
+    add = _run_git(
+        ["worktree", "add", "-b", branch, str(wt_path), base_sha],
+        cwd=project_root,
+        check=False,
+    )
+    if add.returncode != 0:
+        return ResolutionOutcome(
+            ok=False,
+            base_sha=base_sha,
+            error=f"could not create resolution worktree: {add.stderr.strip()}",
+        )
+
+    logger.info("%s Resolving on fresh branch %s (worktree %s)", tag, branch, wt_path)
+
+    merge = _run_git(["merge", "--no-edit", candidate_branch], cwd=wt_path, check=False)
+    if merge.returncode == 0:
+        # The conflict evaporated (the base moved favourably); the branch is
+        # a perfectly good candidate as it stands.
+        return ResolutionOutcome(
+            ok=True, resolution_branch=branch, worktree_path=wt_path, base_sha=base_sha
+        )
+
+    conflict_files = [
+        line
+        for line in _run_git(
+            ["diff", "--name-only", "--diff-filter=U"], cwd=wt_path, check=False
+        ).stdout.splitlines()
+        if line.strip()
+    ]
+    if not conflict_files:
+        _discard_resolution(project_root, branch, wt_path)
+        return ResolutionOutcome(
+            ok=False,
+            base_sha=base_sha,
+            error=f"merge failed without conflicts: {(merge.stderr or merge.stdout).strip()}",
+        )
+
+    resolution = resolve_conflicts(
+        story_id=story_id,
+        project_root=wt_path,
+        conflict_files=conflict_files,
+        story_context=story_context,
+        timeout=timeout,
+    )
+
+    if not resolution.resolved:
+        _discard_resolution(project_root, branch, wt_path)
+        return ResolutionOutcome(
+            ok=False,
+            base_sha=base_sha,
+            conflict_files=conflict_files,
+            error=resolution.error or "conflict resolution failed",
+        )
+
+    return ResolutionOutcome(
+        ok=True,
+        resolution_branch=branch,
+        worktree_path=wt_path,
+        base_sha=base_sha,
+        conflict_files=conflict_files,
+    )
+
+
+def _discard_resolution(project_root: Path, branch: str, wt_path: Path) -> None:
+    """Remove a resolution branch and its worktree (best-effort).
+
+    A resolution branch only ever carries speculative work that has not
+    been accepted, so discarding it loses nothing the story branch does
+    not already hold.
+    """
+    _run_git(["worktree", "remove", "--force", str(wt_path)], cwd=project_root, check=False)
+    _run_git(["worktree", "prune"], cwd=project_root, check=False)
+    _run_git(["branch", "-D", branch], cwd=project_root, check=False)
+    if wt_path.exists():
+        import shutil
+
+        shutil.rmtree(wt_path, ignore_errors=True)
+
+
+# ============================================================================
 # Post-Merge Cleanup Helper
 # ============================================================================
 
@@ -437,17 +664,35 @@ def _cleanup_after_merge(
     branch: str,
     project_root: Path,
     tag: str,
+    integration_ref: str = "HEAD",
 ) -> None:
     """Delete the story branch and clean up its worktree (best-effort).
+
+    The guard runs before either deletion: a branch still holding commits
+    that the integration head cannot reach is left alone, along with its
+    worktree.
 
     Args:
         story_id: Story identifier.
         branch: Branch name to delete.
         project_root: Path to the main git repository.
         tag: Logging tag prefix.
+        integration_ref: Reference the branch's commits must be reachable
+            from before anything is deleted.
 
     """
-    del_result = _run_git(["branch", "-d", branch], cwd=project_root, check=False)
+    decision = branch_deletion_decision(project_root, branch, integration_ref)
+    if not decision.safe:
+        logger.warning(
+            "%s Not deleting branch %s: %s", tag, branch, decision.reason,
+        )
+        return
+
+    try:
+        del_result = _run_git(["branch", "-d", branch], cwd=project_root, check=False)
+    except ParallelError as exc:
+        logger.warning("%s Branch deletion failed: %s (non-fatal)", tag, exc)
+        return
     if del_result.returncode != 0:
         logger.warning(
             "%s Branch deletion failed (rc=%d): %s (non-fatal)",
@@ -457,7 +702,7 @@ def _cleanup_after_merge(
         )
 
     try:
-        cleanup_worktree(story_id, project_root)
+        cleanup_worktree(story_id, project_root, integration_ref=integration_ref)
         logger.info("%s Worktree cleaned up for %s", tag, story_id)
     except Exception:
         logger.warning(
@@ -481,6 +726,9 @@ def merge_story(
     resolve: bool = False,
     story_context: str = "",
     conflict_resolution_timeout: int = 120,
+    branch_override: str | None = None,
+    cleanup: bool = True,
+    integration_ref: str = "HEAD",
 ) -> MergeResult:
     """Merge a story branch into the current base branch.
 
@@ -503,6 +751,14 @@ def merge_story(
             prompt context.  Only used when ``resolve=True``.
         conflict_resolution_timeout: Timeout in seconds for Claude CLI
             invocation.  Only used when ``resolve=True``.
+        branch_override: Merge this branch instead of the story's own
+            branch.  Used to land a resolution-branch candidate.
+        cleanup: When ``False``, a successful merge does **not** delete the
+            branch or its worktree.  The merge queue defers cleanup until
+            the re-gate verdict exists, so nothing is destroyed before the
+            gate that judges it has run.
+        integration_ref: Reference the no-data-loss guard measures
+            reachability against before any deletion.
 
     Returns:
         A ``MergeResult`` describing the outcome.
@@ -512,7 +768,7 @@ def merge_story(
             fatal (non-conflict) git error occurs.
 
     """
-    branch = _branch_name(story_id)
+    branch = branch_override or _branch_name(story_id)
     tag = f"[MERGE|{story_id}]"
 
     # ------------------------------------------------------------------
@@ -578,9 +834,14 @@ def merge_story(
     # Step 2: Handle success (returncode 0)
     # ------------------------------------------------------------------
     if merge_result.returncode == 0:
-        logger.info("%s Merge succeeded — cleaning up branch %s", tag, branch)
-        _cleanup_after_merge(story_id, branch, project_root, tag)
-        return MergeResult(success=True, story_id=story_id)
+        if cleanup:
+            logger.info("%s Merge succeeded — cleaning up branch %s", tag, branch)
+            _cleanup_after_merge(story_id, branch, project_root, tag, integration_ref)
+        else:
+            logger.info(
+                "%s Merge succeeded — cleanup deferred until the re-gate verdict", tag,
+            )
+        return MergeResult(success=True, story_id=story_id, landed=True)
 
     # ------------------------------------------------------------------
     # Step 3: Handle non-zero exit — distinguish conflict from fatal error
@@ -638,8 +899,9 @@ def merge_story(
                     tag,
                     branch,
                 )
-                _cleanup_after_merge(story_id, branch, project_root, tag)
-                return MergeResult(success=True, story_id=story_id)
+                if cleanup:
+                    _cleanup_after_merge(story_id, branch, project_root, tag, integration_ref)
+                return MergeResult(success=True, story_id=story_id, landed=True)
 
             # Resolution failed — merge already aborted by resolve_conflicts()
             return MergeResult(
@@ -833,36 +1095,58 @@ def run_post_merge_qg(
     if config is not None and config.quality_gate is not None:
         command_timeout = config.quality_gate.command_timeout
 
-    gate_results: list[GateResult] = []
-    for entry in commands:
-        logger.info("%s Running: %s", tag, entry.command)
-        cmd_result = run_command(entry.command, project_root, timeout=command_timeout)
-
-        gate = GateResult(
-            name=entry.name,
-            command=entry.command,
-            passed=cmd_result.success,
-            exit_code=cmd_result.exit_code,
-            stdout=cmd_result.stdout,
-            stderr=cmd_result.stderr,
-            duration_ms=cmd_result.duration_ms,
-        )
-        gate_results.append(gate)
-
-        icon = "\u2714" if gate.passed else "\u2718"
-        logger.info("%s %s %s: %s", tag, icon, gate.name, "PASS" if gate.passed else "FAIL")
-
-    all_passed = all(g.passed for g in gate_results)
-    total_duration = sum(g.duration_ms for g in gate_results)
-
-    result = PostMergeQGResult(
-        all_passed=all_passed,
-        story_id=story_id,
-        gate_results=gate_results,
-        duration_ms=total_duration,
+    # The merge target was never bootstrapped before its gates ran — the verified
+    # root cause of a post-merge gate failing for an environment reason and being
+    # reported as a code failure. Reuses the worktree bootstrap pipeline.
+    run = run_gates(
+        [GateCommand(name=e.name, command=e.command) for e in commands],
+        project_root,
+        timeout=command_timeout,
+        label=f"post-merge:{story_id}",
+        bootstrap=make_base_bootstrap(project_root, config),
+        bootstrap_first=True,
+        report=False,
     )
 
-    if not all_passed:
+    gate_results: list[GateResult] = [
+        GateResult(
+            name=o.name,
+            command=o.command,
+            passed=o.passed,
+            exit_code=o.exit_code,
+            stdout=o.stdout,
+            stderr=o.stderr,
+            duration_ms=o.duration_ms,
+            classification=run.classification_label(o),
+        )
+        for o in run.outcomes
+    ]
+    for gate in gate_results:
+        icon = "\u2714" if gate.passed else "\u2718"
+        logger.info(
+            "%s %s %s: %s [%s] command: %s",
+            tag,
+            icon,
+            gate.name,
+            gate.status_label,
+            gate.classification,
+            gate.command,
+        )
+
+    result = PostMergeQGResult(
+        all_passed=run.all_passed,
+        story_id=story_id,
+        gate_results=gate_results,
+        duration_ms=run.duration_ms,
+        env_blocked=run.env_blocked,
+        classification=(
+            run.overall_classification.value
+            if run.overall_classification is not None
+            else None
+        ),
+    )
+
+    if not result.all_passed:
         try:
             _write_post_merge_failure_report(story_id, project_root, result)
         except OSError:
@@ -871,6 +1155,36 @@ def run_post_merge_qg(
             )
 
     return result
+
+
+
+def _assert_fix_routable(qg_result: PostMergeQGResult) -> bool:
+    """Return True when a failed post-merge gate may reach the LLM fixer.
+
+    Runtime invariant, asserted where the routing decision is made rather than only
+    proven statically: an ``env``-classified failure is never handed to the fixer,
+    but it is always reported.
+
+    Args:
+        qg_result: The failed post-merge quality gate result.
+
+    Returns:
+        ``True`` when the failure is a real code failure.
+
+    """
+    if qg_result.classification == GateClassification.ENV.value or qg_result.env_blocked:
+        logger.warning(
+            "[QG|post-merge|%s] env-blocked \u2014 not routed to the fixer: %s",
+            qg_result.story_id,
+            "; ".join(
+                f"{g.name} [{g.classification}] command: {g.command}"
+                for g in qg_result.gate_results
+                if not g.passed
+            )
+            or qg_result.failure_reason,
+        )
+        return False
+    return True
 
 
 # ============================================================================
@@ -884,6 +1198,7 @@ def run_post_merge_fix(
     config: Config | None = None,
     attempt: int = 1,
     timeout: int = 300,
+    work_dir: Path | None = None,
 ) -> PostMergeQGResult:
     """Attempt to fix post-merge quality gate failures via subprocess.
 
@@ -900,6 +1215,11 @@ def run_post_merge_fix(
         attempt: Current fix attempt number (1-based).  When ``> 1``,
             the handler receives retry context to try a different strategy.
         timeout: Timeout in seconds for the fix subprocess.
+        work_dir: Directory the fix runs and commits in.  Defaults to
+            ``project_root``.  The merge queue passes the candidate's own
+            checkout, because a re-gate failure rolls the integration
+            branch back — the failing code lives on the candidate, and that
+            is where it must be fixed before the ladder is re-entered.
 
     Returns:
         A :class:`PostMergeQGResult` from the re-run quality gate.
@@ -909,6 +1229,7 @@ def run_post_merge_fix(
     """
     tag = f"[FIX-QG|post-merge|{story_id}]"
     logger.info("%s Starting fix attempt #%d", tag, attempt)
+    run_dir = work_dir if work_dir is not None else project_root
 
     # ------------------------------------------------------------------
     # Step 1: Copy failure report to the path the handler expects
@@ -940,7 +1261,9 @@ def run_post_merge_fix(
     parts = story_id.split(".")
     if len(parts) != 2:  # noqa: PLR2004
         logger.error("%s Cannot parse story_id %r into epic.story", tag, story_id)
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason=f"cannot parse story_id {story_id!r} into epic.story"
+        )
     epic_num, story_num = parts[0], parts[1]
 
     # ------------------------------------------------------------------
@@ -950,7 +1273,7 @@ def run_post_merge_fix(
 
     exec_args = [
         sys.executable, "-m", "bmad_assist_lite", "run",
-        "--project", str(project_root),
+        "--project", str(run_dir),
         "--epic", epic_num,
         "--story", story_num,
         "--fix-post-merge",
@@ -970,7 +1293,7 @@ def run_post_merge_fix(
             exec_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            cwd=str(project_root),
+            cwd=str(run_dir),
             text=True,
             encoding="utf-8",
             env=env,
@@ -989,7 +1312,9 @@ def run_post_merge_fix(
         )
         kill_process(proc)
         proc.wait()
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason=f"fix subprocess timed out after {timeout}s"
+        )
     finally:
         if proc is not None and proc.poll() is None:
             kill_process(proc)
@@ -1002,7 +1327,9 @@ def run_post_merge_fix(
         logger.error(
             "%s Fix subprocess failed (rc=%d)", tag, proc.returncode,
         )
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason=f"fix subprocess failed (rc={proc.returncode})"
+        )
 
     logger.info("%s Fix subprocess completed successfully", tag)
 
@@ -1010,29 +1337,33 @@ def run_post_merge_fix(
     # Step 4: Check for changes, commit if any
     # ------------------------------------------------------------------
     status_result = _run_git(
-        ["status", "--porcelain"], cwd=project_root, check=False,
+        ["status", "--porcelain"], cwd=run_dir, check=False,
     )
     if not status_result.stdout.strip():
         logger.warning(
             "%s Fix subprocess produced no changes — treating as failed attempt",
             tag,
         )
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason="fix subprocess produced no changes"
+        )
 
     commit_msg = f"fix: post-merge integration fix for story {story_id}"
     try:
-        _run_git(["add", "-A"], cwd=project_root)
-        _run_git(["commit", "-m", commit_msg], cwd=project_root)
+        _run_git(["add", "-A"], cwd=run_dir)
+        _run_git(["commit", "-m", commit_msg], cwd=run_dir)
         logger.info("%s Committed fix: %s", tag, commit_msg)
     except ParallelError as exc:
         logger.error("%s Git commit failed: %s", tag, exc)
-        return PostMergeQGResult(all_passed=False, story_id=story_id)
+        return PostMergeQGResult(
+            all_passed=False, story_id=story_id, failure_reason=f"git commit of the fix failed: {exc}"
+        )
 
     # ------------------------------------------------------------------
     # Step 5: Re-run quality gate to verify fix
     # ------------------------------------------------------------------
     logger.info("%s Re-running post-merge quality gate", tag)
-    qg_result = run_post_merge_qg(story_id, project_root, config)
+    qg_result = run_post_merge_qg(story_id, run_dir, config)
     if qg_result.all_passed:
         logger.info("%s Quality gate passed after fix attempt #%d", tag, attempt)
     else:
@@ -1111,6 +1442,279 @@ def update_sprint_status_done(
 
 
 # ============================================================================
+# The critical section: recompute -> rebase -> re-gate -> land
+# ============================================================================
+
+
+def _now_ms() -> int:
+    """Return a monotonic millisecond counter for lock-hold timing."""
+    return int(time.monotonic() * 1000)
+
+
+def _safe_rev(project_root: Path, ref: str) -> str:
+    """Resolve ``ref`` to a commit SHA, or an empty string if it cannot be."""
+    try:
+        return rev_parse(project_root, ref)
+    except ParallelError:
+        return ""
+
+
+def _safe_tree(project_root: Path, ref: str) -> str:
+    """Resolve ``ref`` to a tree SHA, or an empty string if it cannot be."""
+    try:
+        return tree_sha(project_root, ref)
+    except ParallelError:
+        return ""
+
+
+def _attempt_record(outcome: LandOutcome) -> MergeAttempt:
+    """Turn one pass through the critical section into a durable record."""
+    return MergeAttempt(
+        tier=outcome.tier,
+        branch=outcome.branch,
+        commit_sha=outcome.commit_sha,
+        tree_sha=outcome.tree_sha,
+        integration_sha=outcome.integration_sha,
+        outcome=outcome.status,
+        detail=outcome.error or "",
+        duration_ms=outcome.lock_hold_ms,
+    )
+
+
+class LandOutcome(BaseModel):
+    """Immutable result of one pass through the merge critical section.
+
+    Attributes:
+        status: ``landed``, ``conflict``, ``gate_failed``, ``base_moved``,
+            ``no_op`` or ``error``.
+        story_id: The story being landed.
+        branch: The candidate branch the pass operated on.
+        tier: Which rung of the ladder this pass was.
+        integration_sha: Integration head observed at lock acquisition.
+        commit_sha: Candidate tip after any rebase.
+        tree_sha: Tree the re-gate was computed against.
+        rebased: ``True`` when a rebase was actually performed.
+        conflict_files: Conflicting paths, when ``status`` is ``conflict``.
+        qg_result: The re-gate result, when the re-gate ran.
+        observation: The tree-bound gate observation, when one was made.
+        error: Human-readable failure description.
+        lock_hold_ms: How long the critical section was held.
+
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: str
+    story_id: str
+    branch: str
+    tier: MergeTier = MergeTier.CLEAN
+    integration_sha: str = ""
+    commit_sha: str = ""
+    tree_sha: str = ""
+    rebased: bool = False
+    conflict_files: list[str] = []
+    qg_result: PostMergeQGResult | None = None
+    observation: GateObservation | None = None
+    error: str | None = None
+    lock_hold_ms: int = 0
+
+
+def land_candidate(
+    story_id: str,
+    project_root: Path,
+    candidate_branch: str,
+    config: Config | None = None,
+    *,
+    integration_ref: str = "HEAD",
+    expected_base_sha: str | None = None,
+    tier: MergeTier = MergeTier.CLEAN,
+    cleanup: bool = True,
+) -> LandOutcome:
+    """Run the whole bounded merge sequence for one candidate.
+
+    This is the body of the merge critical section and contains **no LLM
+    call**: recompute ``(ahead, behind)`` → rebase → land → re-gate → keep
+    or roll back.
+
+    The re-gate is what decides whether the land stands.  Getting the
+    post-rebase tree into the integration checkout *is* the fast-forward,
+    so the merge is applied provisionally, gated in place, and reset back
+    to ``integration_sha`` when the gate fails.  Nothing else can observe
+    the intermediate state — the caller holds the merge lock for the whole
+    sequence — so the tree that was gated is provably the tree that
+    remains.  A pre-rebase gate result never authorises a land, and the
+    re-gate is never skipped: ``behind == 0`` skips the *rebase*, not the
+    gate.
+
+    Args:
+        story_id: Story identifier.
+        project_root: Path to the main git repository.
+        candidate_branch: The branch to land — the story branch, or a
+            resolution branch produced outside the lock.
+        config: Optional configuration for gate command sourcing.
+        integration_ref: The integration head to land on.
+        expected_base_sha: When set, the pass aborts with ``base_moved``
+            if the integration head is no longer this commit.  A
+            resolution built against a stale base is discarded, not landed.
+        tier: The ladder rung this pass represents.
+        cleanup: Whether a successful land should clean up the branch and
+            worktree (through the no-data-loss guard).
+
+    Returns:
+        A :class:`LandOutcome`.
+
+    """
+    tag = f"[MERGE|{story_id}]"
+    repo_ok = ref_exists(project_root, integration_ref)
+    integration_sha = rev_parse(project_root, integration_ref) if repo_ok else ""
+
+    # --- recompute -------------------------------------------------------
+    if expected_base_sha and repo_ok and integration_sha != expected_base_sha:
+        logger.info(
+            "%s Integration head moved during resolution (%s -> %s) — discarding candidate",
+            tag,
+            expected_base_sha[:12],
+            integration_sha[:12],
+        )
+        return LandOutcome(
+            status="base_moved",
+            story_id=story_id,
+            branch=candidate_branch,
+            tier=tier,
+            integration_sha=integration_sha,
+        )
+
+    # --- rebase ----------------------------------------------------------
+    rebased = False
+    if repo_ok and ref_exists(project_root, candidate_branch):
+        ahead, _behind = count_ahead_behind(project_root, candidate_branch, integration_ref)
+        if ahead == 0:
+            logger.info("%s Candidate %s adds nothing — nothing to land", tag, candidate_branch)
+            return LandOutcome(
+                status="no_op",
+                story_id=story_id,
+                branch=candidate_branch,
+                tier=tier,
+                integration_sha=integration_sha,
+            )
+
+        outcome = rebase_branch(project_root, candidate_branch, integration_ref)
+        if not outcome.ok:
+            return LandOutcome(
+                status="conflict" if outcome.status == "conflict" else "error",
+                story_id=story_id,
+                branch=candidate_branch,
+                tier=tier,
+                integration_sha=integration_sha,
+                commit_sha=outcome.sha_before,
+                conflict_files=list(outcome.conflict_files),
+                error=outcome.error,
+            )
+        rebased = outcome.status == "rebased"
+
+    # --- land (provisionally) -------------------------------------------
+    merge_result = merge_story(
+        story_id,
+        project_root,
+        resolve=False,
+        branch_override=candidate_branch,
+        cleanup=False,
+        integration_ref=integration_ref,
+    )
+    if not merge_result.success:
+        return LandOutcome(
+            status="conflict" if merge_result.conflict_files else "error",
+            story_id=story_id,
+            branch=candidate_branch,
+            tier=tier,
+            integration_sha=integration_sha,
+            conflict_files=list(merge_result.conflict_files),
+            error=merge_result.error,
+        )
+
+    commit_sha = rev_parse(project_root) if repo_ok else ""
+    landed_tree = tree_sha(project_root) if repo_ok else ""
+
+    # --- re-gate, on the post-rebase tree --------------------------------
+    try:
+        qg_result = run_post_merge_qg(story_id, project_root, config)
+    except Exception as exc:
+        # A gate that could not run has not passed. The re-gate is never
+        # skipped, so the provisional land is undone and the ladder parks
+        # rather than letting an unrun gate authorise a merge.
+        logger.error("%s Re-gate could not run: %s", tag, exc, exc_info=True)
+        if repo_ok and integration_sha:
+            _run_git(["reset", "--hard", integration_sha], cwd=project_root, check=False)
+        return LandOutcome(
+            status="error",
+            story_id=story_id,
+            branch=candidate_branch,
+            tier=tier,
+            integration_sha=integration_sha,
+            commit_sha=commit_sha,
+            tree_sha=landed_tree,
+            rebased=rebased,
+            error=f"re-gate could not run: {exc}",
+        )
+    failed_gates = [g.name for g in qg_result.gate_results if not g.passed]
+    observation = GateObservation(
+        tree_sha=landed_tree,
+        commit_sha=commit_sha,
+        directory=str(project_root),
+        result="pass" if qg_result.all_passed else "fail",
+        classification="" if qg_result.all_passed else "code",
+        failed_gates=failed_gates,
+        duration_ms=qg_result.duration_ms,
+    )
+
+    if not qg_result.all_passed:
+        # The gate is binding. Undo the provisional land so the integration
+        # head never carries a tree that failed its own re-gate.
+        if repo_ok and integration_sha:
+            logger.warning(
+                "%s Re-gate failed on tree %s — rolling integration head back to %s",
+                tag,
+                landed_tree[:12],
+                integration_sha[:12],
+            )
+            _run_git(["reset", "--hard", integration_sha], cwd=project_root, check=False)
+        return LandOutcome(
+            status="gate_failed",
+            story_id=story_id,
+            branch=candidate_branch,
+            tier=tier,
+            integration_sha=integration_sha,
+            commit_sha=commit_sha,
+            tree_sha=landed_tree,
+            rebased=rebased,
+            qg_result=qg_result,
+            observation=observation,
+            error=(
+                f"Post-merge quality gate failed: {', '.join(failed_gates)}"
+                if failed_gates
+                else "Post-merge quality gate failed"
+            ),
+        )
+
+    # --- the land stands; only now is anything deleted -------------------
+    if cleanup:
+        _cleanup_after_merge(story_id, candidate_branch, project_root, tag, integration_ref)
+
+    return LandOutcome(
+        status="landed",
+        story_id=story_id,
+        branch=candidate_branch,
+        tier=tier,
+        integration_sha=integration_sha,
+        commit_sha=commit_sha,
+        tree_sha=landed_tree,
+        rebased=rebased,
+        qg_result=qg_result,
+        observation=observation,
+    )
+
+
+# ============================================================================
 # MergeQueue — Async Sequential Queue
 # ============================================================================
 
@@ -1135,6 +1739,7 @@ class MergeQueue:
         project_root: Path,
         config: Config | None = None,
         parallel_config: ParallelConfig | None = None,
+        integration_ref: str | None = None,
     ) -> None:
         """Initialise the merge queue for the given repository."""
         self._project_root = project_root
@@ -1143,6 +1748,28 @@ class MergeQueue:
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._lock = asyncio.Lock()
         self._done_ids: set[str] = set()
+        self._integration_ref = integration_ref or (
+            parallel_config.integration_branch
+            if parallel_config is not None and parallel_config.integration_branch
+            else "HEAD"
+        )
+
+    @property
+    def integration_ref(self) -> str:
+        """Return the reference stories land on. Never hard-coded to ``main``."""
+        return self._integration_ref
+
+    def _max_rebase_attempts(self) -> int:
+        """Return the ladder's rebase-attempt cap."""
+        if self._parallel_config is not None:
+            return self._parallel_config.max_rebase_attempts
+        return 2
+
+    def _resolution_timeout(self) -> int:
+        """Return the AI-resolution budget in seconds."""
+        if self._parallel_config is not None:
+            return self._parallel_config.conflict_resolution_timeout
+        return 600
 
     async def enqueue(self, story_id: str) -> None:
         """Add a story to the merge queue.
@@ -1170,70 +1797,245 @@ class MergeQueue:
             queue is empty.
 
         """
-        async with self._lock:
-            try:
-                story_id = self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return None
+        try:
+            story_id = self._queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
 
-            logger.info("[MERGE|%s] Processing merge", story_id)
-            try:
-                cr_timeout = (
-                    self._parallel_config.conflict_resolution_timeout
-                    if self._parallel_config is not None
-                    else 120
+        logger.info("[MERGE|%s] Processing merge", story_id)
+        try:
+            return await self._run_ladder(story_id)
+        finally:
+            self._queue.task_done()
+
+    # --------------------------------------------------------------------
+    # The ladder: clean -> auto -> ai-resolve -> park
+    # --------------------------------------------------------------------
+
+    async def _run_ladder(self, story_id: str) -> MergeResult:
+        """Escalate a story through the merge tiers until it lands or parks.
+
+        Only :meth:`_attempt_land` takes the merge lock, and it holds it
+        for a short bounded sequence.  Conflict resolution — the expensive,
+        uncertain, LLM-driven rung — runs between lock holds, so a story
+        stuck in resolution never blocks another story from landing.
+        """
+        story_branch = _branch_name(story_id)
+        candidate = story_branch
+        expected_base: str | None = None
+        attempts: list[MergeAttempt] = []
+        observations: list[GateObservation] = []
+        resolutions: list[tuple[str, Path]] = []
+        tier = MergeTier.CLEAN
+        last_error: str | None = None
+        last_conflicts: list[str] = []
+        max_attempts = self._max_rebase_attempts()
+
+        try:
+            for attempt_no in range(1, max_attempts + 1):
+                outcome = await self._attempt_land(
+                    story_id,
+                    candidate,
+                    tier=tier,
+                    expected_base_sha=expected_base,
                 )
+                attempts.append(_attempt_record(outcome))
+                if outcome.observation is not None:
+                    observations.append(outcome.observation)
+                last_error = outcome.error
+
+                if outcome.status in ("landed", "no_op"):
+                    return MergeResult(
+                        success=True,
+                        story_id=story_id,
+                        landed=True,
+                        tier=outcome.tier,
+                        qg_result=outcome.qg_result,
+                        attempts=attempts,
+                        gate_observations=observations,
+                        landed_commit_sha=outcome.commit_sha or None,
+                    )
+
+                if outcome.status == "gate_failed":
+                    return MergeResult(
+                        success=True,
+                        story_id=story_id,
+                        landed=False,
+                        tier=outcome.tier,
+                        qg_result=outcome.qg_result,
+                        error=outcome.error,
+                        attempts=attempts,
+                        gate_observations=observations,
+                    )
+
+                if outcome.status == "base_moved":
+                    # Optimistic retry: the resolution was built on a base
+                    # that has since moved, so it is thrown away and the
+                    # ladder restarts from the story branch.
+                    candidate = story_branch
+                    expected_base = None
+                    tier = MergeTier.AUTO
+                    continue
+
+                if outcome.status != "conflict":
+                    break
+
+                last_conflicts = list(outcome.conflict_files)
+
+                # ---- OUTSIDE THE LOCK: speculative AI resolution --------
+                if attempt_no >= max_attempts:
+                    last_error = outcome.error or "conflict"
+                    break
+
+                tier = MergeTier.AI_RESOLVE
+                resolution = await asyncio.to_thread(
+                    resolve_on_resolution_branch,
+                    story_id,
+                    self._project_root,
+                    candidate,
+                    self._integration_ref,
+                    attempt=attempt_no,
+                    timeout=self._resolution_timeout(),
+                    base_dir=(
+                        self._parallel_config.worktree_base_dir
+                        if self._parallel_config is not None
+                        else None
+                    ),
+                )
+                if not resolution.ok or resolution.resolution_branch is None:
+                    last_error = resolution.error or "conflict resolution failed"
+                    break
+
+                candidate = resolution.resolution_branch
+                expected_base = resolution.base_sha
+                if resolution.worktree_path is not None:
+                    resolutions.append(
+                        (resolution.resolution_branch, resolution.worktree_path)
+                    )
+
+            return self._park(
+                story_id, story_branch, attempts, observations, last_error,
+                last_conflicts,
+            )
+        finally:
+            # Resolution branches are scaffolding: whatever landed is on the
+            # integration head, and whatever did not is still on the story
+            # branch. Neither case leaves unique work here.
+            for branch, wt in resolutions:
+                _discard_resolution(self._project_root, branch, wt)
+
+    async def _attempt_land(
+        self,
+        story_id: str,
+        candidate: str,
+        *,
+        tier: MergeTier,
+        expected_base_sha: str | None,
+    ) -> LandOutcome:
+        """Run one bounded pass through the merge critical section.
+
+        Everything that must be atomic is inside the lock; nothing that
+        needs an LLM is.  ``enter_merge_lock`` marks the section in a
+        context variable that ``asyncio.to_thread`` carries into the worker
+        thread, so a provider call reached through any depth of helper
+        indirection still sees that the lock is held and refuses.
+        """
+        async with self._lock:
+            # The sentinel's extent must match the lock's exactly. Anything
+            # released early would leave a window where the lock is held but
+            # a provider call would not be refused.
+            token = enter_merge_lock()
+            started = _now_ms()
+            try:
                 try:
-                    result = await asyncio.to_thread(
-                        merge_story,
+                    outcome = await asyncio.to_thread(
+                        land_candidate,
                         story_id,
                         self._project_root,
-                        resolve=True,
-                        conflict_resolution_timeout=cr_timeout,
+                        candidate,
+                        self._config,
+                        integration_ref=self._integration_ref,
+                        expected_base_sha=expected_base_sha,
+                        tier=tier,
                     )
                 except ParallelError as exc:
-                    logger.error(
-                        "[MERGE|%s] Fatal merge error: %s", story_id, exc,
-                    )
-                    return MergeResult(
-                        success=False,
-                        story_id=story_id,
+                    logger.error("[MERGE|%s] Fatal merge error: %s", story_id, exc)
+                    outcome = LandOutcome(
+                        status="error", story_id=story_id, branch=candidate, tier=tier,
                         error=str(exc),
                     )
                 except Exception as exc:
                     logger.error(
-                        "[MERGE|%s] Unexpected merge error: %s",
-                        story_id,
-                        exc,
-                        exc_info=True,
+                        "[MERGE|%s] Unexpected merge error: %s", story_id, exc, exc_info=True,
                     )
-                    return MergeResult(
-                        success=False,
-                        story_id=story_id,
+                    outcome = LandOutcome(
+                        status="error", story_id=story_id, branch=candidate, tier=tier,
                         error=f"Unexpected error: {exc}",
                     )
 
-                # Run post-merge QG only on successful merge
-                if result.success:
-                    try:
-                        qg_result = await asyncio.to_thread(
-                            run_post_merge_qg,
-                            story_id,
-                            self._project_root,
-                            self._config,
-                        )
-                        result = result.model_copy(update={"qg_result": qg_result})
-                    except Exception:
-                        logger.error(
-                            "[MERGE|%s] Post-merge QG failed with unexpected error "
-                            "(merge was successful, returning result without QG)",
-                            story_id,
-                            exc_info=True,
-                        )
-
-                return result
+                held_ms = _now_ms() - started
+                logger.info(
+                    "[MERGE|%s] Critical section held %dms (tier=%s, outcome=%s)",
+                    story_id,
+                    held_ms,
+                    tier.value,
+                    outcome.status,
+                )
+                return outcome.model_copy(update={"lock_hold_ms": held_ms})
             finally:
-                self._queue.task_done()
+                exit_merge_lock(token)
+
+    def _park(
+        self,
+        story_id: str,
+        story_branch: str,
+        attempts: list[MergeAttempt],
+        observations: list[GateObservation],
+        reason: str | None,
+        conflict_files: list[str] | None = None,
+    ) -> MergeResult:
+        """End the ladder in ``park`` — never in a delete."""
+        attempts = [
+            *attempts,
+            MergeAttempt(
+                tier=MergeTier.PARK,
+                branch=story_branch,
+                commit_sha=_safe_rev(self._project_root, story_branch),
+                tree_sha=_safe_tree(self._project_root, story_branch),
+                integration_sha=_safe_rev(self._project_root, self._integration_ref),
+                outcome="parked",
+                detail=reason or "merge ladder exhausted",
+            ),
+        ]
+        wt = find_checkout_dir(self._project_root, story_branch)
+        try:
+            record_parked_merge(
+                self._project_root,
+                ParkedMerge(
+                    story_id=story_id,
+                    branch=story_branch,
+                    worktree_path=str(wt) if wt is not None else None,
+                    integration_head=_safe_rev(self._project_root, self._integration_ref),
+                    reason=reason or "merge ladder exhausted",
+                    attempts=attempts,
+                ),
+            )
+        except ParallelError:
+            logger.warning(
+                "[MERGE|%s] Could not write parked-merge record", story_id, exc_info=True,
+            )
+
+        return MergeResult(
+            success=False,
+            story_id=story_id,
+            landed=False,
+            parked=True,
+            conflict_files=list(conflict_files or []),
+            tier=MergeTier.PARK,
+            error=reason or "merge ladder exhausted",
+            attempts=attempts,
+            gate_observations=observations,
+        )
 
     async def process_merge_with_fix(self) -> MergeResult | None:
         """Dequeue and merge the next story, with automatic fix retries.
@@ -1256,17 +2058,22 @@ class MergeQueue:
         if result is None:
             return None
 
-        # If merge itself failed, skip fix entirely
+        # If the merge itself failed or parked, skip fix entirely
         if not result.success:
             return result
 
-        # If QG passed (or was not run), no fix needed
+        # If the re-gate passed (or none ran), no fix needed
         if result.qg_result is None or result.qg_result.all_passed:
             if result.qg_result is not None and result.qg_result.all_passed:
                 update_sprint_status_done(
                     result.story_id, self._project_root, self._done_ids,
                 )
                 self._done_ids.add(result.story_id)
+            return result
+
+        # An environment failure has no code for the fixer to fix. Routing is
+        # downgraded; visibility is not — the failure is still reported.
+        if not _assert_fix_routable(result.qg_result):
             return result
 
         # Determine max retries
@@ -1278,9 +2085,13 @@ class MergeQueue:
         if max_retries == 0:
             return result
 
-        # Enter fix loop
+        # Enter fix loop. The re-gate is binding, so a failure has already
+        # rolled the integration head back; the failing code is on the
+        # story's own branch and that is where it is fixed, outside the
+        # merge lock, before the ladder is re-entered.
         story_id = result.story_id
         latest_qg: PostMergeQGResult = result.qg_result
+        work_dir = find_checkout_dir(self._project_root, _branch_name(story_id))
         for attempt in range(1, max_retries + 1):
             logger.info(
                 "[FIX-QG|post-merge|%s] Fix attempt %d of %d",
@@ -1295,6 +2106,7 @@ class MergeQueue:
                     self._project_root,
                     self._config,
                     attempt,
+                    work_dir=work_dir,
                 )
             except ParallelError:
                 # Claude CLI not found — propagate
@@ -1320,6 +2132,14 @@ class MergeQueue:
         result = result.model_copy(update={"qg_result": latest_qg})
 
         if latest_qg.all_passed:
+            if work_dir is not None and not result.landed:
+                # The fix was made on the candidate; it still has to pass
+                # the in-lock recompute, rebase and re-gate like anything
+                # else. Nothing lands on a gate result computed elsewhere.
+                relanded = await self._run_ladder(story_id)
+                if not relanded.landed:
+                    return relanded
+                result = relanded
             update_sprint_status_done(
                 story_id, self._project_root, self._done_ids,
             )

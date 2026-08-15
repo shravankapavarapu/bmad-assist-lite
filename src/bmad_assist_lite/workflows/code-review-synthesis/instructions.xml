@@ -25,7 +25,7 @@
 
     <step id="4" name="Apply Fixes to Source Code">
       Apply validated fixes using Edit tool.
-      Run pytest after each group of fixes.
+      After each group of fixes, run the tests covering the files that group touched.
       Revert if tests break.
     </step>
 
@@ -34,16 +34,23 @@
       Keep refactoring scope minimal and targeted.
     </step>
 
-    <step id="6" name="Runtime Verification">
+    <step id="6" name="Runtime Verification (Changed Surface)">
       Detect project toolchain from build system files (package.json, pyproject.toml,
-      pom.xml, build.gradle, Cargo.toml, Makefile) and run verification:
+      pom.xml, build.gradle, Cargo.toml, Makefile) and verify the surface you changed.
 
-      1. Lint/Type Check: Run detected lint and typecheck commands
-      2. Build: Verify project builds successfully
-      3. Test Suite: Run full test suite — all tests must pass
-      4. If failures caused by applied fixes: revert that fix, re-run verification
+      You MUST execute these commands yourself. Reporting "requires manual run", or
+      deferring execution to a later stage, is not verification — it is how broken
+      code reaches a green review.
 
-      Record all verification results for the synthesis report.
+      1. Lint/Type Check: run the detected lint and typecheck commands
+      2. Build: verify the project still builds
+      3. Tests: run the tests covering the files you touched — the tests for this task
+         and the tests that exercise the code paths those files changed. Scope the run
+         to that surface; the deterministic quality gate phase owns the whole-suite
+         verdict and runs it immediately after this phase.
+      4. If a failure was caused by an applied fix: revert that fix, re-run
+
+      Record all verification results, including the scope you ran, for the synthesis report.
     </step>
 
     <step id="7" name="Update Story File">
@@ -61,10 +68,65 @@
       - Applied fixes with before/after
       - Rejected findings with rationale
       - Reverted fixes with regression details (if any)
-      - Runtime verification results (Lint, Type Check, Build, Tests: Pass/Fail)
+      - Runtime verification results (Lint, Type Check, Build, Tests: Pass/Fail) and the
+        test scope that was actually executed
       - Final quality assessment
 
       IMPORTANT: Create the {report_dir} directory if it does not exist. Do NOT write reports to any other location.
+    </step>
+
+    <step id="9" name="Emit the Structured Finding Record">
+      CRITICAL: Your response MUST end with the machine-readable finding block
+      below. It is parsed, hashed, and used to decide whether another fix round
+      is worth running. A response without this block is recorded as a PARSE
+      FAILURE — it is NOT read as a clean review, and it blocks the story.
+
+      Emit every finding that REMAINS after your fixes. A finding you fixed in
+      step 5 is not a remaining finding and must be omitted. If nothing remains,
+      emit an empty list — that is how a clean review is expressed.
+
+      Assign severity CENTRALLY, here, after reading the code. Do not copy a
+      reviewer's self-reported rating: read the actual call sites and judge real
+      reachability, not the worst theoretical reading of a diff hunk. A finding
+      that cannot actually be reached is `low` however alarming it sounds.
+
+      Fields, all required unless marked optional:
+      - `file`: repo-relative path.
+      - `anchor`: the symbol, signature or expression the finding is about
+        (e.g. `def load_config` or `items[0]`). This is the finding's identity
+        across passes — line numbers shift, anchors do not. Be specific and
+        stable; do NOT put a line number in it.
+      - `line`: integer, optional, advisory only.
+      - `severity`: one of `low`, `medium`, `high`.
+      - `bucket`: the ROOT CAUSE, independent of severity:
+          `intent_gap` - the code diverges from what the story asked for
+          `bad_spec`   - the story itself is wrong or ambiguous
+          `patch`      - a localized defect with a localized fix
+          `defer`      - real, but out of scope on the authority of the story's
+                         stated intent. A finding may be deferred ONLY on that
+                         authority, never because the diff's shape suggests it.
+          `reject`     - not a real problem
+        `defer` and `reject` never trigger a fix round, whatever their severity.
+      - `title`: one line, specific. Avoid line numbers inside the text.
+      - `detail`: optional, free-form explanation.
+
+      <![CDATA[
+      <!-- BMAD-FINDINGS -->
+      ```json
+      [
+        {
+          "file": "src/example/config.py",
+          "anchor": "def load_config",
+          "line": 42,
+          "severity": "high",
+          "bucket": "patch",
+          "title": "Config path is used before it is validated",
+          "detail": "A relative path from the caller reaches open() unchecked."
+        }
+      ]
+      ```
+      <!-- /BMAD-FINDINGS -->
+      ]]>
     </step>
   </steps>
 </instructions>

@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from bmad_assist_lite.core.state import Phase, State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 class FixQualityGateHandler(BaseHandler):
     """Master LLM fixes quality gate failures."""
+
+    autonomy = AutonomyLevel.EXECUTE
+    """Fixes the failing gate and re-runs its commands."""
 
     @property
     def phase_name(self) -> str:

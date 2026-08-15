@@ -654,9 +654,14 @@ def register(registry):
 
 ```python
 # .bmad-assist-lite/plugins/deep_verify_handler.py
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 
 class DeepVerifyHandler(BaseHandler):
+    # Every phase declares what it is permitted to do. There is no default:
+    # READ_ONLY (Read/Glob/Grep), WRITE (also edits, no shell), or EXECUTE.
+    autonomy = AutonomyLevel.READ_ONLY
+
     @property
     def phase_name(self):
         return "deep_verify"

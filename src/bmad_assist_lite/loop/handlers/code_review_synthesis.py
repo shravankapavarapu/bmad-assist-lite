@@ -11,9 +11,17 @@ import subprocess
 from typing import Any
 
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
+from bmad_assist_lite.loop.review_loop import ReviewDecision, decide_review_loop
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers.base import write_progress
+from bmad_assist_lite.validation.findings import (
+    FindingParseError,
+    FindingSet,
+    parse_findings,
+    render_findings_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +77,9 @@ def _strip_review_narration(text: str) -> str:
 
 class CodeReviewSynthesisHandler(BaseHandler):
     """Master LLM synthesizes multi-LLM code review reports."""
+
+    autonomy = AutonomyLevel.EXECUTE
+    """Single master, so it is safe to run the build/test/lint commands."""
 
     @property
     def phase_name(self) -> str:
@@ -130,6 +141,116 @@ class CodeReviewSynthesisHandler(BaseHandler):
                 f"## Evidence Score: {score} -> {verdict}\n"
                 f"<!-- END PRE-CALCULATED EVIDENCE SCORE -->\n"
             )
+
+    def _reset_review_state_for_story(self, state: State) -> None:
+        """Start a fresh review-loop budget when the story changes.
+
+        The hashes are per-story by definition — a finding set from the last
+        story colliding with this one's would read as non-convergence.
+        """
+        story_id = state.current_story
+        if state.review_story_id != story_id:
+            state.review_story_id = story_id
+            state.review_iteration = 0
+            state.review_finding_hashes = []
+
+    def _parse_review_findings(self, text: str) -> FindingSet | None:
+        """Parse the synthesis response, returning ``None`` on a parse failure.
+
+        ``None`` is not an empty finding set. An empty set means "clean
+        review"; a parse failure means we do not know, and the caller must
+        never collapse the two.
+        """
+        try:
+            return parse_findings(text)
+        except FindingParseError as exc:
+            logger.warning(
+                "Could not parse review findings for story: %s. The result is "
+                "NOT being treated as a clean review.",
+                exc,
+            )
+            return None
+
+    def _record_findings_artifact(
+        self, findings: FindingSet | None, decision: ReviewDecision, story_id: str
+    ) -> None:
+        """Persist the machine-readable finding set beside the human report.
+
+        Written whatever the outcome, including for below-threshold findings:
+        they are culled from the loop, not from the record.
+        """
+        cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path = cache_dir / f"review-findings-{story_id}.md"
+
+        lines = [
+            f"# Review findings — story {story_id}",
+            "",
+            f"- outcome: `{decision.outcome.value}`",
+            f"- reason: {decision.reason}",
+            f"- finding-set hash: `{decision.finding_hash or '(none)'}`",
+            f"- blocking findings: {decision.blocking_count}",
+            "",
+        ]
+        if findings is None:
+            lines.append(
+                "The review response could not be parsed into findings. This is "
+                "recorded as a parse failure, not as a clean review."
+            )
+        else:
+            counts = findings.counts_by_severity()
+            lines.append(
+                "Counts by severity: "
+                + ", ".join(f"{name}={count}" for name, count in counts.items())
+            )
+            lines.append("")
+            lines.append(render_findings_block(findings.findings))
+
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not write review findings artifact: %s", exc)
+
+    def _run_review_loop(self, state: State, response: str) -> ReviewDecision:
+        """Decide whether this story earns another fix round, and record it."""
+        story_id = state.current_story or "unknown"
+        self._reset_review_state_for_story(state)
+
+        findings = self._parse_review_findings(response)
+        decision = decide_review_loop(
+            findings,
+            iteration=state.review_iteration,
+            max_iterations=self.config.loop.review_max_iterations,
+            previous_hashes=tuple(state.review_finding_hashes),
+            review=self.config.review,
+            story_id=story_id,
+        )
+
+        if decision.finding_hash:
+            state.review_finding_hashes.append(decision.finding_hash)
+
+        self._record_findings_artifact(findings, decision, story_id)
+
+        if decision.blocked:
+            if story_id not in state.review_blocked_stories:
+                state.review_blocked_stories.append(story_id)
+            logger.warning(
+                "Review loop stopped for story %s: %s (%s)",
+                story_id,
+                decision.outcome.value,
+                decision.reason,
+            )
+            write_progress(decision.console_line)
+        else:
+            logger.info(
+                "Review loop for story %s: %s (%s)",
+                story_id,
+                decision.outcome.value,
+                decision.reason,
+            )
+            write_progress(f"  Review loop: {decision.outcome.value} — {decision.reason}")
+
+        return decision
 
     def _capture_git_diff_stat(self) -> str | None:
         """Capture git diff --stat to show what files changed."""
@@ -276,7 +397,16 @@ class CodeReviewSynthesisHandler(BaseHandler):
                 outputs["evidence_score"] = evidence_data.get("total_score")
                 outputs["evidence_verdict"] = evidence_data.get("verdict")
 
-            return PhaseResult.ok(outputs)
+            decision = self._run_review_loop(state, result.stdout)
+            outputs["review_outcome"] = decision.outcome.value
+            outputs["review_finding_hash"] = decision.finding_hash
+            outputs["review_blocking_findings"] = decision.blocking_count
+
+            return PhaseResult(
+                success=True,
+                next_phase=decision.next_phase,
+                outputs=outputs,
+            )
 
         except Exception as e:
             logger.error("Code review synthesis failed: %s", e, exc_info=True)

@@ -13,6 +13,7 @@ from typing import Any
 
 from bmad_assist_lite.core.paths import get_paths
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers.base import write_progress
@@ -22,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 class ValidateStorySynthesisHandler(BaseHandler):
     """Master LLM synthesizes multi-LLM validation reports."""
+
+    autonomy = AutonomyLevel.EXECUTE
+    """Single master; unrestricted today."""
 
     @property
     def phase_name(self) -> str:

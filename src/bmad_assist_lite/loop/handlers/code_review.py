@@ -6,8 +6,9 @@ import os
 from typing import Any
 
 from bmad_assist_lite.core.async_utils import run_async_in_thread
-from bmad_assist_lite.core.config import get_phase_timeout
+from bmad_assist_lite.core.config import get_phase_timeout, self_review_warning
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers import get_provider
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 class CodeReviewHandler(BaseHandler):
     """Multi-LLM code review with Evidence Score aggregation."""
 
+    autonomy = AutonomyLevel.READ_ONLY
+    """Multi-LLM and parallel: read-only checks only, no command execution."""
+
     @property
     def phase_name(self) -> str:
         """Return the phase name."""
@@ -27,6 +31,14 @@ class CodeReviewHandler(BaseHandler):
     def build_context(self, state: State) -> dict[str, Any]:
         """Build template context for this phase."""
         return self._build_common_context(state)
+
+    def _warn_if_self_review(self) -> None:
+        """Announce a degraded reviewer configuration at the point of harm."""
+        warning = self_review_warning(self.config, phase=self.phase_name)
+        if warning is None:
+            return
+        logger.warning("%s", warning)
+        write_progress(f"  WARNING: {warning}")
 
     def _calculate_evidence_aggregate(
         self,
@@ -98,6 +110,7 @@ class CodeReviewHandler(BaseHandler):
     def execute(self, state: State) -> PhaseResult:
         """Run parallel multi-LLM code review with Evidence Score aggregation."""
         try:
+            self._warn_if_self_review()
             prompt = self.render_prompt(state)
 
             multi_configs = self.config.providers.multi

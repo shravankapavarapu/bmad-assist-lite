@@ -19,6 +19,12 @@ import yaml
 
 from bmad_assist_lite import __version__
 
+# Exit codes are a public CLI contract: 0 = completed, 1 = failed,
+# 130 = interrupted, and this one for "a run budget stopped the run cleanly".
+# It is deliberately distinct from 1 so an unattended run's non-zero exit can
+# be told apart from a crash without reading the log.
+BUDGET_EXHAUSTED_EXIT_CODE = 3
+
 app = typer.Typer(
     name="bmad-assist-lite",
     help="Lightweight BMAD methodology automation with Multi-LLM orchestration.",
@@ -32,11 +38,17 @@ parallel_app = typer.Typer(
 )
 app.add_typer(parallel_app, name="parallel")
 
-from bmad_assist_lite.parallel.cli import parallel_run, parallel_status, parallel_unblock  # noqa: E402, I001
+from bmad_assist_lite.parallel.cli import (  # noqa: E402, I001
+    parallel_list_parked,
+    parallel_run,
+    parallel_status,
+    parallel_unblock,
+)
 
 parallel_app.command(name="run")(parallel_run)
 parallel_app.command(name="status")(parallel_status)
 parallel_app.command(name="unblock")(parallel_unblock)
+parallel_app.command(name="list-parked")(parallel_list_parked)
 
 
 def _setup_logging(verbosity: int) -> None:
@@ -267,6 +279,9 @@ def run(
 
         if exit_reason == LoopExitReason.COMPLETED:
             typer.echo("\nEpic teardown completed successfully!")
+        elif exit_reason == LoopExitReason.BUDGET_EXHAUSTED:
+            typer.echo("\nRun budget exhausted — stopped cleanly. Use --resume to continue.")
+            raise typer.Exit(BUDGET_EXHAUSTED_EXIT_CODE)
         elif exit_reason == LoopExitReason.INTERRUPTED:
             typer.echo("\nTeardown interrupted.", err=True)
             raise typer.Exit(130)
@@ -482,6 +497,7 @@ def run(
         stories_for_epic=stories_for_epic,
         resume_state=resume_state,
         single_story=single_story,
+        resume=resume_state is not None,
     )
 
     # Close file log handler
@@ -492,6 +508,9 @@ def run(
 
     if exit_reason == LoopExitReason.COMPLETED:
         typer.echo("\nAll epics completed successfully!")
+    elif exit_reason == LoopExitReason.BUDGET_EXHAUSTED:
+        typer.echo("\nRun budget exhausted — stopped cleanly. Use --resume to continue.")
+        raise typer.Exit(BUDGET_EXHAUSTED_EXIT_CODE)
     elif exit_reason == LoopExitReason.INTERRUPTED:
         typer.echo("\nLoop interrupted. Use --resume to continue.")
         raise typer.Exit(130)
@@ -602,7 +621,10 @@ providers:
   master:
     provider: claude          # claude, gemini, codex, cursor
     model: claude-opus-4-6    # Pin Opus 4.6. To use 4.7, set `model: claude-opus-4-7` and add `effort: max`.
-  multi:
+  multi:                      # independent reviewers/validators.
+                              # Leaving this empty makes the master review its own
+                              # work, which is not a review. Keep at least one entry
+                              # that differs from `master` above.
     - provider: gemini
       model: gemini-3.1-pro-preview
     - provider: claude
@@ -726,13 +748,62 @@ def reset_lock(
         "-p",
         help="Path to project directory.",
     ),
+    audit: bool = typer.Option(
+        False,
+        "--audit",
+        help="Report every piece of stale state without removing anything.",
+    ),
+    clean: bool = typer.Option(
+        False,
+        "--clean",
+        help="Remove the stale state --audit offers. Never removes anything "
+        "that holds work.",
+    ),
 ) -> None:
-    """Remove stale lock file.
+    """Remove a stale lock file, or audit and clean stale state.
 
-    Use this if a previous run crashed and left a lock file behind.
+    Use this if a previous run crashed and left state behind.
+
+    With no flags this removes the lock file, as it always has. ``--audit``
+    widens it to the whole stale-state surface — orphaned temp files, corrupt
+    or stale state files, a stale story queue, a resume checkpoint parked on
+    finished work, and abandoned worktrees — and reports without touching
+    anything. ``--clean`` is the only way to make it destructive, and even
+    then it never removes a worktree holding unmerged commits, never removes
+    one belonging to a parked merge, and never terminates a process.
     """
     project = project.resolve()
     lock_path = project / ".bmad-assist-lite" / "running.lock"
+
+    if audit or clean:
+        from bmad_assist_lite.loop.state_hygiene import sweep_stale_state
+
+        report = sweep_stale_state(project, dry_run=not clean)
+
+        if not report.findings:
+            typer.echo("No stale state detected.")
+            return
+
+        typer.echo(f"Stale state under {project}:\n")
+        for finding in report.findings:
+            if finding.removable:
+                marker = "REMOVED" if finding.path in report.removed else "offer"
+                typer.echo(f"  [{marker}] {finding.item}: {finding.path}")
+                typer.echo(f"           {finding.detail}")
+            else:
+                typer.echo(f"  [KEPT ] {finding.item}: {finding.path}")
+                typer.echo(f"           {finding.detail}")
+                typer.echo(f"           kept because: {finding.protected_reason}")
+
+        if report.dry_run:
+            offers = len(report.offers)
+            typer.echo(
+                f"\nDry run — nothing was removed. {offers} item(s) would be "
+                "removed by: reset-lock --clean"
+            )
+        else:
+            typer.echo(f"\nRemoved {len(report.removed)} item(s).")
+        return
 
     if lock_path.exists():
         lock_path.unlink()
@@ -928,3 +999,7 @@ def fetch_docs(
             typer.echo(f"  - {name}")
     else:
         typer.echo("No library documentation found or fetched.")
+
+
+if __name__ == "__main__":
+    app()

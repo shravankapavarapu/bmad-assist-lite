@@ -54,7 +54,8 @@ Sprint-status.yaml is the **single source of truth** for story discovery and pro
 
 Workflow templates include tech-stack agnostic patterns ported from production bmad-assist usage:
 
-- **`create-story/template.md`** — Includes `<!-- QUALITY-GATE: BLOCKING -->` sections: Testing Requirements (unit/negative/integration tests) and Quality Gates table (lint, typecheck, build, tests, runtime)
+- **`create-story/template.md`** — Includes a `## Testing Requirements` section (unit/negative/integration tests) and a `## Quality Gates` table (lint, typecheck, build, tests, runtime) whose rows are parsed by `core/quality_gates.py::parse_quality_gates_table`.
+  *(Corrected 2026-08-11: this previously described `<!-- QUALITY-GATE: BLOCKING -->` markers. **No such marker exists** in the template or anywhere in `src/`. The claim had propagated into ADR-0008 §1(c) and REQ-04.1, where it would have made the create-story skip predicate reject every story the tool itself generates.)*
 - **`dev-story/instructions.xml`** — 9 steps: Load Story → Load Context → Detect Toolchain → Detect Review Continuation → Implement Tasks (TDD + negative tests) → Run Validations → Quality Gate Validation (BLOCKING) → Story Completion → Completion Communication
 - **`code-review/checklist.md`** — Includes Story Test Requirements (BLOCKING), Runtime Verification (deferred to synthesis), and BLOCKING ISSUES summary
 - **`code-review/instructions.xml`** — Step 3 includes read-only Story Test Requirements Check (NO command execution — multi-LLM parallel safety)
@@ -184,6 +185,11 @@ loop:
   story: [create_story, validate_story, validate_story_synthesis,
           dev_story, code_review, code_review_synthesis, quality_gate]
   epic_teardown: [epic_quality_gate, retrospective]
+  # Run-level budget — both optional, both default to null (unlimited).
+  # On exhaustion the loop saves state, prints which budget ran out and how to
+  # continue, and exits with code 3 (distinct from 1 = failed, 130 = interrupted).
+  max_stories: null   # stop after N stories; resume with `run --resume`
+  max_runtime: null   # stop after N wall-clock seconds
 
 timeouts:
   default: 300
@@ -218,7 +224,23 @@ parallel:
   copy_strict: false           # true = error on missing copy source, false = warn
   bootstrap_timeout: 120       # per-command timeout in seconds for setup/validation
 
+# Bounded review -> fix -> re-review loop
+loop:
+  review_max_iterations: 1  # fix rounds per story; 0 disables the loop entirely
+
+review:
+  blocking_severity: medium   # low|medium|high — below this, findings are recorded only
+  followup_medium_weight: 3   # follow-up score: any(high) or 3*medium + 1*low >= threshold
+  followup_low_weight: 1
+  followup_threshold: 5
+
 # Auto-commit story changes after quality gate pass/fail
 auto_commit:
   enabled: true  # default
+
+# Retain forensic artifacts (synthesis-diff-*, qa-failures-*) across story
+# transitions by archiving them into cache/forensics/<story_id>/
+forensics:
+  enabled: true      # false = pre-retention behaviour (artifacts swept with the cache)
+  max_stories: 20    # retention cap; oldest story archives evicted first
 ```

@@ -28,6 +28,7 @@ from bmad_assist_lite.providers.base import (
     ExitStatus,
     ProviderResult,
     format_tag,
+    is_hermetic,
     resolve_cli_path,
     write_progress,
 )
@@ -274,6 +275,7 @@ class CodexProvider(BaseProvider):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Execute Codex CLI with NDJSON streaming and collector integration.
@@ -291,6 +293,7 @@ class CodexProvider(BaseProvider):
             settings_file: Optional path to provider settings file (unused).
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Accepted for signature compatibility and ignored.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
@@ -307,6 +310,12 @@ class CodexProvider(BaseProvider):
 
         if timeout <= 0:
             raise ValueError(f"timeout must be positive, got {timeout}")
+
+        if effort:
+            logger.debug("Codex ignores effort=%s (Claude-only feature)", effort)
+
+        if is_hermetic():
+            logger.debug("Codex ignores hermetic=True (Claude-only mechanism)")
 
         effective_model = model or self.default_model or "codex-mini-latest"
 

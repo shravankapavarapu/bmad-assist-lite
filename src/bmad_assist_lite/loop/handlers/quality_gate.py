@@ -8,9 +8,15 @@ import logging
 import re
 from pathlib import Path
 
-from bmad_assist_lite.core.command_runner import CommandResult, clean_test_output, run_command
+from bmad_assist_lite.core.command_runner import clean_test_output
 from bmad_assist_lite.core.config import Config
-from bmad_assist_lite.core.paths import get_paths
+from bmad_assist_lite.core.gate_runner import (
+    GateClassification,
+    GateCommand,
+    GateRunnerError,
+    GateRunResult,
+    run_gates,
+)
 from bmad_assist_lite.core.quality_gates import (
     QualityGateEntry,
     parse_quality_gates_table,
@@ -19,6 +25,7 @@ from bmad_assist_lite.core.quality_gates import (
 )
 from bmad_assist_lite.core.state import Phase, State
 from bmad_assist_lite.core.toolchain import detect_toolchain
+from bmad_assist_lite.loop.story_paths import resolve_story_path
 from bmad_assist_lite.loop.types import PhaseResult
 from bmad_assist_lite.providers.base import write_progress
 
@@ -136,28 +143,7 @@ class QualityGateHandler:
 
     def _resolve_story_path(self, state: State) -> Path | None:
         """Resolve story file path from epic/story numbers."""
-        paths = get_paths()
-        story_id = state.current_story
-        if not story_id:
-            return None
-
-        parts = story_id.split(".")
-        if len(parts) != 2:
-            return None
-
-        epic_num, story_num = parts
-
-        # Try exact name first: story-11.4.md
-        story_file = paths.stories_dir / f"story-{epic_num}.{story_num}.md"
-        if story_file.exists():
-            return story_file
-
-        # Try alternate naming convention: 11-4-*.md
-        matches = list(paths.stories_dir.glob(f"{epic_num}-{story_num}-*.md"))
-        if matches:
-            return matches[0]
-
-        return None
+        return resolve_story_path(state.current_story)
 
     def _get_commands(self, state: State) -> list[QualityGateEntry]:
         """Get quality gate commands from story file, config, or auto-detect."""
@@ -209,9 +195,7 @@ class QualityGateHandler:
             return self.config.quality_gate.command_timeout
         return 120
 
-    def _write_failure_report(
-        self, state: State, failures: list[tuple[QualityGateEntry, CommandResult]]
-    ) -> Path:
+    def _write_failure_report(self, state: State, run: GateRunResult) -> Path:
         """Write failure report to cache directory."""
         cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -219,12 +203,13 @@ class QualityGateHandler:
         story_id = state.current_story or "unknown"
         report_path = cache_dir / f"qa-failures-{story_id}.md"
 
-        lines = [f"# Quality Gate Failures — Story {story_id}\n"]
-        for entry, result in failures:
-            lines.append(f"\n## Failed: {entry.name}\n")
-            lines.append(f"**Command:** `{result.command}`\n")
-            lines.append(f"**Exit Code:** {result.exit_code}\n")
-            raw_output = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+        lines = [f"# Quality Gate Failures \u2014 Story {story_id}\n"]
+        for outcome in run.failures:
+            lines.append(f"\n## Failed: {outcome.name}\n")
+            lines.append(f"**Command:** `{outcome.command}`\n")
+            lines.append(f"**Exit Code:** {outcome.exit_code}\n")
+            lines.append(f"**Classification:** {run.classification_label(outcome)}\n")
+            raw_output = ((outcome.stdout or "") + "\n" + (outcome.stderr or "")).strip()
             output = clean_test_output(raw_output)
             output = _deduplicate_test_output(output)
             lines.append(f"**Output:**\n```\n{output}\n```\n")
@@ -233,51 +218,103 @@ class QualityGateHandler:
         logger.info("Wrote QA failure report to %s", report_path)
         return report_path
 
+    @staticmethod
+    def _describe(run: GateRunResult) -> str:
+        """Describe every failing gate by name, classification and command string."""
+        return "; ".join(
+            f"{o.name} [{run.classification_label(o)}] command: {o.command}"
+            for o in run.failures
+        )
+
+    @staticmethod
+    def _assert_routable_to_fixer(run: GateRunResult) -> None:
+        """Guard the transition to ``fix_quality_gate`` where it is actually issued.
+
+        An environment failure has no code for the fixer to fix. Asserting the
+        classification at the transition point \u2014 rather than only proving the branch
+        unreachable statically \u2014 is what survives helper indirection, dynamic
+        ``next_phase`` dispatch and plugin-supplied phases.
+
+        Raises:
+            GateRunnerError: If an ``env`` run is about to be routed to the fixer.
+
+        """
+        if run.overall_classification is GateClassification.ENV:
+            raise GateRunnerError(
+                "an env-classified gate failure must never route to fix_quality_gate: "
+                + "; ".join(f"{o.name}: {o.command}" for o in run.failures)
+            )
+
+    def _record_env_blocked(self, story_path: Path | None, run: GateRunResult) -> None:
+        """Make the env-blocked outcome visible on console and in the story record."""
+        write_progress(f"    Quality gate env-blocked \u2014 {self._describe(run)}")
+        if story_path is None:
+            return
+        for outcome in run.failures:
+            update_quality_gate_status(story_path, outcome.name, "FAIL")
+
     def execute(self, state: State) -> PhaseResult:
         """Run quality gate commands and return action-based result."""
-        commands = self._get_commands(state)
-        if not commands:
-            logger.info("No quality gate commands found — passing by default")
+        entries = self._get_commands(state)
+        if not entries:
+            logger.info("No quality gate commands found \u2014 passing by default")
             return PhaseResult.ok({"quality_gate_action": "pass"})
 
         timeout = self._get_command_timeout()
         story_path = self._resolve_story_path(state)
-        results: list[tuple[QualityGateEntry, CommandResult]] = []
-        failures: list[tuple[QualityGateEntry, CommandResult]] = []
 
-        for entry in commands:
-            write_progress(f"    Running: {entry.command}")
-            cmd_result = run_command(entry.command, self.project_path, timeout=timeout)
-            results.append((entry, cmd_result))
+        run = run_gates(
+            [GateCommand(name=e.name, command=e.command) for e in entries],
+            self.project_path,
+            timeout=timeout,
+            label=f"story:{state.current_story or '?'}",
+        )
 
-            status = "PASS" if cmd_result.success else "FAIL"
-            icon = "\u2714" if cmd_result.success else "\u2718"
-            write_progress(f"    {icon} {entry.name}: {status}")
+        if story_path:
+            for outcome in run.outcomes:
+                update_quality_gate_status(story_path, outcome.name, outcome.status_label)
 
-            if story_path:
-                update_quality_gate_status(story_path, entry.name, status)
-
-            if not cmd_result.success:
-                failures.append((entry, cmd_result))
-
-        all_passed = len(failures) == 0
-
-        if all_passed:
+        if run.all_passed:
             if story_path:
                 update_task_checkboxes(story_path)
             return PhaseResult.ok({"quality_gate_action": "pass"})
 
-        # Write failure report
-        self._write_failure_report(state, failures)
+        report_path = self._write_failure_report(state, run)
+
+        if run.overall_classification is GateClassification.ENV:
+            # Environment failure: never the fixer, never a qa_retry_count change,
+            # never reported as a code failure \u2014 but always visible.
+            self._record_env_blocked(story_path, run)
+            logger.warning(
+                "Story %s quality gate env-blocked \u2014 %s. Report: %s",
+                state.current_story,
+                self._describe(run),
+                report_path,
+            )
+            return PhaseResult.ok(
+                {
+                    "quality_gate_action": "env_blocked",
+                    "quality_gate_classification": GateClassification.ENV.value,
+                }
+            )
 
         max_retries = self.config.quality_gate.max_retries if self.config.quality_gate else 2
         if state.qa_retry_count < max_retries:
-            # Still have retries left — try LLM fix
+            # Still have retries left \u2014 try LLM fix
+            self._assert_routable_to_fixer(run)
             return PhaseResult(
                 success=True,
                 next_phase=Phase.FIX_QUALITY_GATE,
-                outputs={"quality_gate_action": "fix"},
+                outputs={
+                    "quality_gate_action": "fix",
+                    "quality_gate_classification": GateClassification.REAL.value,
+                },
             )
 
-        # All retries exhausted — skip story
-        return PhaseResult.ok({"quality_gate_action": "skip_story"})
+        # All retries exhausted \u2014 skip story
+        return PhaseResult.ok(
+            {
+                "quality_gate_action": "skip_story",
+                "quality_gate_classification": GateClassification.REAL.value,
+            }
+        )

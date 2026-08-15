@@ -39,7 +39,7 @@ from bmad_assist_lite.parallel.logging import (
 )
 from bmad_assist_lite.parallel.merger import MergeQueue
 from bmad_assist_lite.parallel.output import OutputMultiplexer
-from bmad_assist_lite.parallel.recovery import recover_state
+from bmad_assist_lite.parallel.recovery import reconcile_merge_queue, recover_state
 from bmad_assist_lite.parallel.report import (
     MergeOutcome,
     build_report,
@@ -216,7 +216,9 @@ class Orchestrator:
         # process_merge_with_fix() is async and handles asyncio.to_thread()
         # wrapping internally for sync git/QG operations.
         self._merge_queue: MergeQueue = MergeQueue(
-            project_root, parallel_config=config,
+            project_root,
+            parallel_config=config,
+            integration_ref=config.integration_branch or base_branch,
         )
 
         # Status tracking sets
@@ -246,6 +248,9 @@ class Orchestrator:
         # so _on_sigint() can terminate it on Ctrl+C
         self._teardown_process: asyncio.subprocess.Process | None = None
 
+        # Merges re-derived from git on resume, re-enqueued before scheduling
+        self._pending_remerge: list[str] = []
+
         # Persistent state — load existing on --resume, create fresh otherwise
         self._state_path = get_parallel_state_path(project_root)
         existing_state = load_state(self._state_path) if resume else None
@@ -270,6 +275,9 @@ class Orchestrator:
                     self._merging_ids.add(story_id)
                 if story_state.worktree_path is not None:
                     self._story_worktrees[story_id] = story_state.worktree_path
+            # Git — not a persisted flag — is the authority for what landed.
+            # Re-derive the merge queue from disk before anything is scheduled.
+            self._reconcile_merge_queue()
             save_state(self._state, self._state_path)
             logger.info(
                 "[ORCHESTRATOR] Resumed from persisted state: "
@@ -299,6 +307,40 @@ class Orchestrator:
     # ========================================================================
     # Sprint-status seeding
     # ========================================================================
+
+    def _reconcile_merge_queue(self) -> None:
+        """Re-derive merge state from git after a crash.
+
+        The merge queue is in-memory and does not survive a restart, so it
+        is rebuilt from disk rather than from a persisted flag: git decides
+        whether a story's commits are on the integration head. A merge that
+        already landed is never re-attempted, which is what makes restarting
+        idempotent.
+        """
+        try:
+            outcome = reconcile_merge_queue(
+                self._state, self._project_root, self._merge_queue.integration_ref,
+            )
+        except Exception:
+            logger.warning(
+                "[ORCHESTRATOR] Merge-queue reconcile failed (non-fatal)", exc_info=True,
+            )
+            return
+
+        for story_id in outcome.landed:
+            if self._state.stories[story_id].status != StoryStatus.DONE:
+                self._state = self._state.with_story_status(
+                    story_id, StoryStatus.DONE, completed_at=_utc_now(),
+                )
+        for story_id in outcome.requeue:
+            self._state = self._state.with_story_status(story_id, StoryStatus.MERGING)
+            self._pending_remerge.append(story_id)
+        for story_id in outcome.missing:
+            logger.warning(
+                "[ORCHESTRATOR] Story %s was merging but its branch is gone and git "
+                "cannot confirm it landed — leaving it for manual inspection",
+                story_id,
+            )
 
     def _seed_done_from_sprint_status(self) -> None:
         """Reconcile parallel state with sprint-status.yaml.
@@ -911,6 +953,9 @@ class Orchestrator:
                     story_id,
                     StoryStatus.DONE,
                     completed_at=_utc_now(),
+                    landed_commit_sha=result.landed_commit_sha,
+                    merge_attempts=list(result.attempts),
+                    gate_observations=list(result.gate_observations),
                 )
                 save_state(self._state, self._state_path)
                 # Clean up worktree mapping (worktree already removed by merge_story)
@@ -983,7 +1028,9 @@ class Orchestrator:
                 save_state(self._state, self._state_path)
                 log_story_blocked(story_id, error_msg)
 
-                # Clean up worktree for merge conflict
+                # Clean up worktree for merge conflict. cleanup_worktree()
+                # consults the no-data-loss guard, so a parked merge's
+                # branch and worktree survive this call untouched.
                 if story_id in self._story_worktrees:
                     try:
                         await asyncio.to_thread(
@@ -991,6 +1038,7 @@ class Orchestrator:
                             story_id,
                             self._project_root,
                             self._config.worktree_base_dir,
+                            self._merge_queue.integration_ref,
                         )
                     except Exception as exc:
                         logger.warning(
@@ -1394,6 +1442,14 @@ class Orchestrator:
                 f"Starting orchestration for epic {self._epic_num} "
                 f"({self._dependency_graph.story_count} stories)"
             )
+
+            # Re-enqueue merges the reconcile derived from git. The queue
+            # itself is in-memory, so this is how a crashed run's unfinished
+            # merges come back.
+            for story_id in self._pending_remerge:
+                self._merging_ids.add(story_id)
+                await self._merge_queue.enqueue(story_id)
+            self._pending_remerge.clear()
 
             # Re-spawn in-flight stories that survived crash recovery but
             # have no running task (Task 6.3). These were preserved as

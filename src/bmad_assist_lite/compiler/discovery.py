@@ -35,12 +35,14 @@ def discover_files(context: CompilerContext) -> dict[str, list[Path]]:
         return {}
 
     discovered: dict[str, list[Path]] = {}
+    attempted: dict[str, list[str]] = {}
 
     for pattern_name, pattern_config in patterns_config.items():
-        files = _discover_pattern(pattern_name, pattern_config, context)
+        files, resolved_patterns = _discover_pattern(pattern_name, pattern_config, context)
         discovered[pattern_name] = files
+        attempted[pattern_name] = resolved_patterns
 
-    _validate_required_files(patterns_config, discovered)
+    _validate_required_files(patterns_config, discovered, attempted)
     context.discovered_files = discovered
     return discovered
 
@@ -75,8 +77,12 @@ def _discover_pattern(
     pattern_name: str,
     pattern_config: dict[str, Any],
     context: CompilerContext,
-) -> list[Path]:
-    """Discover files for a single pattern configuration."""
+) -> tuple[list[Path], list[str]]:
+    """Discover files for a single pattern configuration.
+
+    Returns the discovered files and every resolved pattern that was tried, so a
+    zero-file result can be reported with the concrete paths that were searched.
+    """
     sharded_pattern = pattern_config.get("sharded")
     whole_pattern = pattern_config.get("whole")
     # Support 'pattern' key as fallback for 'whole'
@@ -94,23 +100,42 @@ def _discover_pattern(
         strategy = LoadStrategy.FULL_LOAD
 
     files: list[Path] = []
+    attempted: list[str] = []
 
     if sharded_pattern:
-        resolved_sharded = _resolve_pattern_variables(sharded_pattern, context)
+        resolved_sharded = _root_pattern(
+            _resolve_pattern_variables(sharded_pattern, context), context.project_root
+        )
+        attempted.append(resolved_sharded)
         sharded_files = _glob_files(resolved_sharded, pattern_name, context.project_root)
         if sharded_files:
             files = sharded_files
 
     if not files and whole_pattern:
-        resolved_whole = _resolve_pattern_variables(whole_pattern, context)
+        resolved_whole = _root_pattern(
+            _resolve_pattern_variables(whole_pattern, context), context.project_root
+        )
+        attempted.append(resolved_whole)
         files = _glob_files(resolved_whole, pattern_name, context.project_root)
 
     files = _apply_load_strategy(files, strategy, pattern_name)
-    return files
+    return files, attempted
+
+
+def _root_pattern(pattern: str, project_root: Path) -> str:
+    """Anchor a relative discovery pattern at the project root.
+
+    A relative pattern would otherwise expand against the process CWD, which is not
+    the project root inside a git worktree or under ``--project-path``.
+    """
+    if Path(pattern).is_absolute():
+        return pattern
+    return str(project_root / pattern)
 
 
 def _glob_files(pattern: str, pattern_name: str, project_root: Path) -> list[Path]:
     """Execute glob pattern and filter results."""
+    pattern = _root_pattern(pattern, project_root)
     try:
         matches = glob.glob(pattern, recursive=True)
     except re.error as e:
@@ -176,12 +201,32 @@ def _apply_load_strategy(
 def _validate_required_files(
     patterns_config: dict[str, Any],
     discovered: dict[str, list[Path]],
+    attempted_patterns: dict[str, list[str]] | None = None,
 ) -> None:
     """Validate that required files were discovered."""
+    attempted_patterns = attempted_patterns or {}
+
     for pattern_name, config in patterns_config.items():
         required = config.get("required", False)
-        if required and not discovered.get(pattern_name):
-            raise CompilerError(f"Required file not found for pattern '{pattern_name}'")
+        if not required or discovered.get(pattern_name):
+            continue
+
+        tried = attempted_patterns.get(pattern_name) or [
+            str(config.get(key))
+            for key in ("sharded", "whole", "pattern")
+            if config.get(key)
+        ]
+        tried_text = "\n".join(f"    - {p}" for p in tried) or "    - <no pattern configured>"
+
+        raise CompilerError(
+            f"Required file not found for pattern '{pattern_name}'\n"
+            f"  Searched (resolved patterns):\n{tried_text}\n"
+            f"  Fix: create the missing file at one of the paths above, or — if this\n"
+            f"       input is genuinely optional for your project — set "
+            f"'required: false'\n"
+            f"       under input_file_patterns.{pattern_name} in the workflow's "
+            f"workflow.yaml."
+        )
 
 
 def load_file_contents(

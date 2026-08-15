@@ -313,3 +313,248 @@ class TestPhaseDefaultValues:
         """A phase not in _PHASE_DEFAULTS falls back to the global default."""
         tc = TimeoutsConfig(default=250)
         assert tc.get_timeout("nonexistent_phase") == 250
+
+
+# ============================================================================
+# Self-review detection (REQ-11.2)
+# ============================================================================
+
+
+class TestSelfReviewDetection:
+    """providers.multi empty (or master-equal) means the master reviews itself."""
+
+    def test_empty_multi_is_detected(self):
+        """An explicit empty multi list yields a warning message."""
+        from bmad_assist_lite.core.config import self_review_warning
+
+        _reset_config()
+        cfg = load_config(
+            {"providers": {"master": {"provider": "claude", "model": "opus"}, "multi": []}}
+        )
+        assert self_review_warning(cfg) is not None
+
+    def test_missing_multi_key_is_detected(self):
+        """Omitting providers.multi is the default case and is detected."""
+        from bmad_assist_lite.core.config import self_review_warning
+
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        assert self_review_warning(cfg) is not None
+
+    def test_entry_equal_to_master_is_detected(self):
+        """NEG: a reviewer with the same provider AND model as master is self-review."""
+        from bmad_assist_lite.core.config import self_review_warning
+
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {
+                    "master": {"provider": "claude", "model": "opus"},
+                    "multi": [{"provider": "claude", "model": "opus"}],
+                }
+            }
+        )
+        assert self_review_warning(cfg) is not None
+
+    def test_same_provider_different_model_is_not_detected(self):
+        """NEG: claude/sonnet reviewing claude/opus is an independent reviewer."""
+        from bmad_assist_lite.core.config import self_review_warning
+
+        _reset_config()
+        cfg = load_config(
+            {
+                "providers": {
+                    "master": {"provider": "claude", "model": "opus"},
+                    "multi": [{"provider": "claude", "model": "sonnet"}],
+                }
+            }
+        )
+        assert self_review_warning(cfg) is None
+
+    def test_message_names_the_condition_and_the_remedy(self):
+        """The message must name the config key, the violation, and the fix."""
+        from bmad_assist_lite.core.config import self_review_warning
+
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        message = self_review_warning(cfg)
+        assert message is not None
+        assert "providers.multi" in message
+        assert "self-verification" in message
+        assert "Fix:" in message
+        assert "bmad-assist-lite.yaml" in message
+
+    def test_phase_name_appears_when_supplied(self):
+        """The phase-run variant names the phase that is degrading."""
+        from bmad_assist_lite.core.config import self_review_warning
+
+        _reset_config()
+        cfg = load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+        message = self_review_warning(cfg, phase="code_review")
+        assert message is not None
+        assert "code_review" in message
+
+
+@pytest.mark.no_auto_config
+class TestSelfReviewWarningAtLoad:
+    """The warning fires at config load, not only when the phase runs."""
+
+    def test_warning_logged_on_load(self, caplog):
+        """load_config() with no multi logs a WARNING."""
+        import logging
+
+        _reset_config()
+        caplog.set_level(logging.WARNING, logger="bmad_assist_lite.core.config")
+        load_config({"providers": {"master": {"provider": "claude", "model": "opus"}}})
+
+        text = "\n".join(r.message for r in caplog.records)
+        assert "providers.multi" in text
+        assert "Fix:" in text
+
+    def test_no_warning_logged_for_valid_multi(self, caplog):
+        """NEG: an independent reviewer produces no self-review warning."""
+        import logging
+
+        _reset_config()
+        caplog.set_level(logging.WARNING, logger="bmad_assist_lite.core.config")
+        load_config(
+            {
+                "providers": {
+                    "master": {"provider": "claude", "model": "opus"},
+                    "multi": [{"provider": "claude", "model": "sonnet"}],
+                }
+            }
+        )
+
+        text = "\n".join(r.message for r in caplog.records)
+        assert "self-verification" not in text
+
+    def test_explicit_empty_multi_still_loads(self, caplog):
+        """G8 non-breaking: `multi: []` is a legal, loadable config."""
+        _reset_config()
+        cfg = load_config(
+            {"providers": {"master": {"provider": "claude", "model": "opus"}, "multi": []}}
+        )
+        assert cfg.providers.multi == []
+
+
+@pytest.mark.no_auto_config
+class TestInitTemplateShipsAReviewer:
+    """A fresh `init` config carries an independent reviewer (D-0005 option D)."""
+
+    def _init_project(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from bmad_assist_lite.cli import app
+
+        result = CliRunner().invoke(app, ["init", "--project", str(tmp_path)])
+        assert result.exit_code == 0, result.output
+        return tmp_path / "bmad-assist-lite.yaml"
+
+    def test_fresh_config_parses_with_non_empty_multi(self, tmp_path):
+        """The emitted template loads and carries at least one reviewer."""
+        from bmad_assist_lite.core.config import load_config_with_project
+
+        config_path = self._init_project(tmp_path)
+        _reset_config()
+        cfg = load_config_with_project(
+            tmp_path, global_config_path=tmp_path / "no-such-global.yaml"
+        )
+        assert config_path.exists()
+        assert len(cfg.providers.multi) >= 1
+
+    def test_fresh_config_reviewer_is_master_disjoint(self, tmp_path):
+        """No shipped reviewer duplicates the master provider+model pair."""
+        from bmad_assist_lite.core.config import load_config_with_project, self_review_warning
+
+        self._init_project(tmp_path)
+        _reset_config()
+        cfg = load_config_with_project(
+            tmp_path, global_config_path=tmp_path / "no-such-global.yaml"
+        )
+        assert self_review_warning(cfg) is None
+
+    def test_fresh_config_ships_a_claude_reviewer(self, tmp_path):
+        """D-0005 option D: a second Claude reviewer ships by default."""
+        from bmad_assist_lite.core.config import load_config_with_project
+
+        self._init_project(tmp_path)
+        _reset_config()
+        cfg = load_config_with_project(
+            tmp_path, global_config_path=tmp_path / "no-such-global.yaml"
+        )
+        assert any(mc.provider == "claude" for mc in cfg.providers.multi)
+
+    def test_fresh_config_names_no_codex(self, tmp_path):
+        """NEG (G2 / rule 2.1): Codex appears nowhere in a fresh config."""
+        from bmad_assist_lite.core.config import load_config_with_project
+
+        config_path = self._init_project(tmp_path)
+        _reset_config()
+        cfg = load_config_with_project(
+            tmp_path, global_config_path=tmp_path / "no-such-global.yaml"
+        )
+        assert cfg.providers.master.provider != "codex"
+        assert all(mc.provider != "codex" for mc in cfg.providers.multi)
+        assert cfg.providers.cli_paths.codex is None
+
+        # Strip comments: "# claude, gemini, codex, cursor" documents the valid
+        # values, it does not configure a provider.
+        active_lines = [
+            line.split("#")[0]
+            for line in config_path.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert not any("codex" in line.lower() for line in active_lines)
+
+class TestSelfReviewWarningDoesNotOverFire:
+    """A duplicate reviewer is only self-verification when NO independent one exists.
+
+    Regression guard. The warning previously fired whenever ANY `providers.multi` entry
+    matched the master, even alongside a genuinely independent reviewer — so a config
+    pairing an independent model with a same-capability duplicate (BMAD-METHOD v6.11 asks
+    review subagents to run at the session's capability) was flagged as a violation.
+
+    That is alarm fatigue: a warning that fires on a good config trains operators to ignore
+    the one that matters. The docstring already promised "Returns None when an independent
+    reviewer is configured"; the implementation did not honour it.
+    """
+
+    def _config(self, multi):
+        from bmad_assist_lite.core.config import load_config
+
+        return load_config(
+            {
+                "providers": {
+                    "master": {"provider": "claude", "model": "claude-opus-5"},
+                    "multi": multi,
+                }
+            }
+        )
+
+    def test_independent_reviewer_alongside_a_duplicate_is_silent(self):
+        from bmad_assist_lite.core.config import self_review_warning
+
+        config = self._config(
+            [
+                {"provider": "claude", "model": "claude-fable-5"},
+                {"provider": "claude", "model": "claude-opus-5"},
+            ]
+        )
+        assert self_review_warning(config) is None
+
+    def test_duplicate_alone_still_warns(self):
+        from bmad_assist_lite.core.config import self_review_warning
+
+        config = self._config([{"provider": "claude", "model": "claude-opus-5"}])
+        warning = self_review_warning(config)
+        assert warning is not None
+        assert "multi" in warning.lower()
+
+    def test_empty_multi_still_warns(self):
+        from bmad_assist_lite.core.config import load_config, self_review_warning
+
+        config = load_config(
+            {"providers": {"master": {"provider": "claude", "model": "claude-opus-5"}}}
+        )
+        assert self_review_warning(config) is not None

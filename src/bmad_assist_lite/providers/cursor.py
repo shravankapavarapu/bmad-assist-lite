@@ -17,13 +17,15 @@ from pathlib import Path
 from subprocess import DEVNULL, PIPE, Popen, TimeoutExpired
 from typing import Any
 
-from bmad_assist_lite.core.exceptions import ProviderError
+from bmad_assist_lite.core.exceptions import ProviderError, ProviderExitCodeError
 from bmad_assist_lite.providers._windows import get_subprocess_kwargs, terminate_process
 from bmad_assist_lite.providers.base import (
     COMMON_TOOL_NAMES,
     BaseProvider,
+    ExitStatus,
     ProviderResult,
     format_tag,
+    is_hermetic,
     resolve_cli_path,
     write_progress,
 )
@@ -240,6 +242,7 @@ class CursorProvider(BaseProvider):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Execute Cursor CLI with NDJSON streaming and collector integration.
@@ -257,6 +260,7 @@ class CursorProvider(BaseProvider):
             settings_file: Optional path to provider settings file (unused).
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Accepted for signature compatibility and ignored.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
@@ -268,6 +272,12 @@ class CursorProvider(BaseProvider):
 
         """
         _ = settings_file  # Cursor CLI has no settings file concept
+
+        if effort:
+            logger.debug("Cursor ignores effort=%s (Claude-only feature)", effort)
+
+        if is_hermetic():
+            logger.debug("Cursor ignores hermetic=True (Claude-only mechanism)")
 
         effective_model = model or self.default_model or DEFAULT_CURSOR_MODEL
 
@@ -531,9 +541,13 @@ class CursorProvider(BaseProvider):
                 stderr_truncated = "..." + stderr_content[
                     -STDERR_TRUNCATE_LENGTH:
                 ].strip()
-            raise ProviderError(
+            raise ProviderExitCodeError(
                 f"Cursor CLI failed with exit code {returncode}, "
-                f"no result event received: {stderr_truncated}"
+                f"no result event received: {stderr_truncated}",
+                exit_code=returncode,
+                exit_status=ExitStatus.from_code(returncode),
+                stderr=stderr_content,
+                command=tuple(command),
             )
 
         # Zero exit but no result event

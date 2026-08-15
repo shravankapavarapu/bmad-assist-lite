@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from bmad_assist_lite.core.exceptions import ProviderTimeoutError
-from bmad_assist_lite.providers.result_collector import ResultCollector
+from bmad_assist_lite.providers.result_collector import CallMetrics, ResultCollector
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +132,23 @@ _KNOWN_CLI_PATHS: dict[str, list[Path]] = {
 
 # Grace period polling interval in seconds
 _GRACE_POLL_INTERVAL: float = 2.0
+
+
+def is_hermetic() -> bool:
+    """Return True when the run must decline the target project's MCP servers.
+
+    Reads ``providers.hermetic``. The read is defensive in the same way
+    :func:`resolve_cli_path`'s config lookup is: a provider may be constructed
+    before any config is loaded (tests, plugin probes), and "no config" means
+    "not hermetic" rather than an error. Never raises.
+    """
+    try:
+        from bmad_assist_lite.core.config import get_config
+
+        return bool(get_config().providers.hermetic)
+    except Exception:
+        logger.debug("No config available for providers.hermetic; treating run as non-hermetic.")
+        return False
 
 
 def resolve_cli_path(cli_name: str) -> str:
@@ -294,6 +311,20 @@ def start_stream_reader_threads(
     return stdout_thread, stderr_thread
 
 
+WINDOWS_COMMAND_NOT_FOUND: int = 9009
+"""``cmd.exe`` exit code for "is not recognized as an internal or external command".
+
+126/127 are *shell* conventions and are absent from ``cmd.exe``, which is the default
+shell for every ``shell=True`` subprocess on this tool's primary platform. Without this
+code a missing command on Windows classifies as a generic error.
+"""
+
+
+def _is_windows_platform(platform: str | None) -> bool:
+    """Return True when the given (or current) platform string is Windows."""
+    return (platform if platform is not None else sys.platform).startswith("win")
+
+
 class ExitStatus(Enum):
     """Semantic classification of process exit codes."""
 
@@ -306,25 +337,45 @@ class ExitStatus(Enum):
     SIGNAL = auto()
 
     @classmethod
-    def from_code(cls, exit_code: int) -> "ExitStatus":
-        """Classify a process exit code into a semantic status."""
+    def from_code(cls, exit_code: int, platform: str | None = None) -> "ExitStatus":
+        """Classify a process exit code into a semantic status.
+
+        The mapping is platform-aware: ``cmd.exe`` signals command-not-found with
+        9009 rather than 127, and Windows has no wait-status signal encoding, so the
+        ``> 128`` signal rule is POSIX-only. 126/127 stay mapped on every platform
+        because :func:`bmad_assist_lite.core.command_runner.run_command` synthesises
+        127 itself for ``FileNotFoundError`` regardless of platform.
+
+        Args:
+            exit_code: Raw process exit code.
+            platform: Platform string to classify for; defaults to ``sys.platform``.
+
+        Returns:
+            The semantic :class:`ExitStatus` for the code on that platform.
+
+        """
+        is_windows = _is_windows_platform(platform)
         if exit_code == 0:
             return cls.SUCCESS
         if exit_code == 2:
             return cls.MISUSE
+        if is_windows and exit_code == WINDOWS_COMMAND_NOT_FOUND:
+            return cls.NOT_FOUND
         if exit_code == 126:
             return cls.CANNOT_EXECUTE
         if exit_code == 127:
             return cls.NOT_FOUND
         if exit_code == 128:
             return cls.INVALID_EXIT
-        if exit_code > 128:
+        if not is_windows and exit_code > 128:
             return cls.SIGNAL
         return cls.ERROR
 
     @staticmethod
-    def get_signal_number(exit_code: int) -> int | None:
+    def get_signal_number(exit_code: int, platform: str | None = None) -> int | None:
         """Return the signal number from exit code, or None if not signal."""
+        if _is_windows_platform(platform):
+            return None
         if exit_code > 128:
             return exit_code - 128
         return None
@@ -367,7 +418,25 @@ def validate_settings_file(
 
 @dataclass(frozen=True)
 class ProviderResult:
-    """Result of a CLI provider invocation."""
+    """Result of a CLI provider invocation.
+
+    The trailing metric fields are optional per-call instrumentation. Providers
+    that cannot report a metric leave it ``None`` — never ``0``, which would
+    silently corrupt any aggregate built from these values.
+
+    Attributes:
+        api_duration_ms: Provider-reported API time, distinct from the locally
+            measured wall-clock ``duration_ms``.
+        input_tokens: Uncached prompt tokens consumed by the call. This is the
+            *remainder* after cache hits, not the full prompt size — a total
+            prompt is ``input_tokens + cache_read_tokens + cache_creation_tokens``.
+        output_tokens: Completion tokens produced by the call.
+        cache_read_tokens: Prompt tokens served from the provider's prompt cache.
+        cache_creation_tokens: Prompt tokens written into the provider's prompt
+            cache by this call.
+        total_cost_usd: Provider-reported cost of the call in USD.
+
+    """
 
     stdout: str
     stderr: str
@@ -377,6 +446,40 @@ class ProviderResult:
     command: tuple[str, ...]
     provider_session_id: str | None = None
     timed_out: bool = False
+    api_duration_ms: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    total_cost_usd: float | None = None
+
+
+def _timeout_metric_kwargs(metrics: CallMetrics | None) -> dict[str, Any]:
+    """Map recorded call metrics onto ProviderResult keyword arguments.
+
+    Args:
+        metrics: Metrics the provider recorded on the collector, or None if it
+            never reported any.
+
+    Returns:
+        The metric keyword arguments, or an empty mapping when no metrics were
+        recorded — which leaves every metric field at its ``None`` default. The
+        distinction that matters is None versus 0: a timed-out call reporting 0
+        tokens is indistinguishable from a cheap call, whereas None is visibly
+        missing and can be excluded from an aggregate.
+
+    """
+    if metrics is None:
+        return {}
+    return {
+        "provider_session_id": metrics.session_id,
+        "api_duration_ms": metrics.api_duration_ms,
+        "input_tokens": metrics.input_tokens,
+        "output_tokens": metrics.output_tokens,
+        "cache_read_tokens": metrics.cache_read_tokens,
+        "cache_creation_tokens": metrics.cache_creation_tokens,
+        "total_cost_usd": metrics.total_cost_usd,
+    }
 
 
 class BaseProvider(ABC):
@@ -422,6 +525,8 @@ class BaseProvider(ABC):
             settings_file: Optional path to provider settings file.
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Reasoning-effort hint, forwarded to _do_invoke() verbatim.
+                Provider-specific; providers that do not support it ignore it.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
@@ -437,26 +542,87 @@ class BaseProvider(ABC):
         collector = ResultCollector()
         command: tuple[str, ...] = (self.provider_name, model or "default")
         start_time = time.monotonic()
+        result: ProviderResult | None = None
+        timed_out = False
 
         try:
-            result = self._do_invoke(
-                prompt,
-                collector=collector,
-                model=model,
-                timeout=resolved_timeout,
-                settings_file=settings_file,
-                cwd=cwd,
-                allowed_tools=allowed_tools,
-                color_index=color_index,
-            )
+            try:
+                result = self._do_invoke(
+                    prompt,
+                    collector=collector,
+                    model=model,
+                    timeout=resolved_timeout,
+                    settings_file=settings_file,
+                    cwd=cwd,
+                    allowed_tools=allowed_tools,
+                    effort=effort,
+                    color_index=color_index,
+                )
+            except TimeoutError:
+                timed_out = True
+                result = self._handle_timeout(
+                    collector, resolved_timeout, model, command, start_time
+                )
             return result
-        except TimeoutError:
-            return self._handle_timeout(collector, resolved_timeout, model, command, start_time)
         finally:
             try:
                 self._cleanup()
             except Exception:
                 logger.warning("_cleanup() raised an exception", exc_info=True)
+            # Hand the call's measurements to whichever phase is open. This is the
+            # one hook that sees every provider call, including the multi-LLM
+            # fan-out, because every provider reaches the CLI through this method.
+            # A raised timeout never builds a ProviderResult, so the flag is taken
+            # from the control flow rather than from the (absent) result — losing
+            # it would let the most expensive phase in a run leave no trace.
+            self._record_call_metrics(
+                model=model or self.default_model,
+                result=result,
+                timed_out=timed_out,
+                start_time=start_time,
+            )
+
+    def _record_call_metrics(
+        self,
+        *,
+        model: str | None,
+        result: "ProviderResult | None",
+        timed_out: bool,
+        start_time: float,
+    ) -> None:
+        """Report this invocation's metrics to the open phase, if any.
+
+        Purely additive instrumentation: it reads the result, never changes it,
+        and swallows its own failures. It runs on every phase's hot path, so a
+        raise here would be able to end a multi-hour run.
+
+        Args:
+            model: Model identifier for the call.
+            result: The provider result, or None when the call raised.
+            timed_out: True when the provider's timeout fired.
+            start_time: Monotonic timestamp taken at the start of invoke().
+
+        """
+        try:
+            from bmad_assist_lite.core.phase_metrics import record_provider_call
+
+            record_provider_call(
+                model=model,
+                duration_ms=(
+                    result.duration_ms
+                    if result is not None
+                    else int((time.monotonic() - start_time) * 1000)
+                ),
+                api_duration_ms=getattr(result, "api_duration_ms", None),
+                input_tokens=getattr(result, "input_tokens", None),
+                output_tokens=getattr(result, "output_tokens", None),
+                cache_read_tokens=getattr(result, "cache_read_tokens", None),
+                cache_creation_tokens=getattr(result, "cache_creation_tokens", None),
+                total_cost_usd=getattr(result, "total_cost_usd", None),
+                timed_out=timed_out or bool(getattr(result, "timed_out", False)),
+            )
+        except Exception:
+            logger.warning("Failed to record provider call metrics", exc_info=True)
 
     @abstractmethod
     def _do_invoke(
@@ -469,6 +635,7 @@ class BaseProvider(ABC):
         settings_file: Path | None = None,
         cwd: Path | None = None,
         allowed_tools: list[str] | None = None,
+        effort: str | None = None,
         color_index: int | None = None,
     ) -> ProviderResult:
         """Provider-specific invocation that must call collector.add() as chunks arrive.
@@ -484,6 +651,9 @@ class BaseProvider(ABC):
             settings_file: Optional path to provider settings file.
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
+            effort: Reasoning-effort hint. Provider-specific; ignore if
+                unsupported. Implementations that cannot act on it must still
+                accept the keyword so invoke() can forward it unconditionally.
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
@@ -564,6 +734,15 @@ class BaseProvider(ABC):
         # After grace (or if not active), check accumulated text
         partial_text = collector.text
         duration_ms = int((time.monotonic() - start_time) * 1000)
+
+        # Carry whatever metrics the provider managed to record before the
+        # timeout. A timed-out call that reported zero tokens would bias any
+        # aggregate downward exactly where it hurts most: the slowest, most
+        # expensive phases are the ones that time out, so their disappearance
+        # from the sample makes a lever that slowed things down look like it
+        # reduced tokens. Absent metrics stay None so the gap is detectable.
+        metric_kwargs = _timeout_metric_kwargs(collector.metrics)
+
         if len(partial_text) >= MIN_USEFUL_RESPONSE_CHARS:
             logger.warning(
                 "Returning partial result: %d chars captured (duration=%dms)",
@@ -578,6 +757,7 @@ class BaseProvider(ABC):
                 model=model,
                 command=command,
                 timed_out=True,
+                **metric_kwargs,
             )
 
         # Partial text too small — raise with partial result attached
@@ -591,6 +771,7 @@ class BaseProvider(ABC):
                 model=model,
                 command=command,
                 timed_out=True,
+                **metric_kwargs,
             )
 
         raise ProviderTimeoutError(

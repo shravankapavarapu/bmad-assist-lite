@@ -8,6 +8,7 @@ This is non-fatal: sync errors are logged as warnings and never propagated.
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from bmad_assist_lite.core.sprint_status import (
@@ -30,12 +31,18 @@ PHASE_TO_STATUS: dict[str, str] = {
     Phase.CODE_REVIEW_SYNTHESIS.value: "review",
     Phase.QUALITY_GATE.value: "review",
     Phase.FIX_QUALITY_GATE.value: "in-progress",
+    Phase.FIX_REVIEW.value: "in-progress",
     Phase.EPIC_QUALITY_GATE.value: "review",
     Phase.RETROSPECTIVE.value: "done",
 }
 
 
-def sync_state_to_sprint(state: State, sprint_status: SprintStatus) -> SprintStatus:
+def sync_state_to_sprint(
+    state: State,
+    sprint_status: SprintStatus,
+    *,
+    signoff_check: Callable[[str], str | None] | None = None,
+) -> SprintStatus:
     """Apply state changes to sprint status model (pure function).
 
     - Sets current story status based on current phase
@@ -46,15 +53,28 @@ def sync_state_to_sprint(state: State, sprint_status: SprintStatus) -> SprintSta
     Args:
         state: Current loop state.
         sprint_status: Existing sprint status to update.
+        signoff_check: Optional postcondition consulted before each ``done``.
+            Returns a reason to withhold ``done``, or None to permit it. When
+            omitted the flip is unconditional, which is today's behaviour.
 
     Returns:
         Updated sprint status (same object, mutated).
 
     """
-    # Mark completed stories as done
+    # Mark completed stories as done. When the sign-off postcondition is active,
+    # a story that cannot show an approval bound to the current tree keeps its
+    # existing status instead: `done` is the claim I-01 falsified, so it is the
+    # one claim that has to be earned. Nothing is written back into `state` —
+    # the state -> sprint-status sync stays one-way.
     for story_id in state.completed_stories:
-        if not sprint_status.is_story_done(story_id):
-            sprint_status.set_story_status(story_id, "done")
+        if sprint_status.is_story_done(story_id):
+            continue
+        if signoff_check is not None:
+            reason = signoff_check(story_id)
+            if reason is not None:
+                logger.warning("Withholding 'done' for story %s: %s", story_id, reason)
+                continue
+        sprint_status.set_story_status(story_id, "done")
 
     # Mark failed QA stories as blocked
     for story_id in state.failed_qa_stories:
@@ -92,7 +112,31 @@ def trigger_sync(state: State, project_path: Path) -> None:
     try:
         ss_path = get_sprint_status_path(project_path)
         sprint_status = load_sprint_status(ss_path)
-        sync_state_to_sprint(state, sprint_status)
+        sync_state_to_sprint(state, sprint_status, signoff_check=_signoff_check(project_path))
         save_sprint_status(sprint_status, ss_path)
     except Exception as e:
         logger.warning("Sprint status sync failed (non-fatal): %s", e)
+
+
+def _signoff_check(project_path: Path) -> Callable[[str], str | None] | None:
+    """Build the sign-off postcondition, or None when it is switched off.
+
+    Resolving the config here rather than in the pure sync function keeps that
+    function testable without a config singleton, and keeps the default path
+    (``signoff.required: false``) free of any git work at all.
+    """
+    try:
+        from bmad_assist_lite.core.config import get_config
+
+        if not get_config().signoff.required:
+            return None
+    except Exception:
+        logger.debug("Config unavailable; sign-off postcondition not applied")
+        return None
+
+    from bmad_assist_lite.core.signoff import signoff_blocks_done
+
+    def check(story_id: str) -> str | None:
+        return signoff_blocks_done(project_path, story_id)
+
+    return check

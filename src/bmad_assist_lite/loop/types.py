@@ -16,6 +16,7 @@ class LoopExitReason(StrEnum):
     COMPLETED = "completed"
     INTERRUPTED = "interrupted"
     ERROR = "error"
+    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 @dataclass(frozen=True)

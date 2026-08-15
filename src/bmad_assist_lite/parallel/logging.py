@@ -296,11 +296,17 @@ def log_qg_result(
         _logger.info("%s All quality gates passed", tag)
         return
 
-    failed_names = [g.name for g in gate_results if not g.passed]
+    failed_names = [
+        f"{g.name} [{g.classification or 'real'}] command: {g.command}"
+        for g in gate_results
+        if not g.passed
+    ]
     _logger.error(
         "%s Quality gate FAILED — failed gates: %s",
         tag,
-        ", ".join(failed_names) if failed_names else "unknown",
+        "; ".join(failed_names)
+        if failed_names
+        else "no gate command ran; see the failure reason logged above",
     )
 
     for gate in gate_results:
@@ -308,9 +314,10 @@ def log_qg_result(
             continue
 
         _logger.error(
-            "%s  Gate: %s  command=%s  exit_code=%d",
+            "%s  Gate: %s  classification=%s  command=%s  exit_code=%d",
             tag,
             gate.name,
+            gate.classification or "real",
             gate.command,
             gate.exit_code,
         )

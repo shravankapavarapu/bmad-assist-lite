@@ -27,6 +27,7 @@ from bmad_assist_lite.providers.base import (
     ProviderResult,
     extract_tool_details,
     format_tag,
+    is_hermetic,
     resolve_cli_path,
     validate_settings_file,
     write_progress,
@@ -103,6 +104,9 @@ class GeminiProvider(BaseProvider):
 
         if effort:
             logger.debug("Gemini ignores effort=%s (Claude-only feature)", effort)
+
+        if is_hermetic():
+            logger.debug("Gemini ignores hermetic=True (Claude-only mechanism)")
 
         effective_model = model or self.default_model or "gemini-2.5-flash"
 

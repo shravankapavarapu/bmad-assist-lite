@@ -701,3 +701,52 @@ def parallel_unblock(
         raise typer.Exit(1) from None
 
     typer.echo(f"Story {story_id} unblocked -- will be picked up on next parallel run")
+
+
+# ============================================================================
+# Parked-merge listing
+# ============================================================================
+
+
+def parallel_list_parked(
+    project: Path = typer.Option(
+        Path("."),
+        "--project",
+        "-p",
+        help="Path to project directory.",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+    ),
+) -> None:
+    """List merges parked by the merge ladder, with reason and age.
+
+    A parked merge keeps its branch and worktree instead of being deleted.
+    This is how an operator finds them without knowing they exist.
+    """
+    from bmad_assist_lite.parallel.parked import get_parked_dir, list_parked_merges
+
+    records = list_parked_merges(project)
+    if not records:
+        typer.echo("No parked merges.")
+        return
+
+    now = _utc_now()
+    typer.echo(f"Parked merges ({len(records)}) — records in {get_parked_dir(project)}\n")
+    for record in records:
+        age_hours = max((now - record.parked_at).total_seconds(), 0.0) / 3600.0
+        typer.echo(f"  Story {record.story_id}")
+        typer.echo(f"    branch:   {record.branch}")
+        typer.echo(f"    worktree: {record.worktree_path or '(not checked out)'}")
+        typer.echo(f"    reason:   {record.reason or '(unspecified)'}")
+        typer.echo(f"    age:      {age_hours:.1f}h (parked {record.parked_at:%Y-%m-%d %H:%M} UTC)")
+        if record.attempts:
+            ladder = " -> ".join(f"{a.tier.value}:{a.outcome}" for a in record.attempts)
+            typer.echo(f"    ladder:   {ladder}")
+        typer.echo("")
+
+    typer.echo(
+        "To un-park: fix the work on the branch, delete its record under "
+        f"{get_parked_dir(project)}, set the story back to 'backlog' in "
+        "parallel-state.yaml, and re-run with --resume."
+    )

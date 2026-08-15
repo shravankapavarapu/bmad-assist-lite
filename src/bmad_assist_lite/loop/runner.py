@@ -1,9 +1,11 @@
 """Main BMAD loop orchestration."""
 
 import logging
+import time
 from pathlib import Path
 
 from bmad_assist_lite.core.config import Config
+from bmad_assist_lite.core.phase_metrics import cost_since, record_count
 from bmad_assist_lite.core.sprint_sync import trigger_sync
 from bmad_assist_lite.core.state import (
     Phase,
@@ -15,6 +17,7 @@ from bmad_assist_lite.core.state import (
 from bmad_assist_lite.loop.cleanup import cleanup_for_phase, clear_story_cache
 from bmad_assist_lite.loop.dispatch import execute_phase, init_handlers
 from bmad_assist_lite.loop.locking import running_lock
+from bmad_assist_lite.loop.run_mode import set_resume_mode
 from bmad_assist_lite.loop.signals import (
     register_signal_handlers,
     reset_shutdown,
@@ -55,6 +58,68 @@ def _print_phase_banner(phase_name: str, epic: int | str | None, story: str | No
     write_progress(separator)
 
 
+def _metrics_path() -> Path | None:
+    """Resolve the persisted per-phase metrics file, or None if unavailable.
+
+    The cost budget is only as good as the meter behind it, so this returning
+    None is load-bearing: it means spend cannot be observed, and an unobservable
+    budget must not fire rather than firing on an assumed zero.
+    """
+    try:
+        from bmad_assist_lite.core.paths import get_paths
+
+        return get_paths().phase_metrics_file
+    except Exception:
+        logger.debug("Paths not initialised; cost budget cannot be enforced")
+        return None
+
+
+def _budget_exhausted(
+    *,
+    key: str,
+    configured: str,
+    reached: str,
+    state: State,
+    state_path: Path,
+    project_path: Path,
+) -> LoopExitReason:
+    """Stop the run cleanly on an exhausted budget, saying so on the console.
+
+    An exit code is the machine's answer; these runs are long and unattended,
+    so the log also needs the human's: which budget ran out, that this is a
+    clean stop rather than a crash, and how to continue.
+    """
+    save_state(state, state_path)
+    trigger_sync(state, project_path)
+
+    logger.info("Run budget exhausted: %s=%s (reached %s)", key, configured, reached)
+    write_progress(f"\n{'━' * 45}")
+    write_progress(f"  RUN BUDGET EXHAUSTED: {key} = {configured} (reached {reached})")
+    write_progress("  This is a clean stop, not a failure. State has been saved.")
+    write_progress("  Continue where it stopped:  bmad-assist-lite run --resume")
+    write_progress(f"  Or raise `{key}` in bmad-assist-lite.yaml to go further in one run.")
+    write_progress("━" * 45)
+    return LoopExitReason.BUDGET_EXHAUSTED
+
+
+def log_run_conditions(config: Config) -> None:
+    """Record the run conditions that change what a timing means.
+
+    A measurement whose conditions are unrecorded is not reproducible. Whether
+    the run declined the target project's MCP servers is exactly such a
+    condition: with them loaded, the CLI starts every server the target's
+    ``.mcp.json`` declares, and their contention lands in the numbers. An
+    operator reading the log afterwards must be able to tell which run they are
+    looking at without re-deriving it from a config file that may since have
+    changed.
+    """
+    logger.info(
+        "Run conditions: hermetic=%s (project MCP servers %s)",
+        config.providers.hermetic,
+        "NOT loaded" if config.providers.hermetic else "loaded as usual",
+    )
+
+
 def _auto_commit_after_synthesis(
     config: Config, project_path: Path, state: State
 ) -> None:
@@ -81,6 +146,7 @@ def run_loop(
     stories_for_epic: dict[int, list[str]],
     resume_state: State | None = None,
     single_story: bool = False,
+    resume: bool = False,
 ) -> LoopExitReason:
     """Run the main BMAD development loop.
 
@@ -91,16 +157,37 @@ def run_loop(
         stories_for_epic: Mapping of epic number to story IDs.
         resume_state: Optional state to resume from.
         single_story: If True, exit after completing one story.
+        resume: If True, the run was started with ``--resume``. Phases that may
+            reuse an artifact left by an earlier run consult this; on a fresh
+            run such an artifact is stale, not finished.
 
     Returns:
         LoopExitReason indicating how the loop ended.
 
     """
+    log_run_conditions(config)
+
     # Get phase configuration
     story_phases = config.loop.story
     epic_teardown = config.loop.epic_teardown
 
+    # Run-level budget (all optional; None = unlimited, today's behaviour)
+    max_stories = config.loop.max_stories
+    max_runtime = config.loop.max_runtime
+    max_cost_usd = config.loop.max_cost_usd
+    run_started = time.monotonic()
+    stories_started = 0
+    budget_last_story: str | None = None
+
+    # Spend is counted per run, like the other two budgets: the metrics file
+    # outlives the run, so everything already in it belongs to earlier ones.
+    # Counting those would make a run start over budget and turn the documented
+    # `--resume` remedy into an immediate re-stop.
+    cost_metrics_path = _metrics_path() if max_cost_usd is not None else None
+    cost_baseline = record_count(cost_metrics_path) if cost_metrics_path is not None else 0
+
     # Initialize
+    set_resume_mode(resume)
     reset_shutdown()
     register_signal_handlers()
 
@@ -152,6 +239,51 @@ def run_loop(
 
                 if state.current_phase is None:
                     break
+
+                # Wall-clock budget: checked every phase, so it also bounds a
+                # run that ping-pongs inside one story rather than advancing.
+                elapsed = time.monotonic() - run_started
+                if max_runtime is not None and elapsed >= max_runtime:
+                    return _budget_exhausted(
+                        key="loop.max_runtime",
+                        configured=f"{max_runtime:g}s",
+                        reached=f"{elapsed:.1f}s",
+                        state=state,
+                        state_path=state_path,
+                        project_path=project_path,
+                    )
+
+                # Cost budget: read back from the metrics the provider layer
+                # persists, so it meters what was actually billed rather than a
+                # local estimate. `None` spend means the meter is unreadable —
+                # the budget then does not fire, because a cap that fires on an
+                # assumed zero is worse than no cap at all.
+                if max_cost_usd is not None and cost_metrics_path is not None:
+                    spent = cost_since(cost_metrics_path, cost_baseline)
+                    if spent is not None and spent >= max_cost_usd:
+                        return _budget_exhausted(
+                            key="loop.max_cost_usd",
+                            configured=f"${max_cost_usd:,.2f}",
+                            reached=f"${spent:,.2f}",
+                            state=state,
+                            state_path=state_path,
+                            project_path=project_path,
+                        )
+
+                # Iteration budget: counted as stories entered, checked before
+                # any phase of the new story runs, so the stop is clean.
+                if state.current_story is not None and state.current_story != budget_last_story:
+                    budget_last_story = state.current_story
+                    stories_started += 1
+                    if max_stories is not None and stories_started > max_stories:
+                        return _budget_exhausted(
+                            key="loop.max_stories",
+                            configured=str(max_stories),
+                            reached=f"{stories_started} stories",
+                            state=state,
+                            state_path=state_path,
+                            project_path=project_path,
+                        )
 
                 # Print phase banner (hide story for epic-level teardown phases)
                 current_phase_name = state.current_phase.value if state.current_phase else ""
@@ -210,6 +342,43 @@ def run_loop(
                             return LoopExitReason.COMPLETED
                         # Fall through to normal advance_story below
 
+                    elif action == "env_blocked":
+                        # Environment failure: never the LLM fixer, and
+                        # qa_retry_count is left exactly as it was — this attempt
+                        # did not consume a code-fix retry. The failure stays
+                        # visible in the story record and at WARNING.
+                        state.failed_qa_stories.append(state.current_story or "")
+                        save_state(state, state_path)
+                        trigger_sync(state, project_path)
+                        write_progress(
+                            f"  Story {state.current_story}: quality gates"
+                            " ENV-BLOCKED \u2014 environment failure, not routed to"
+                            " the fixer"
+                        )
+                        if single_story:
+                            logger.info(
+                                "Single-story mode: exiting after story %s",
+                                state.current_story,
+                            )
+                            return LoopExitReason.COMPLETED
+                        next_state = skip_to_next_story(state, story_phases, stories)
+                        if next_state is not None:
+                            clear_story_cache(project_path)
+                            state = next_state
+                            continue
+                        if epic_teardown:
+                            clear_story_cache(project_path)
+                            state = state.with_phase(Phase(epic_teardown[0]))
+                        else:
+                            ep = advance_epic(state, epics, stories_for_epic, story_phases)
+                            if ep is None:
+                                _finalize_last_epic(state, state_path, project_path)
+                                logger.info("All epics completed!")
+                                return LoopExitReason.COMPLETED
+                            clear_story_cache(project_path)
+                            state = ep
+                        continue
+
                     elif action == "skip_story":
                         if config.auto_commit.enabled:
                             _auto_commit_after_synthesis(config, project_path, state)
@@ -251,6 +420,11 @@ def run_loop(
                     # Increment retry counter when entering FIX_QUALITY_GATE
                     if result.next_phase == Phase.FIX_QUALITY_GATE:
                         state.qa_retry_count += 1
+                    # Same mechanism for the review loop's own detour. Counted
+                    # on entry to the fixer, so the cap reads as "fix rounds
+                    # spent" rather than "reviews run".
+                    if result.next_phase == Phase.FIX_REVIEW:
+                        state.review_iteration += 1
                     state = state.with_phase(result.next_phase)
                     continue
 

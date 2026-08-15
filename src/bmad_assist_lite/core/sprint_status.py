@@ -54,6 +54,14 @@ class SprintStatus(BaseModel):
 
     Extra top-level fields (project, totals, current_sprint, etc.) are preserved
     via ``extra="allow"`` so they survive load/save round-trips.
+
+    This is the one persisted model that *keeps* unknown keys, and it is the
+    exception on purpose: ``sprint-status.yaml`` is co-authored — BMAD planning
+    skills generate it and humans edit it — so a key this tool does not model is
+    somebody else's content, not a mistake. Dropping it would make every save a
+    silent deletion. The tool-owned state files take the opposite policy for the
+    opposite reason; the rule and both halves of its justification live in
+    ``core.state.EXTRA_POLICY``.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -390,9 +398,20 @@ def load_sprint_status(path: str | Path) -> SprintStatus:
     try:
         data = yaml.safe_load(content)
         if not isinstance(data, dict):
-            logger.warning("Sprint status corrupted at %s: expected dict", path)
+            logger.warning(
+                "CORRUPT sprint status at %s: expected a mapping, got %s. "
+                "Treating as empty for this read — story discovery will look "
+                "like an empty backlog until the file is repaired.",
+                path,
+                type(data).__name__,
+            )
             return SprintStatus()
         return SprintStatus.model_validate(data)
     except (yaml.YAMLError, Exception) as e:
-        logger.warning("Sprint status parse error at %s: %s", path, e)
+        logger.warning(
+            "CORRUPT sprint status at %s: %s. Treating as empty for this read — "
+            "story discovery will look like an empty backlog until it is repaired.",
+            path,
+            e,
+        )
         return SprintStatus()

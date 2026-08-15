@@ -13,6 +13,7 @@ __all__ = [
     "ConfigValidationError",
     "ParserError",
     "StateError",
+    "MetricsError",
     "ProviderError",
     "ProviderTimeoutError",
     "ProviderExitCodeError",
@@ -59,6 +60,18 @@ class ParserError(BmadAssistError):
 
 class StateError(BmadAssistError):
     """State persistence or recovery error."""
+
+    pass
+
+
+class MetricsError(BmadAssistError):
+    """Per-phase metrics record persistence or parsing error.
+
+    Raised by the metrics writer and reader. Callers on the loop's hot path
+    swallow it: a lost measurement must never end a run. It is raised rather
+    than logged so that a harness reading a metrics file learns that a record
+    is unreadable instead of silently measuring a shorter run than happened.
+    """
 
     pass
 
