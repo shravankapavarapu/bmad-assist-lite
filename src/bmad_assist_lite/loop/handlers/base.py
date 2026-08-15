@@ -274,14 +274,27 @@ class BaseHandler(ABC):
         )
 
     def _stream_capture_path(self, state: State) -> Path | None:
-        """Forensic dev-stream capture path for this phase, or None to disable.
+        """Forensic stream-capture path for this phase, or None to disable.
 
-        None (the default) means no capture, so this is a no-op for every phase
-        but the one that overrides it. The dev handler is the only override, so
-        turn-by-turn stream capture is automatically scoped to dev_story.
+        Capture is opt-in and additive. The effective phase set is
+        ``{"dev_story"}`` when ``forensics.capture_stream`` is on (SP-D0,
+        back-compatible) unioned with ``forensics.capture_stream_phases``
+        (SP-A2). A phase outside the set returns None, so with both unset every
+        phase is a no-op and the call is byte-identical to before capture
+        existed. ``dev_story`` keeps its historical ``dev-stream-<story>.jsonl``
+        name; any other captured phase uses ``<phase>-stream-<story>.jsonl``.
         """
-        _ = state
-        return None
+        forensics = self.config.forensics
+        phases = set(forensics.capture_stream_phases)
+        if forensics.capture_stream:
+            phases.add("dev_story")
+        if self.phase_name not in phases:
+            return None
+        cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        story_id = state.current_story or "unknown"
+        prefix = "dev" if self.phase_name == "dev_story" else self.phase_name
+        return cache_dir / f"{prefix}-stream-{story_id}.jsonl"
 
     def execute(self, state: State) -> PhaseResult:
         """Execute the handler."""

@@ -376,6 +376,20 @@ class TestForensicRetention:
         # A non-forensic file is still swept — retention is not a blanket no-op.
         assert not ephemeral.exists()
 
+    def test_phase_prefixed_stream_artifact_archived(self, tmp_path: Path) -> None:
+        """SP-A2: <phase>-stream-<story>.jsonl (e.g. create_story) also survives."""
+        from bmad_assist_lite.loop.cleanup import FORENSICS_DIR_NAME, clear_story_cache
+
+        cache_dir = _make_cache(tmp_path)
+        cs_stream = cache_dir / "create_story-stream-4.7.jsonl"
+        cs_stream.write_text('{"seq":0,"kind":"text"}\n', encoding="utf-8")
+
+        clear_story_cache(tmp_path)
+
+        archived = cache_dir / FORENSICS_DIR_NAME / "4.7" / "create_story-stream-4.7.jsonl"
+        assert archived.exists(), "create_story-stream artifact did not survive"
+        assert not cs_stream.exists()
+
     def test_multiple_stories_archived_separately(self, tmp_path: Path) -> None:
         """Artifacts are attributable per story across transitions (AC4)."""
         from bmad_assist_lite.loop.cleanup import FORENSICS_DIR_NAME, clear_story_cache

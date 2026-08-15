@@ -546,6 +546,17 @@ class ForensicsConfig(BaseModel):
             "overhead decomposition"
         ),
     )
+    capture_stream_phases: list[str] = Field(
+        default_factory=list,
+        description=(
+            "SP-A2: extra phases whose turn-by-turn stream is captured, beyond "
+            "the dev_story capture that `capture_stream` enables (e.g. "
+            "['create_story'] to seed the run9 create_story decomposition). "
+            "Empty (default) leaves capture scoped exactly as `capture_stream` "
+            "dictates. Each phase's artifact is `<phase>-stream-<story>.jsonl` "
+            "(dev_story keeps its historical `dev-stream-<story>.jsonl` name)."
+        ),
+    )
 
 
 class LoopConfig(BaseModel):
