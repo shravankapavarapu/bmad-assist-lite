@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from bmad_assist_lite.core.config import LeanDev
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
@@ -23,15 +24,47 @@ class DevStoryHandler(BaseHandler):
         return self._build_common_context(state)
 
     def render_prompt(self, state: State) -> str:
-        """Compile the dev prompt, appending the SP-D1 lean-dev addendum when enabled.
+        """Compile the dev prompt, appending the lean-dev addendum for the mode.
 
-        With ``speed.lean_dev`` off (default) this returns exactly the base
-        prompt, byte-for-byte -- the addendum is opt-in and additive.
+        With ``speed.lean_dev`` ``off`` (default) this returns exactly the base
+        prompt, byte-for-byte -- the addendum is opt-in and additive. ``full``
+        appends the whole-phase run7 addendum; ``report_only`` appends the
+        report-scoped variant (SP-D1b).
         """
         prompt = super().render_prompt(state)
-        if self.config.speed.lean_dev:
+        mode = self.config.speed.lean_dev
+        if mode is LeanDev.FULL:
             prompt = f"{prompt}\n\n{self._lean_dev_addendum()}"
+        elif mode is LeanDev.REPORT_ONLY:
+            prompt = f"{prompt}\n\n{self._lean_dev_report_addendum()}"
         return prompt
+
+    @staticmethod
+    def _lean_dev_report_addendum() -> str:
+        """SP-D1b report-scoped economy: trim only the FINAL REPORT.
+
+        The decoupling probe. Unlike the full addendum, it says nothing about
+        how the work is done during implementation — no narration rule, no
+        Write-over-Edit, no restatement rule — so the working phase (where the
+        run7 thinking-suppression coupling was measured) is left untouched. Only
+        the final write-up is economised. If opus's thinking recovers toward the
+        OFF anchor under this variant, the coupling lived in the working-phase
+        rules, not the report rule.
+        """
+        return (
+            "<lean-dev-report>\n"
+            "Output economy applies to your FINAL REPORT ONLY. Work exactly as "
+            "you normally would while implementing: narrate, explore, edit, and "
+            "think as much as the task needs -- nothing about HOW you build "
+            "changes.\n"
+            "- In your final report only, do NOT re-print the code you wrote or "
+            "file contents. Give a brief summary and any findings only, under "
+            "~1000 tokens. The diff is the record of what changed; the report is "
+            "not.\n"
+            "Still required in full: implement every acceptance criterion, write "
+            "the tests the story calls for, and run the checks.\n"
+            "</lean-dev-report>"
+        )
 
     @staticmethod
     def _lean_dev_addendum() -> str:

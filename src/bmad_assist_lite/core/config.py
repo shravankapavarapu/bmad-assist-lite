@@ -8,6 +8,7 @@
 import copy
 import logging
 import os
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -409,6 +410,24 @@ class EpicKnowledgeConfig(BaseModel):
     )
 
 
+class LeanDev(StrEnum):
+    """Dev-story output-economy addendum mode (SP-D1 / SP-D1b).
+
+    - ``off``: no addendum; the base prompt is byte-identical to pre-lean_dev.
+    - ``full``: the run7 whole-phase economy addendum (no between-tool
+      narration, no restatement, Write-over-Edit, minimal Edit context, and a
+      findings-only final report). Byte-identical to the legacy ``lean_dev:
+      true``.
+    - ``report_only``: economy applied to the FINAL REPORT only; the working
+      phase is untouched. The decoupling probe — does opus's thinking recover
+      toward the OFF anchor when only the report is trimmed?
+    """
+
+    OFF = "off"
+    FULL = "full"
+    REPORT_ONLY = "report_only"
+
+
 class SpeedConfig(BaseModel):
     """Wall-clock speed pack (goal-run6 review pipeline + goal-run7 dev economy).
 
@@ -483,16 +502,30 @@ class SpeedConfig(BaseModel):
         default=False,
         description="SP-4: drop the reviewer fan-out stagger (only ever warmed a cached system prompt)",
     )
-    lean_dev: bool = Field(
-        default=False,
+    lean_dev: LeanDev = Field(
+        default=LeanDev.OFF,
         description=(
-            "SP-D1: append an output-economy addendum to the dev_story prompt "
-            "(no narration, no restating the story, one Write per new file over "
-            "incremental Edits, minimal Edit context, findings-only final report "
-            "that does not re-print code). Trims description of the work, not the "
-            "work: does not lower effort, skip tests, or reduce delivered code"
+            "SP-D1/D1b dev output-economy addendum mode: 'off' (default, base "
+            "prompt byte-identical), 'full' (the run7 whole-phase addendum: no "
+            "narration, no restating the story, Write-over-Edit, minimal Edit "
+            "context, findings-only final report), or 'report_only' (economy on "
+            "the FINAL REPORT only, working phase untouched — the decoupling "
+            "probe). Trims how the work is DESCRIBED, never the work. Legacy "
+            "bool true/false coerces to full/off."
         ),
     )
+
+    @field_validator("lean_dev", mode="before")
+    @classmethod
+    def _coerce_lean_dev(cls, value: object) -> object:
+        """Accept the legacy bool (true→full, false→off) and case-insensitive strings."""
+        if isinstance(value, bool):
+            return LeanDev.FULL if value else LeanDev.OFF
+        if value is None:
+            return LeanDev.OFF
+        if isinstance(value, str):
+            return value.lower()
+        return value
 
 
 class SignoffConfig(BaseModel):
