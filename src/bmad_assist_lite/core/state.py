@@ -150,6 +150,7 @@ class Phase(Enum):
     VALIDATE_STORY = "validate_story"
     VALIDATE_STORY_SYNTHESIS = "validate_story_synthesis"
     DEV_STORY = "dev_story"
+    DEV_GATE = "dev_gate"
     CODE_REVIEW = "code_review"
     CODE_REVIEW_SYNTHESIS = "code_review_synthesis"
     QUALITY_GATE = "quality_gate"
@@ -184,6 +185,9 @@ class State(BaseModel):
     review_finding_hashes: list[str] = Field(default_factory=list)
     review_blocked_stories: list[str] = Field(default_factory=list)
     review_story_id: str | None = None
+    # SP-A0 real dev gate: one objective verdict per dev_gate run of the current
+    # story, appended in order (attempt 0 first, then any SP-A1 fallback retry).
+    dev_gate_records: list[dict[str, Any]] = Field(default_factory=list)
     started_at: datetime | None = None
     updated_at: datetime | None = None
     story_started_at: datetime | None = None

@@ -138,6 +138,7 @@ NON_ROUTABLE_LLM_PHASES: frozenset[str] = frozenset(
 NON_LLM_PHASES: frozenset[str] = frozenset(
     {
         "quality_gate",
+        "dev_gate",
         "epic_quality_gate",
     }
 )
@@ -240,6 +241,7 @@ class TimeoutsConfig(BaseModel):
     validate_story: int | None = None
     validate_story_synthesis: int | None = None
     dev_story: int | None = None
+    dev_gate: int | None = None
     code_review: int | None = None
     code_review_synthesis: int | None = None
     quality_gate: int | None = None
@@ -255,6 +257,7 @@ class TimeoutsConfig(BaseModel):
         "validate_story": 900,
         "validate_story_synthesis": 900,
         "dev_story": 1800,
+        "dev_gate": 1800,
         "code_review": 1200,
         "code_review_synthesis": 1200,
         "quality_gate": 300,
@@ -300,6 +303,19 @@ class ContextDocsConfig(BaseModel):
     )
 
 
+class DevGateCommand(BaseModel):
+    """One named command in the real dev gate (SP-A0).
+
+    ``command`` runs in the story worktree; a zero exit code is a pass. The name
+    is what the recorded verdict and the console line report on failure.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    command: str
+
+
 class QualityGateConfig(BaseModel):
     """Fallback commands for quality gate checks."""
 
@@ -312,6 +328,25 @@ class QualityGateConfig(BaseModel):
     test_unit: str | None = None
     command_timeout: int = Field(default=120, description="Timeout per command in seconds")
     max_retries: int = Field(default=2, description="Max LLM fix attempts before skipping story")
+    real_dev_gate: bool = Field(
+        default=False,
+        description=(
+            "SP-A0: run a real per-story dev gate (typecheck + the story's own "
+            "tests) in the story worktree immediately after dev_story, recording "
+            "an objective pass/fail verdict in run state — the run7 offline-replay "
+            "method moved in-chain. Off (default) leaves the chain byte-identical: "
+            "the dev_gate phase is only inserted when this is on. Commands come "
+            "from real_dev_gate_commands, or fall back to the typecheck + "
+            "test/test_unit fields."
+        ),
+    )
+    real_dev_gate_commands: list[DevGateCommand] = Field(
+        default_factory=list,
+        description=(
+            "Ordered named commands the real dev gate runs (each must exit 0 to "
+            "pass). Empty falls back to typecheck + test/test_unit."
+        ),
+    )
 
 
 class AutoCommitConfig(BaseModel):

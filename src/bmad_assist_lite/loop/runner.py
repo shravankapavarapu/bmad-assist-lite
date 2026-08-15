@@ -30,7 +30,26 @@ from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["run_loop"]
+__all__ = ["run_loop", "effective_story_phases"]
+
+
+def effective_story_phases(config: Config) -> list[str]:
+    """The story phase list actually run for this config.
+
+    Inserts the real dev gate (SP-A0) immediately after ``dev_story`` when
+    ``quality_gate.real_dev_gate`` is on. With the flag off this returns a copy
+    of ``config.loop.story`` unchanged, so the chain is byte-identical to today.
+    """
+    phases = list(config.loop.story)
+    qg = config.quality_gate
+    if (
+        qg is not None
+        and qg.real_dev_gate
+        and "dev_story" in phases
+        and "dev_gate" not in phases
+    ):
+        phases.insert(phases.index("dev_story") + 1, "dev_gate")
+    return phases
 
 
 def _finalize_last_epic(state: State, state_path: Path, project_path: Path) -> None:
@@ -176,8 +195,9 @@ def run_loop(
     """
     log_run_conditions(config)
 
-    # Get phase configuration
-    story_phases = config.loop.story
+    # Get phase configuration. The real dev gate (SP-A0) is inserted here when
+    # its flag is on; with the flag off this equals config.loop.story exactly.
+    story_phases = effective_story_phases(config)
     epic_teardown = config.loop.epic_teardown
 
     # Run-level budget (all optional; None = unlimited, today's behaviour)

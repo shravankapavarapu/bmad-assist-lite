@@ -98,15 +98,18 @@ class TestPhaseClassification:
         ]
 
     def test_non_llm_phases_exact_membership(self):
-        assert sorted(NON_LLM_PHASES) == ["epic_quality_gate", "quality_gate"]
+        # dev_gate (SP-A0) is deterministic — it runs the real typecheck + the
+        # story's own tests, no LLM — so it joins the non-LLM class.
+        assert sorted(NON_LLM_PHASES) == ["dev_gate", "epic_quality_gate", "quality_gate"]
 
     def test_class_sizes(self):
         # ROUTABLE_PHASES stays closed at 3: the review fix phase joined the
         # NON-routable class, which is where model parity requires it to be.
+        # NON_LLM grew to 3 with the deterministic dev_gate (SP-A0).
         assert (len(ROUTABLE_PHASES), len(NON_ROUTABLE_LLM_PHASES), len(NON_LLM_PHASES)) == (
             3,
             6,
-            2,
+            3,
         )
 
     def test_classes_are_pairwise_disjoint(self):
