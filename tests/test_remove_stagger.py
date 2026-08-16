@@ -21,8 +21,13 @@ def _handler(tmp_path, speed: dict[str, Any], parallel_delay: float = 8.0) -> Co
 
 
 class TestReviewerStagger:
-    def test_default_staggers_when_system_prompt(self, tmp_path):
+    def test_default_removes_stagger_even_with_system_prompt(self, tmp_path):
+        # remove_stagger defaults ON since the 2026-08-16 flip.
         handler = _handler(tmp_path, {})
+        assert handler._reviewer_stagger("SYS") == 0.0
+
+    def test_opt_out_restores_stagger_when_system_prompt(self, tmp_path):
+        handler = _handler(tmp_path, {"remove_stagger": False})
         assert handler._reviewer_stagger("SYS") == 8.0
 
     def test_default_zero_without_system_prompt(self, tmp_path):

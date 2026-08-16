@@ -150,6 +150,7 @@ class Phase(Enum):
     VALIDATE_STORY = "validate_story"
     VALIDATE_STORY_SYNTHESIS = "validate_story_synthesis"
     DEV_STORY = "dev_story"
+    DEV_GATE = "dev_gate"
     CODE_REVIEW = "code_review"
     CODE_REVIEW_SYNTHESIS = "code_review_synthesis"
     QUALITY_GATE = "quality_gate"
@@ -184,6 +185,18 @@ class State(BaseModel):
     review_finding_hashes: list[str] = Field(default_factory=list)
     review_blocked_stories: list[str] = Field(default_factory=list)
     review_story_id: str | None = None
+    # SP-A0 real dev gate: one objective verdict per dev_gate run of the current
+    # story, appended in order (attempt 0 first, then any SP-A1 fallback retry).
+    dev_gate_records: list[dict[str, Any]] = Field(default_factory=list)
+    # SP-A1 lean-first adaptive dev. dev_attempt counts dev_story executions for
+    # the current story (0 = lean-first, 1 = the one lean-off fallback retry).
+    # pre_dev_snapshot is the git tree sha of the pre-dev worktree the retry
+    # resets to; pre_dev_story tags which story it belongs to so the fields reset
+    # cleanly at the next story; adaptive_retry_fired marks the retry has run.
+    dev_attempt: int = 0
+    pre_dev_snapshot: str | None = None
+    pre_dev_story: str | None = None
+    adaptive_retry_fired: bool = False
     started_at: datetime | None = None
     updated_at: datetime | None = None
     story_started_at: datetime | None = None

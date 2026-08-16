@@ -307,7 +307,8 @@ class TestDevHandlerGating:
     def test_base_handler_never_captures(self, tmp_path: Path) -> None:
         """Phase-scoping: a non-dev handler returns None even with capture on.
 
-        Only DevStoryHandler overrides the hook, so no other phase captures.
+        `capture_stream` adds only `dev_story` to the effective set, so a
+        code_review handler is outside it and captures nothing.
         """
         from bmad_assist_lite.core.config import load_config
         from bmad_assist_lite.core.state import State
@@ -323,3 +324,81 @@ class TestDevHandlerGating:
         state = State(current_epic=3, current_story="3.1")
 
         assert handler._stream_capture_path(state) is None
+
+
+class TestCaptureStreamPhases:
+    """SP-A2: `forensics.capture_stream_phases` generalizes capture beyond dev."""
+
+    def _handler(self, tmp_path: Path, handler_cls: Any, **forensics: Any) -> Any:
+        from bmad_assist_lite.core.config import load_config
+
+        config = load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "forensics": forensics,
+            }
+        )
+        return handler_cls(config, tmp_path)
+
+    def test_default_empty_no_capture(self, tmp_path: Path) -> None:
+        """Nothing set → no phase captures (byte-identical to before capture)."""
+        from bmad_assist_lite.core.state import State
+        from bmad_assist_lite.loop.handlers.create_story import CreateStoryHandler
+
+        handler = self._handler(tmp_path, CreateStoryHandler)
+        state = State(current_epic=4, current_story="4.7")
+        assert handler._stream_capture_path(state) is None
+
+    def test_listed_phase_captured_with_phase_prefixed_name(self, tmp_path: Path) -> None:
+        """A listed phase yields `<phase>-stream-<story>.jsonl`."""
+        from bmad_assist_lite.core.state import State
+        from bmad_assist_lite.loop.handlers.create_story import CreateStoryHandler
+
+        handler = self._handler(
+            tmp_path, CreateStoryHandler, capture_stream_phases=["create_story"]
+        )
+        state = State(current_epic=4, current_story="4.7")
+        path = handler._stream_capture_path(state)
+        assert path == (
+            tmp_path / ".bmad-assist-lite" / "cache" / "create_story-stream-4.7.jsonl"
+        )
+        assert path is not None and path.parent.is_dir()
+
+    def test_unlisted_phase_yields_none(self, tmp_path: Path) -> None:
+        """A phase not in the list (and not dev via capture_stream) captures nothing."""
+        from bmad_assist_lite.core.state import State
+        from bmad_assist_lite.loop.handlers.code_review import CodeReviewHandler
+
+        handler = self._handler(
+            tmp_path, CodeReviewHandler, capture_stream_phases=["create_story"]
+        )
+        state = State(current_epic=4, current_story="4.7")
+        assert handler._stream_capture_path(state) is None
+
+    def test_dev_and_create_story_union(self, tmp_path: Path) -> None:
+        """capture_stream (dev) and capture_stream_phases (create_story) compose.
+
+        dev_story keeps its historical `dev-stream-` name; create_story gets its
+        own phase-prefixed artifact — both survive the same run.
+        """
+        from bmad_assist_lite.core.state import State
+        from bmad_assist_lite.loop.handlers.create_story import CreateStoryHandler
+        from bmad_assist_lite.loop.handlers.dev_story import DevStoryHandler
+
+        kwargs = {"capture_stream": True, "capture_stream_phases": ["create_story"]}
+        dev = self._handler(tmp_path, DevStoryHandler, **kwargs)
+        create = self._handler(tmp_path, CreateStoryHandler, **kwargs)
+        state = State(current_epic=4, current_story="4.7")
+
+        dev_path = dev._stream_capture_path(state)
+        create_path = create._stream_capture_path(state)
+        assert dev_path is not None and dev_path.name == "dev-stream-4.7.jsonl"
+        assert create_path is not None and create_path.name == "create_story-stream-4.7.jsonl"
+
+    def test_config_default_is_empty_list(self) -> None:
+        from bmad_assist_lite.core.config import load_config
+
+        config = load_config(
+            {"providers": {"master": {"provider": "claude", "model": "opus"}}}
+        )
+        assert config.forensics.capture_stream_phases == []

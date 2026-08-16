@@ -8,11 +8,18 @@
 import copy
 import logging
 import os
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
 from bmad_assist_lite.core.exceptions import ConfigError
 from bmad_assist_lite.parallel.config import ParallelConfig
@@ -138,6 +145,7 @@ NON_ROUTABLE_LLM_PHASES: frozenset[str] = frozenset(
 NON_LLM_PHASES: frozenset[str] = frozenset(
     {
         "quality_gate",
+        "dev_gate",
         "epic_quality_gate",
     }
 )
@@ -240,6 +248,7 @@ class TimeoutsConfig(BaseModel):
     validate_story: int | None = None
     validate_story_synthesis: int | None = None
     dev_story: int | None = None
+    dev_gate: int | None = None
     code_review: int | None = None
     code_review_synthesis: int | None = None
     quality_gate: int | None = None
@@ -255,6 +264,7 @@ class TimeoutsConfig(BaseModel):
         "validate_story": 900,
         "validate_story_synthesis": 900,
         "dev_story": 1800,
+        "dev_gate": 1800,
         "code_review": 1200,
         "code_review_synthesis": 1200,
         "quality_gate": 300,
@@ -300,6 +310,19 @@ class ContextDocsConfig(BaseModel):
     )
 
 
+class DevGateCommand(BaseModel):
+    """One named command in the real dev gate (SP-A0).
+
+    ``command`` runs in the story worktree; a zero exit code is a pass. The name
+    is what the recorded verdict and the console line report on failure.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    command: str
+
+
 class QualityGateConfig(BaseModel):
     """Fallback commands for quality gate checks."""
 
@@ -312,6 +335,49 @@ class QualityGateConfig(BaseModel):
     test_unit: str | None = None
     command_timeout: int = Field(default=120, description="Timeout per command in seconds")
     max_retries: int = Field(default=2, description="Max LLM fix attempts before skipping story")
+    real_dev_gate: bool = Field(
+        default=True,
+        description=(
+            "SP-A0: run a real per-story dev gate (typecheck + the story's own "
+            "tests) in the story worktree immediately after dev_story, recording "
+            "an objective pass/fail verdict in run state — the run7 offline-replay "
+            "method moved in-chain. ON by default (goal-run8): the dev_gate phase "
+            "runs after dev_story. Commands come from real_dev_gate_commands, or "
+            "fall back to the typecheck + test/test_unit fields; with none resolved "
+            "the gate is a no-op pass. Set false to leave the chain byte-identical."
+        ),
+    )
+    real_dev_gate_commands: list[DevGateCommand] = Field(
+        default_factory=list,
+        description=(
+            "Ordered named commands the real dev gate runs (each must exit 0 to "
+            "pass). Empty falls back to typecheck + test/test_unit."
+        ),
+    )
+    real_dev_gate_command_timeout: int = Field(
+        default=900,
+        description=(
+            "Per-command timeout in seconds for the real dev gate. Separate from "
+            "command_timeout (the quick post-review fallback checks) because the "
+            "dev gate typically runs a FULL test suite: a 120s ceiling there "
+            "produces spurious timeout failures, and under lean_dev_adaptive a "
+            "spurious failure burns a full lean-off dev re-run."
+        ),
+    )
+
+    def resolves_dev_gate_commands(self) -> bool:
+        """True if the real dev gate would actually run at least one command.
+
+        Mirrors DevGateHandler._commands() resolution. Used to keep the on-by-
+        default adaptive lever safe: lean-first only engages when a real gate
+        backs it, so a project with no gate configured never silently becomes
+        backstop-less blanket lean.
+        """
+        if not self.real_dev_gate:
+            return False
+        if self.real_dev_gate_commands:
+            return True
+        return bool(self.typecheck or self.test or self.test_unit)
 
 
 class AutoCommitConfig(BaseModel):
@@ -374,11 +440,35 @@ class EpicKnowledgeConfig(BaseModel):
     )
 
 
+class LeanDev(StrEnum):
+    """Dev-story output-economy addendum mode (SP-D1 / SP-D1b).
+
+    - ``off``: no addendum; the base prompt is byte-identical to pre-lean_dev.
+    - ``full``: the run7 whole-phase economy addendum (no between-tool
+      narration, no restatement, Write-over-Edit, minimal Edit context, and a
+      findings-only final report). Byte-identical to the legacy ``lean_dev:
+      true``.
+    - ``report_only``: economy applied to the FINAL REPORT only; the working
+      phase is untouched. The decoupling probe — does opus's thinking recover
+      toward the OFF anchor when only the report is trimmed?
+    """
+
+    OFF = "off"
+    FULL = "full"
+    REPORT_ONLY = "report_only"
+
+
 class SpeedConfig(BaseModel):
     """Wall-clock speed pack (goal-run6 review pipeline + goal-run7 dev economy).
 
-    All off by default and backward-compatible: with every flag ``False`` the
-    chain runs exactly as today. The measured physics is that every
+    The four goal-run6 review-pipeline levers (structured_review, delta_round2,
+    lean_review, remove_stagger) are ON by default (operator sign-off
+    2026-08-16): shipped on the run6 n=3 A/B (review pipeline -56%, no quality
+    regression, zero parse failures) and live-validated as a set by the
+    goal-run8 Epic-4 run. Set any of them ``False`` to opt out; with every flag
+    off the chain is byte-identical to the pre-speed-pack behaviour. The dev
+    levers keep their own defaults (adaptive on, blanket lean_dev off). The
+    measured physics is that every
     single-lane phase is 100% API time at a fixed output-tokens/sec, so
     ``wall ~= critical-path output tokens / tps``. Each flag removes
     critical-path output tokens from a distinct phase family:
@@ -421,7 +511,7 @@ class SpeedConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     structured_review: bool = Field(
-        default=False,
+        default=True,
         description=(
             "SP-1: reviewer/validator lanes emit structured findings; the "
             "synthesis (still the fixer, full effort) is fed a deterministic "
@@ -430,7 +520,7 @@ class SpeedConfig(BaseModel):
         ),
     )
     delta_round2: bool = Field(
-        default=False,
+        default=True,
         description=(
             "SP-2: round-2 re-review runs a fresh session scoped to round-1 "
             "findings + inlined fix diff + story (no full artifacts, no resume; "
@@ -438,26 +528,54 @@ class SpeedConfig(BaseModel):
         ),
     )
     lean_review: bool = Field(
-        default=False,
+        default=True,
         description=(
             "SP-3: reviewer lanes one effort notch down (synthesis effort "
             "unchanged), findings-only output, diff-scoped reading"
         ),
     )
     remove_stagger: bool = Field(
-        default=False,
+        default=True,
         description="SP-4: drop the reviewer fan-out stagger (only ever warmed a cached system prompt)",
     )
-    lean_dev: bool = Field(
-        default=False,
+    lean_dev: LeanDev = Field(
+        default=LeanDev.OFF,
         description=(
-            "SP-D1: append an output-economy addendum to the dev_story prompt "
-            "(no narration, no restating the story, one Write per new file over "
-            "incremental Edits, minimal Edit context, findings-only final report "
-            "that does not re-print code). Trims description of the work, not the "
-            "work: does not lower effort, skip tests, or reduce delivered code"
+            "SP-D1/D1b dev output-economy addendum mode: 'off' (default, base "
+            "prompt byte-identical), 'full' (the run7 whole-phase addendum: no "
+            "narration, no restating the story, Write-over-Edit, minimal Edit "
+            "context, findings-only final report), or 'report_only' (economy on "
+            "the FINAL REPORT only, working phase untouched — the decoupling "
+            "probe). Trims how the work is DESCRIBED, never the work. Legacy "
+            "bool true/false coerces to full/off."
         ),
     )
+    lean_dev_adaptive: bool = Field(
+        default=True,
+        description=(
+            "SP-A1: lean-first with an automatic quality-gated fallback. dev_story "
+            "runs with the lean addendum ON (full); if the real dev gate then "
+            "FAILS, the story is re-run ONCE with lean OFF from the pre-dev "
+            "worktree state, and the retry's result stands. Requires "
+            "quality_gate.real_dev_gate (the gate is the tripwire). ON by default "
+            "(goal-run8 Epic-4 validation): lean-first engages only when the gate "
+            "actually resolves commands (see QualityGateConfig.resolves_dev_gate_"
+            "commands) — with no gate it degrades to plain full dev, never "
+            "backstop-less blanket lean. Set false to leave dev_story byte-identical."
+        ),
+    )
+
+    @field_validator("lean_dev", mode="before")
+    @classmethod
+    def _coerce_lean_dev(cls, value: object) -> object:
+        """Accept the legacy bool (true→full, false→off) and case-insensitive strings."""
+        if isinstance(value, bool):
+            return LeanDev.FULL if value else LeanDev.OFF
+        if value is None:
+            return LeanDev.OFF
+        if isinstance(value, str):
+            return value.lower()
+        return value
 
 
 class SignoffConfig(BaseModel):
@@ -509,6 +627,17 @@ class ForensicsConfig(BaseModel):
             "Capture the dev_story call's turn-by-turn stream "
             "(text/thinking/tool_use/tool_result) as a forensic JSONL for "
             "overhead decomposition"
+        ),
+    )
+    capture_stream_phases: list[str] = Field(
+        default_factory=list,
+        description=(
+            "SP-A2: extra phases whose turn-by-turn stream is captured, beyond "
+            "the dev_story capture that `capture_stream` enables (e.g. "
+            "['create_story'] to seed the run9 create_story decomposition). "
+            "Empty (default) leaves capture scoped exactly as `capture_stream` "
+            "dictates. Each phase's artifact is `<phase>-stream-<story>.jsonl` "
+            "(dev_story keeps its historical `dev-stream-<story>.jsonl` name)."
         ),
     )
 
@@ -635,6 +764,14 @@ class Config(BaseModel):
     parallel: ParallelConfig | None = Field(
         default=None, description="Parallel story execution configuration"
     )
+
+    # NOTE (goal-run8): speed.lean_dev_adaptive + quality_gate.real_dev_gate are ON
+    # by default. Adaptive no longer HARD-REQUIRES a configured gate at config time:
+    # when the gate resolves no commands, resolve_dev_lean_mode() degrades the story
+    # to full dev (never backstop-less blanket lean). That runtime guard is a stronger
+    # guarantee than a config-time rejection, and a config-time error here would break
+    # every gateless config now that adaptive defaults on — so the old validator was
+    # removed. Explicitly set speed.lean_dev_adaptive=false to disable the lever.
 
 
 # ============================================================================

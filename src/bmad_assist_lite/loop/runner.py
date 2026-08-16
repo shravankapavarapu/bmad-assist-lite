@@ -26,11 +26,31 @@ from bmad_assist_lite.loop.signals import (
 )
 from bmad_assist_lite.loop.transitions import advance_epic, advance_story, skip_to_next_story
 from bmad_assist_lite.loop.types import LoopExitReason
+from bmad_assist_lite.loop.worktree_snapshot import snapshot_worktree
 from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["run_loop"]
+__all__ = ["run_loop", "effective_story_phases"]
+
+
+def effective_story_phases(config: Config) -> list[str]:
+    """The story phase list actually run for this config.
+
+    Inserts the real dev gate (SP-A0) immediately after ``dev_story`` when
+    ``quality_gate.real_dev_gate`` is on. With the flag off this returns a copy
+    of ``config.loop.story`` unchanged, so the chain is byte-identical to today.
+    """
+    phases = list(config.loop.story)
+    qg = config.quality_gate
+    if (
+        qg is not None
+        and qg.real_dev_gate
+        and "dev_story" in phases
+        and "dev_gate" not in phases
+    ):
+        phases.insert(phases.index("dev_story") + 1, "dev_gate")
+    return phases
 
 
 def _finalize_last_epic(state: State, state_path: Path, project_path: Path) -> None:
@@ -176,9 +196,11 @@ def run_loop(
     """
     log_run_conditions(config)
 
-    # Get phase configuration
-    story_phases = config.loop.story
+    # Get phase configuration. The real dev gate (SP-A0) is inserted here when
+    # its flag is on; with the flag off this equals config.loop.story exactly.
+    story_phases = effective_story_phases(config)
     epic_teardown = config.loop.epic_teardown
+    adaptive_dev = config.speed.lean_dev_adaptive  # SP-A1 lean-first fallback
 
     # Run-level budget (all optional; None = unlimited, today's behaviour)
     max_stories = config.loop.max_stories
@@ -302,6 +324,23 @@ def run_loop(
                     state.current_epic,
                     None if is_teardown else state.current_story,
                 )
+
+                # SP-A1: before the first dev attempt of a story, reset the
+                # adaptive story-scoped state and snapshot the pre-dev worktree,
+                # so a lean-first fallback can retry from exactly this point. The
+                # retry re-enters DEV_STORY with pre_dev_story already set, so it
+                # neither resets nor re-snapshots. Guarded by the flag → the loop
+                # is byte-identical when adaptive dev is off.
+                if (
+                    adaptive_dev
+                    and state.current_phase == Phase.DEV_STORY
+                    and state.pre_dev_story != state.current_story
+                ):
+                    state.dev_attempt = 0
+                    state.adaptive_retry_fired = False
+                    state.dev_gate_records = []
+                    state.pre_dev_story = state.current_story
+                    state.pre_dev_snapshot = snapshot_worktree(project_path)
 
                 # Save state before execution so disk reflects the active phase
                 save_state(state, state_path)
@@ -436,6 +475,11 @@ def run_loop(
                     # spent" rather than "reviews run".
                     if result.next_phase == Phase.FIX_REVIEW:
                         state.review_iteration += 1
+                    # SP-A1 lean-first fallback: the dev gate routes back to
+                    # DEV_STORY for the one lean-off retry; count the attempt so
+                    # the mode and the retry cap read off dev_attempt.
+                    if result.next_phase == Phase.DEV_STORY:
+                        state.dev_attempt += 1
                     state = state.with_phase(result.next_phase)
                     continue
 

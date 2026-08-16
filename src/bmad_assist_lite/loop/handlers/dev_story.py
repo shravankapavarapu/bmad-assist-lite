@@ -1,11 +1,34 @@
 """DEV_STORY phase handler."""
 
-from pathlib import Path
 from typing import Any
 
+from bmad_assist_lite.core.config import Config, LeanDev
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
+
+
+def resolve_dev_lean_mode(config: Config, state: State) -> LeanDev:
+    """The lean-dev mode the current dev_story attempt uses.
+
+    Under SP-A1 adaptive mode the mode is decided by the attempt, not the static
+    config: the first attempt is forced ``full`` (lean-first) and any fallback
+    retry (``dev_attempt`` >= 1) is forced ``off``. Outside adaptive mode the
+    static ``speed.lean_dev`` mode applies unchanged. Shared by the dev prompt
+    and the dev-gate record so both agree on what actually ran.
+
+    Safety guard (adaptive is on by default): lean-first only engages when the
+    real dev gate actually resolves commands. With no gate to back it the story
+    runs the static ``speed.lean_dev`` (``off`` by default) — full dev — so an
+    unconfigured project never silently becomes backstop-less blanket lean.
+    """
+    gate_backs_it = (
+        config.quality_gate is not None
+        and config.quality_gate.resolves_dev_gate_commands()
+    )
+    if config.speed.lean_dev_adaptive and gate_backs_it:
+        return LeanDev.FULL if state.dev_attempt == 0 else LeanDev.OFF
+    return config.speed.lean_dev
 
 
 class DevStoryHandler(BaseHandler):
@@ -24,15 +47,47 @@ class DevStoryHandler(BaseHandler):
         return self._build_common_context(state)
 
     def render_prompt(self, state: State) -> str:
-        """Compile the dev prompt, appending the SP-D1 lean-dev addendum when enabled.
+        """Compile the dev prompt, appending the lean-dev addendum for the mode.
 
-        With ``speed.lean_dev`` off (default) this returns exactly the base
-        prompt, byte-for-byte -- the addendum is opt-in and additive.
+        With ``speed.lean_dev`` ``off`` (default) this returns exactly the base
+        prompt, byte-for-byte -- the addendum is opt-in and additive. ``full``
+        appends the whole-phase run7 addendum; ``report_only`` appends the
+        report-scoped variant (SP-D1b).
         """
         prompt = super().render_prompt(state)
-        if self.config.speed.lean_dev:
+        mode = resolve_dev_lean_mode(self.config, state)
+        if mode is LeanDev.FULL:
             prompt = f"{prompt}\n\n{self._lean_dev_addendum()}"
+        elif mode is LeanDev.REPORT_ONLY:
+            prompt = f"{prompt}\n\n{self._lean_dev_report_addendum()}"
         return prompt
+
+    @staticmethod
+    def _lean_dev_report_addendum() -> str:
+        """SP-D1b report-scoped economy: trim only the FINAL REPORT.
+
+        The decoupling probe. Unlike the full addendum, it says nothing about
+        how the work is done during implementation — no narration rule, no
+        Write-over-Edit, no restatement rule — so the working phase (where the
+        run7 thinking-suppression coupling was measured) is left untouched. Only
+        the final write-up is economised. If opus's thinking recovers toward the
+        OFF anchor under this variant, the coupling lived in the working-phase
+        rules, not the report rule.
+        """
+        return (
+            "<lean-dev-report>\n"
+            "Output economy applies to your FINAL REPORT ONLY. Work exactly as "
+            "you normally would while implementing: narrate, explore, edit, and "
+            "think as much as the task needs -- nothing about HOW you build "
+            "changes.\n"
+            "- In your final report only, do NOT re-print the code you wrote or "
+            "file contents. Give a brief summary and any findings only, under "
+            "~1000 tokens. The diff is the record of what changed; the report is "
+            "not.\n"
+            "Still required in full: implement every acceptance criterion, write "
+            "the tests the story calls for, and run the checks.\n"
+            "</lean-dev-report>"
+        )
 
     @staticmethod
     def _lean_dev_addendum() -> str:
@@ -66,19 +121,3 @@ class DevStoryHandler(BaseHandler):
             "describe the work, never about doing less of it.\n"
             "</lean-dev>"
         )
-
-    def _stream_capture_path(self, state: State) -> Path | None:
-        """Resolve the dev-stream forensic JSONL path when capture is enabled.
-
-        Off by default: returns None unless ``forensics.capture_stream`` is set,
-        in which case the dev call's turn-by-turn stream is retained at
-        ``.bmad-assist-lite/cache/dev-stream-<story>.jsonl`` (a fresh file per
-        invoke — truncated on open — so it reflects the last dev attempt). The
-        cache directory is resolved exactly as ``quality_gate.py`` does.
-        """
-        if not self.config.forensics.capture_stream:
-            return None
-        cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        story_id = state.current_story or "unknown"
-        return cache_dir / f"dev-stream-{story_id}.jsonl"
