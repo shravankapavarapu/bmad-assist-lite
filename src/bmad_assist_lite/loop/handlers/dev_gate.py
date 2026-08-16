@@ -57,8 +57,9 @@ class DevGateHandler:
         return commands
 
     def _timeout(self) -> int:
-        """Per-command timeout, shared with the quality-gate fallback config."""
-        return self.config.quality_gate.command_timeout if self.config.quality_gate else 120
+        """Per-command timeout — the dev gate's own, sized for a full test suite."""
+        qg = self.config.quality_gate
+        return qg.real_dev_gate_command_timeout if qg else 900
 
     def _write_adaptive_record(self, state: State, record: dict[str, object]) -> None:
         """Append the per-attempt record to a durable per-story JSONL.
@@ -130,13 +131,20 @@ class DevGateHandler:
         }
 
         # SP-A1 adaptive fallback: the first (lean-first) attempt failing the gate
-        # re-runs the story lean-off from the pre-dev state, exactly once.
+        # re-runs the story lean-off from the pre-dev state, exactly once. An
+        # env-classified failure (command not executable: missing deps, no shell)
+        # would fail the retry's gate identically, so the redo would be a pure
+        # waste — record the verdict and advance instead.
+        env_failure = classification == "env"
         do_retry = (
             not passed
+            and not env_failure
             and self.config.speed.lean_dev_adaptive
             and state.dev_attempt == 0
             and not state.adaptive_retry_fired
         )
+        if not passed and env_failure and state.dev_attempt == 0:
+            record["retry_skipped"] = "env"
         if do_retry:
             restored = (
                 restore_worktree(self.project_path, state.pre_dev_snapshot)
@@ -173,8 +181,14 @@ class DevGateHandler:
                 outputs={"dev_gate_action": "retry", "dev_gate_passed": False},
             )
 
+        env_note = (
+            " — env-classified, lean-off retry skipped (fix the environment, not the code)"
+            if record.get("retry_skipped") == "env"
+            else ""
+        )
         write_progress(
-            f"  Dev gate FAILED — story {state.current_story} (failed: {', '.join(failed)})"
+            f"  Dev gate FAILED — story {state.current_story} "
+            f"(failed: {', '.join(failed)}){env_note}"
         )
         logger.warning(
             "Dev gate failed for story %s: %s [%s]",

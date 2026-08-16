@@ -354,6 +354,16 @@ class QualityGateConfig(BaseModel):
             "pass). Empty falls back to typecheck + test/test_unit."
         ),
     )
+    real_dev_gate_command_timeout: int = Field(
+        default=900,
+        description=(
+            "Per-command timeout in seconds for the real dev gate. Separate from "
+            "command_timeout (the quick post-review fallback checks) because the "
+            "dev gate typically runs a FULL test suite: a 120s ceiling there "
+            "produces spurious timeout failures, and under lean_dev_adaptive a "
+            "spurious failure burns a full lean-off dev re-run."
+        ),
+    )
 
     def resolves_dev_gate_commands(self) -> bool:
         """True if the real dev gate would actually run at least one command.

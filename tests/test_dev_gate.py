@@ -58,6 +58,20 @@ class TestDevGateConfig:
         assert [c.name for c in cmds] == ["Typecheck", "Tests"]
         assert cmds[1].command == "pnpm test -- ingest"
 
+    def test_gate_timeout_defaults_suite_sized(self, tmp_path) -> None:
+        # The dev gate runs a FULL suite, so it gets its own 900s default rather
+        # than sharing command_timeout (120s) with the quick fallback checks.
+        handler = DevGateHandler(_cfg(typecheck="true"), tmp_path)
+        assert handler._timeout() == 900
+
+    def test_gate_timeout_independent_of_command_timeout(self, tmp_path) -> None:
+        handler = DevGateHandler(_cfg(typecheck="true", command_timeout=60), tmp_path)
+        assert handler._timeout() == 900
+
+    def test_gate_timeout_configurable(self, tmp_path) -> None:
+        cfg = _cfg(typecheck="true", real_dev_gate_command_timeout=300)
+        assert DevGateHandler(cfg, tmp_path)._timeout() == 300
+
 
 class TestEffectivePhases:
     """dev_gate is inserted only when the gate is on; off is byte-identical."""

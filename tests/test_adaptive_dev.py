@@ -33,11 +33,11 @@ def _adaptive_cfg(**overrides):
     return load_config(data)
 
 
-def _run_result(all_passed, failed_names=()):
+def _run_result(all_passed, failed_names=(), classification="real"):
     return SimpleNamespace(
         all_passed=all_passed,
         failures=[SimpleNamespace(name=n) for n in failed_names],
-        overall_classification=SimpleNamespace(value="real"),
+        overall_classification=SimpleNamespace(value=classification),
     )
 
 
@@ -129,6 +129,31 @@ class TestDevGateRetryBranch:
             result = handler.execute(state)
         assert result.next_phase is Phase.DEV_STORY
         assert state.dev_gate_records[0]["retry_restored"] is False
+
+    def test_env_classified_failure_skips_retry(self, tmp_path) -> None:
+        # An env-blocked gate (command not executable: missing deps, no shell)
+        # would fail the retry's gate identically, so the lean-off re-run is a
+        # pure waste — record the verdict and advance instead.
+        handler = DevGateHandler(_adaptive_cfg(), tmp_path)
+        state = State(current_epic=4, current_story="4.7", dev_attempt=0)
+        state.pre_dev_snapshot = "deadbeef"
+        with (
+            patch(
+                "bmad_assist_lite.loop.handlers.dev_gate.run_gates",
+                return_value=_run_result(False, ("Tests",), classification="env"),
+            ),
+            patch(
+                "bmad_assist_lite.loop.handlers.dev_gate.restore_worktree",
+            ) as restore,
+        ):
+            result = handler.execute(state)
+        assert result.next_phase is None
+        assert result.outputs["dev_gate_action"] == "fail"
+        assert state.adaptive_retry_fired is False
+        restore.assert_not_called()
+        rec = state.dev_gate_records[0]
+        assert rec["retry_fired"] is False
+        assert rec["retry_skipped"] == "env"
 
     def test_retry_attempt_does_not_retry_again(self, tmp_path) -> None:
         handler = DevGateHandler(_adaptive_cfg(), tmp_path)
