@@ -111,9 +111,15 @@ class BaseHandler(ABC):
             max_chars=self.config.solutions.max_injected_chars,
         )
 
-    def render_prompt(self, state: State) -> str:
-        """Render prompt using compiler."""
-        workflow_name = self.phase_name.replace("_", "-")
+    def render_prompt(self, state: State, workflow_name: str | None = None) -> str:
+        """Render prompt using compiler.
+
+        ``workflow_name`` defaults to the phase's own workflow; a handler that
+        drives an auxiliary workflow (e.g. code_review's ac-audit lane) passes
+        the name explicitly.
+        """
+        if workflow_name is None:
+            workflow_name = self.phase_name.replace("_", "-")
 
         paths = get_paths()
 

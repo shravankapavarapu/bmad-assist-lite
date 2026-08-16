@@ -77,8 +77,12 @@ class CreateStoryHandler(BaseHandler):
 
         return ctx
 
-    def render_prompt(self, state: State) -> str:
-        """Render prompt with story_key from cached story queue."""
+    def render_prompt(self, state: State, workflow_name: str | None = None) -> str:
+        """Render prompt with story_key from cached story queue.
+
+        ``workflow_name`` is accepted for signature compatibility with the base
+        handler; this handler always compiles its own workflow.
+        """
         from bmad_assist_lite.compiler import compile_workflow
         from bmad_assist_lite.compiler.types import CompilerContext
         from bmad_assist_lite.core.exceptions import CompilerError, ConfigError

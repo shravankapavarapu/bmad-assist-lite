@@ -737,6 +737,35 @@ class ReviewConfig(BaseModel):
         return value
 
 
+class AcAuditConfig(BaseModel):
+    """Dedicated acceptance-criteria completeness audit lane in code_review.
+
+    Motivated by goal-run9 Phase 2 (L3, story 5.2): a story doc that omitted a
+    cross-screen dependency led dev to ship an AC half-built, and the gap passed
+    the automated gate (typecheck + suite) AND the multi-reviewer code review —
+    general-purpose reviewers spread attention across security/perf/tests and
+    review the diff, so a file that SHOULD have changed but didn't is invisible.
+
+    When enabled, code_review runs one extra read-only lane whose only job is
+    per-AC end-to-end tracing against the EPIC's acceptance criteria (required
+    input — the phase fails loudly if the epic file cannot be resolved, rather
+    than silently auditing nothing). Its findings enter the normal structured
+    merge, so a PARTIAL/MISSING AC becomes a blocking finding in the existing
+    triage/fix loop. Off by default: with ``enabled`` false the review phase is
+    byte-identical to the pre-lever behaviour.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Run the AC-completeness audit lane during code_review "
+            "(requires providers.multi; uses the master provider)"
+        ),
+    )
+
+
 class Config(BaseModel):
     """Main bmad-assist-lite configuration model."""
 
@@ -761,6 +790,7 @@ class Config(BaseModel):
     speed: SpeedConfig = Field(default_factory=SpeedConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
+    ac_audit: AcAuditConfig = Field(default_factory=AcAuditConfig)
     parallel: ParallelConfig | None = Field(
         default=None, description="Parallel story execution configuration"
     )

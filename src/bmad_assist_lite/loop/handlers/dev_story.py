@@ -46,7 +46,7 @@ class DevStoryHandler(BaseHandler):
         """Build template context for this phase."""
         return self._build_common_context(state)
 
-    def render_prompt(self, state: State) -> str:
+    def render_prompt(self, state: State, workflow_name: str | None = None) -> str:
         """Compile the dev prompt, appending the lean-dev addendum for the mode.
 
         With ``speed.lean_dev`` ``off`` (default) this returns exactly the base
@@ -54,7 +54,7 @@ class DevStoryHandler(BaseHandler):
         appends the whole-phase run7 addendum; ``report_only`` appends the
         report-scoped variant (SP-D1b).
         """
-        prompt = super().render_prompt(state)
+        prompt = super().render_prompt(state, workflow_name)
         mode = resolve_dev_lean_mode(self.config, state)
         if mode is LeanDev.FULL:
             prompt = f"{prompt}\n\n{self._lean_dev_addendum()}"

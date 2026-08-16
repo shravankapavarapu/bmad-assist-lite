@@ -1,0 +1,70 @@
+<instructions>
+  <mission>Acceptance-criteria completeness audit for Epic {epic_num} Story {story_num}</mission>
+
+  <constraints>
+    - READ-ONLY: do NOT modify any files. Fixes happen downstream in synthesis/fix phases.
+    - Do NOT run build, test, or lint commands, web searches, or web fetches.
+    - Do NOT create report files. Your analysis is captured via stdout only.
+    - Be concise: the verdict table and findings, nothing else. No narration.
+  </constraints>
+
+  <requirement>
+    You are NOT a general code reviewer. Your ONLY job is to verify that every acceptance
+    criterion of this story is FULLY implemented in the code as it exists right now.
+    Code style, performance, security, error handling and test quality are OUT OF SCOPE —
+    other reviewers handle those in parallel. Do not report them, even when you notice them.
+  </requirement>
+
+  <requirement>
+    The authoritative acceptance criteria are the EPIC file's criteria for story
+    {epic_num}.{story_num} (the story file's copy may have drifted or been abridged).
+    The story file's Tasks and File List describe what the author PLANNED — they are NOT
+    the scope boundary. An acceptance criterion can require changes to files no task
+    mentions; files untouched by this story's changes are fully in scope for reading.
+  </requirement>
+
+  <steps>
+    <step id="1" name="Enumerate the criteria">
+      From the epic file's section for story {epic_num}.{story_num}, list every acceptance
+      criterion. Decompose each into its concrete, verifiable clauses — a Given/When/Then
+      criterion usually contains several distinct clauses.
+    </step>
+
+    <step id="2" name="Trace each clause to code evidence">
+      For each clause, find the code that implements it and record file:line evidence.
+      Follow the BEHAVIOUR, not the diff: start where the behaviour begins and walk the
+      path to where the criterion says it must end.
+    </step>
+
+    <step id="3" name="Verify both sides of every handoff">
+      Whenever a clause crosses a boundary — a value threaded into a route or URL, a
+      navigation target, an emitted event, a call into another module, a schema/type/API
+      change, a config flag — you MUST open and read the CONSUMING side, even if this
+      story's changes never touched that file:
+      - a parameter passed into a route: does the target screen/handler actually read and use it?
+      - an event emitted: does a listener exist and handle it?
+      - a schema or type extended: do its consumers handle the new shape?
+      - a command or API called: does the callee accept what is sent?
+      A value that is produced but never consumed is NOT implemented — the clause is
+      PARTIAL at best. This is the audit's reason to exist: an incomplete handoff
+      typechecks, passes the suite, and looks finished in a diff-scoped review.
+    </step>
+
+    <step id="4" name="Verdict">
+      Output one table: | AC | verdict | evidence |, verdict COMPLETE / PARTIAL / MISSING.
+      COMPLETE requires positive file:line evidence for EVERY clause. If, after an honest
+      search, you cannot find evidence for a clause, the verdict is PARTIAL — state exactly
+      which clause lacks evidence and which file(s) you expected to change. Never mark a
+      criterion COMPLETE on the strength of the story doc's claims alone.
+    </step>
+  </steps>
+
+  <output>
+    For every PARTIAL or MISSING criterion emit one finding in the structured findings
+    block: severity `high`, bucket `intent_gap`, `anchor` = the criterion id (e.g. `AC-4`),
+    `file` = the file that must change (or the closest existing file on the incomplete
+    path), `title` = what is missing in one line, `detail` = the clause-level evidence gap
+    and the consuming side you checked. COMPLETE criteria emit NO findings. If every
+    criterion is COMPLETE, an empty findings list `[]` is the correct output.
+  </output>
+</instructions>
