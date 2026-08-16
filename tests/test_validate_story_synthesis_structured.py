@@ -138,7 +138,7 @@ class TestStructuredValidationSynthesis:
         assert "prose only" in captured["prompt"]
 
     def test_flag_off_uses_prose_reports(self, tmp_path):
-        cfg = {**CONFIG, "speed": {}}
+        cfg = {**CONFIG, "speed": {"structured_review": False}}
         _seed_validations(
             tmp_path, [_validation_with_block("Validator-1", [_finding("s.md", "gap X")])]
         )

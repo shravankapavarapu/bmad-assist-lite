@@ -461,8 +461,14 @@ class LeanDev(StrEnum):
 class SpeedConfig(BaseModel):
     """Wall-clock speed pack (goal-run6 review pipeline + goal-run7 dev economy).
 
-    All off by default and backward-compatible: with every flag ``False`` the
-    chain runs exactly as today. The measured physics is that every
+    The four goal-run6 review-pipeline levers (structured_review, delta_round2,
+    lean_review, remove_stagger) are ON by default (operator sign-off
+    2026-08-16): shipped on the run6 n=3 A/B (review pipeline -56%, no quality
+    regression, zero parse failures) and live-validated as a set by the
+    goal-run8 Epic-4 run. Set any of them ``False`` to opt out; with every flag
+    off the chain is byte-identical to the pre-speed-pack behaviour. The dev
+    levers keep their own defaults (adaptive on, blanket lean_dev off). The
+    measured physics is that every
     single-lane phase is 100% API time at a fixed output-tokens/sec, so
     ``wall ~= critical-path output tokens / tps``. Each flag removes
     critical-path output tokens from a distinct phase family:
@@ -505,7 +511,7 @@ class SpeedConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     structured_review: bool = Field(
-        default=False,
+        default=True,
         description=(
             "SP-1: reviewer/validator lanes emit structured findings; the "
             "synthesis (still the fixer, full effort) is fed a deterministic "
@@ -514,7 +520,7 @@ class SpeedConfig(BaseModel):
         ),
     )
     delta_round2: bool = Field(
-        default=False,
+        default=True,
         description=(
             "SP-2: round-2 re-review runs a fresh session scoped to round-1 "
             "findings + inlined fix diff + story (no full artifacts, no resume; "
@@ -522,14 +528,14 @@ class SpeedConfig(BaseModel):
         ),
     )
     lean_review: bool = Field(
-        default=False,
+        default=True,
         description=(
             "SP-3: reviewer lanes one effort notch down (synthesis effort "
             "unchanged), findings-only output, diff-scoped reading"
         ),
     )
     remove_stagger: bool = Field(
-        default=False,
+        default=True,
         description="SP-4: drop the reviewer fan-out stagger (only ever warmed a cached system prompt)",
     )
     lean_dev: LeanDev = Field(

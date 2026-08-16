@@ -144,7 +144,7 @@ class TestRemoveStaggerExecuteLevel:
                     ],
                 },
                 "parallel_delay": 8.0,
-                "speed": {"remove_stagger": True} if remove else {},
+                "speed": {"remove_stagger": remove},
             }
         )
 
@@ -157,7 +157,8 @@ class TestRemoveStaggerExecuteLevel:
         ), patch("asyncio.sleep", sleeper):
             handler.execute(State(current_epic=3, current_story="3.1"))
 
-    def test_default_sleeps_between_lanes(self, tmp_path: Any) -> None:
+    def test_stagger_opt_out_sleeps_between_lanes(self, tmp_path: Any) -> None:
+        # remove_stagger defaults ON; explicit opt-out restores the stagger sleep.
         sleeper = AsyncMock()
         self._run(CodeReviewHandler(self._cfg(remove=False), tmp_path), _Recorder(), sleeper)
         sleeper.assert_awaited_once_with(8.0)

@@ -24,8 +24,19 @@ BASE_PROVIDERS: dict[str, Any] = {
 STORY = "3.1"
 
 
+# The run6 levers default ON since the 2026-08-16 flip. These tests were written
+# against an all-off baseline where each test opts in exactly the lever(s) it
+# names — the helper pins that baseline so the isolation semantics survive.
+_SPEED_OFF: dict[str, Any] = {
+    "structured_review": False,
+    "delta_round2": False,
+    "lean_review": False,
+    "remove_stagger": False,
+}
+
+
 def _handler(project: Path, speed: dict[str, Any]) -> CodeReviewHandler:
-    config = load_config({"providers": BASE_PROVIDERS, "speed": speed})
+    config = load_config({"providers": BASE_PROVIDERS, "speed": {**_SPEED_OFF, **speed}})
     return CodeReviewHandler(config, project)
 
 
@@ -62,7 +73,7 @@ class TestReviewPromptSelection:
         assert "DIFF BODY" in prompt
 
     def test_delta_off_round2_still_full(self, tmp_path):
-        handler = _handler(tmp_path, {})  # delta_round2 default off
+        handler = _handler(tmp_path, {"delta_round2": False})  # explicit opt-out
         with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
             prompt = handler._review_prompt(_round2_state())
         assert prompt == "FULL PROMPT"
