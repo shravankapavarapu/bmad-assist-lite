@@ -10,10 +10,7 @@ import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-
 from bmad_assist_lite.core.config import LeanDev, load_config
-from bmad_assist_lite.core.exceptions import ConfigError
 from bmad_assist_lite.core.state import Phase, State
 from bmad_assist_lite.loop.handlers.dev_gate import DevGateHandler
 from bmad_assist_lite.loop.handlers.dev_story import resolve_dev_lean_mode
@@ -44,31 +41,38 @@ def _run_result(all_passed, failed_names=()):
     )
 
 
-class TestAdaptiveConfigGuard:
-    """lean_dev_adaptive requires the real dev gate — else config is rejected."""
+class TestAdaptiveConfigSafety:
+    """Adaptive is ON by default; with no real gate it degrades to full dev (not rejected)."""
 
-    def test_adaptive_without_gate_is_rejected(self) -> None:
-        with pytest.raises(ConfigError, match="real_dev_gate"):
-            load_config({**_PROVIDERS, "speed": {"lean_dev_adaptive": True}})
+    def test_adaptive_without_gate_loads_and_degrades_to_full(self) -> None:
+        # No quality_gate group: the gate resolves no commands, so lean-first does
+        # NOT engage — the story runs full dev (never backstop-less blanket lean).
+        cfg = load_config({**_PROVIDERS, "speed": {"lean_dev_adaptive": True}})
+        assert cfg.speed.lean_dev_adaptive is True
+        assert resolve_dev_lean_mode(cfg, State(dev_attempt=0)) is LeanDev.OFF
 
-    def test_adaptive_with_gate_group_but_flag_off_is_rejected(self) -> None:
-        with pytest.raises(ConfigError, match="real_dev_gate"):
-            load_config(
-                {
-                    **_PROVIDERS,
-                    "speed": {"lean_dev_adaptive": True},
-                    "quality_gate": {"typecheck": "true"},  # group present, gate off
-                }
-            )
+    def test_adaptive_with_gate_group_but_gate_off_degrades_to_full(self) -> None:
+        # real_dev_gate explicitly off => no gate to back the fallback => full dev.
+        cfg = load_config(
+            {
+                **_PROVIDERS,
+                "speed": {"lean_dev_adaptive": True},
+                "quality_gate": {"typecheck": "true", "real_dev_gate": False},
+            }
+        )
+        assert resolve_dev_lean_mode(cfg, State(dev_attempt=0)) is LeanDev.OFF
 
     def test_adaptive_with_gate_is_valid(self) -> None:
         cfg = _adaptive_cfg()
         assert cfg.speed.lean_dev_adaptive is True
         assert cfg.quality_gate.real_dev_gate is True
 
-    def test_defaults_off(self) -> None:
-        cfg = load_config(_PROVIDERS)
-        assert cfg.speed.lean_dev_adaptive is False
+    def test_lean_dev_adaptive_defaults_on(self) -> None:
+        assert load_config(_PROVIDERS).speed.lean_dev_adaptive is True
+
+    def test_real_dev_gate_defaults_on_when_group_present(self) -> None:
+        cfg = load_config({**_PROVIDERS, "quality_gate": {"typecheck": "true"}})
+        assert cfg.quality_gate.real_dev_gate is True
 
 
 class TestResolveLeanMode:

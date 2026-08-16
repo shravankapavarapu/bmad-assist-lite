@@ -19,7 +19,6 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
-    model_validator,
 )
 
 from bmad_assist_lite.core.exceptions import ConfigError
@@ -337,15 +336,15 @@ class QualityGateConfig(BaseModel):
     command_timeout: int = Field(default=120, description="Timeout per command in seconds")
     max_retries: int = Field(default=2, description="Max LLM fix attempts before skipping story")
     real_dev_gate: bool = Field(
-        default=False,
+        default=True,
         description=(
             "SP-A0: run a real per-story dev gate (typecheck + the story's own "
             "tests) in the story worktree immediately after dev_story, recording "
             "an objective pass/fail verdict in run state — the run7 offline-replay "
-            "method moved in-chain. Off (default) leaves the chain byte-identical: "
-            "the dev_gate phase is only inserted when this is on. Commands come "
-            "from real_dev_gate_commands, or fall back to the typecheck + "
-            "test/test_unit fields."
+            "method moved in-chain. ON by default (goal-run8): the dev_gate phase "
+            "runs after dev_story. Commands come from real_dev_gate_commands, or "
+            "fall back to the typecheck + test/test_unit fields; with none resolved "
+            "the gate is a no-op pass. Set false to leave the chain byte-identical."
         ),
     )
     real_dev_gate_commands: list[DevGateCommand] = Field(
@@ -355,6 +354,20 @@ class QualityGateConfig(BaseModel):
             "pass). Empty falls back to typecheck + test/test_unit."
         ),
     )
+
+    def resolves_dev_gate_commands(self) -> bool:
+        """True if the real dev gate would actually run at least one command.
+
+        Mirrors DevGateHandler._commands() resolution. Used to keep the on-by-
+        default adaptive lever safe: lean-first only engages when a real gate
+        backs it, so a project with no gate configured never silently becomes
+        backstop-less blanket lean.
+        """
+        if not self.real_dev_gate:
+            return False
+        if self.real_dev_gate_commands:
+            return True
+        return bool(self.typecheck or self.test or self.test_unit)
 
 
 class AutoCommitConfig(BaseModel):
@@ -522,14 +535,17 @@ class SpeedConfig(BaseModel):
         ),
     )
     lean_dev_adaptive: bool = Field(
-        default=False,
+        default=True,
         description=(
             "SP-A1: lean-first with an automatic quality-gated fallback. dev_story "
             "runs with the lean addendum ON (full); if the real dev gate then "
             "FAILS, the story is re-run ONCE with lean OFF from the pre-dev "
             "worktree state, and the retry's result stands. Requires "
-            "quality_gate.real_dev_gate (the gate is the tripwire). Off (default) "
-            "leaves dev_story byte-identical."
+            "quality_gate.real_dev_gate (the gate is the tripwire). ON by default "
+            "(goal-run8 Epic-4 validation): lean-first engages only when the gate "
+            "actually resolves commands (see QualityGateConfig.resolves_dev_gate_"
+            "commands) — with no gate it degrades to plain full dev, never "
+            "backstop-less blanket lean. Set false to leave dev_story byte-identical."
         ),
     )
 
@@ -733,22 +749,13 @@ class Config(BaseModel):
         default=None, description="Parallel story execution configuration"
     )
 
-    @model_validator(mode="after")
-    def _validate_adaptive_requires_real_gate(self) -> "Config":
-        """SP-A1 keys its fallback off the real dev gate, so it requires it.
-
-        Without the gate there is no objective verdict to trip the retry, so a
-        `lean_dev_adaptive` run would silently be a plain lean-first run with no
-        fallback — the exact regression the net exists to prevent. Reject it.
-        """
-        if self.speed.lean_dev_adaptive and not (
-            self.quality_gate is not None and self.quality_gate.real_dev_gate
-        ):
-            raise ValueError(
-                "speed.lean_dev_adaptive requires quality_gate.real_dev_gate=true: "
-                "the adaptive lean-first fallback keys off the real dev gate's verdict."
-            )
-        return self
+    # NOTE (goal-run8): speed.lean_dev_adaptive + quality_gate.real_dev_gate are ON
+    # by default. Adaptive no longer HARD-REQUIRES a configured gate at config time:
+    # when the gate resolves no commands, resolve_dev_lean_mode() degrades the story
+    # to full dev (never backstop-less blanket lean). That runtime guard is a stronger
+    # guarantee than a config-time rejection, and a config-time error here would break
+    # every gateless config now that adaptive defaults on — so the old validator was
+    # removed. Explicitly set speed.lean_dev_adaptive=false to disable the lever.
 
 
 # ============================================================================

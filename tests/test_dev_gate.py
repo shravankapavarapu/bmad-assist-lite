@@ -1,8 +1,10 @@
 """Tests for SP-A0 — the real per-story dev gate (quality_gate.real_dev_gate).
 
-Off (default) the dev_gate phase is never inserted and the chain is
-byte-identical. On, the gate runs the configured real commands in the story
-worktree and records an objective verdict; SP-A0 never blocks and never retries.
+goal-run8 flipped real_dev_gate ON by default, so these tests isolate SP-A0 by
+disabling the adaptive lever (lean_dev_adaptive=False) in the shared helper and
+setting real_dev_gate explicitly where the "gate off" path is under test. On, the
+gate runs the configured real commands in the story worktree and records an
+objective verdict; SP-A0 alone never blocks and never retries.
 """
 
 from types import SimpleNamespace
@@ -17,7 +19,10 @@ _PROVIDERS = {"providers": {"master": {"provider": "claude", "model": "opus"}}}
 
 
 def _cfg(**quality_gate: object):
+    # Isolate SP-A0: adaptive is on by default now, so disable it here so the gate's
+    # own advance/no-retry behaviour is what's under test (adaptive is test_adaptive_dev).
     data: dict = dict(_PROVIDERS)
+    data["speed"] = {"lean_dev_adaptive": False}
     if quality_gate:
         data["quality_gate"] = quality_gate
     return load_config(data)
@@ -33,13 +38,13 @@ def _run_result(all_passed: bool, failed_names: tuple[str, ...] = ()):
 
 
 class TestDevGateConfig:
-    """The flag defaults off; commands parse into a typed list."""
+    """real_dev_gate defaults ON when a quality_gate group is present; commands parse."""
 
     def test_group_absent_defaults_to_none(self) -> None:
         assert _cfg().quality_gate is None
 
-    def test_real_dev_gate_defaults_off_when_group_present(self) -> None:
-        assert _cfg(typecheck="true").quality_gate.real_dev_gate is False
+    def test_real_dev_gate_defaults_on_when_group_present(self) -> None:
+        assert _cfg(typecheck="true").quality_gate.real_dev_gate is True
 
     def test_commands_parse(self) -> None:
         cfg = _cfg(
@@ -55,15 +60,15 @@ class TestDevGateConfig:
 
 
 class TestEffectivePhases:
-    """dev_gate is inserted only when the flag is on; off is byte-identical."""
+    """dev_gate is inserted only when the gate is on; off is byte-identical."""
 
     def test_off_is_unchanged(self) -> None:
-        cfg = _cfg()
+        cfg = _cfg()  # no quality_gate group => no gate
         assert effective_story_phases(cfg) == list(cfg.loop.story)
         assert "dev_gate" not in effective_story_phases(cfg)
 
     def test_group_present_flag_off_is_unchanged(self) -> None:
-        cfg = _cfg(typecheck="true")
+        cfg = _cfg(typecheck="true", real_dev_gate=False)
         assert "dev_gate" not in effective_story_phases(cfg)
 
     def test_on_inserts_immediately_after_dev_story(self) -> None:
@@ -83,7 +88,7 @@ class TestDevGateHandler:
     """Records the objective verdict; advances regardless (never blocks/retries)."""
 
     def test_skipped_when_flag_off(self, tmp_path) -> None:
-        handler = DevGateHandler(_cfg(typecheck="true"), tmp_path)
+        handler = DevGateHandler(_cfg(typecheck="true", real_dev_gate=False), tmp_path)
         state = State(current_epic=7, current_story="7.2")
         result = handler.execute(state)
         assert result.outputs["dev_gate_action"] == "skipped"
@@ -108,6 +113,7 @@ class TestDevGateHandler:
         assert rec["classification"] == "pass" and rec["retry_fired"] is False
 
     def test_records_fail_but_advances(self, tmp_path) -> None:
+        # adaptive off (via _cfg): SP-A0 alone records the fail and advances, no retry.
         cfg = _cfg(
             real_dev_gate=True,
             real_dev_gate_commands=[{"name": "Tests", "command": "false"}],

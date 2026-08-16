@@ -16,8 +16,17 @@ def resolve_dev_lean_mode(config: Config, state: State) -> LeanDev:
     retry (``dev_attempt`` >= 1) is forced ``off``. Outside adaptive mode the
     static ``speed.lean_dev`` mode applies unchanged. Shared by the dev prompt
     and the dev-gate record so both agree on what actually ran.
+
+    Safety guard (adaptive is on by default): lean-first only engages when the
+    real dev gate actually resolves commands. With no gate to back it the story
+    runs the static ``speed.lean_dev`` (``off`` by default) — full dev — so an
+    unconfigured project never silently becomes backstop-less blanket lean.
     """
-    if config.speed.lean_dev_adaptive:
+    gate_backs_it = (
+        config.quality_gate is not None
+        and config.quality_gate.resolves_dev_gate_commands()
+    )
+    if config.speed.lean_dev_adaptive and gate_backs_it:
         return LeanDev.FULL if state.dev_attempt == 0 else LeanDev.OFF
     return config.speed.lean_dev
 
