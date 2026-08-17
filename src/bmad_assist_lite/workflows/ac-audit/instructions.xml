@@ -50,7 +50,28 @@
       typechecks, passes the suite, and looks finished in a diff-scoped review.
     </step>
 
-    <step id="4" name="Verdict">
+    <step id="4" name="Verify owed edge-state representatives">
+      Some clauses specify an edge, empty, error, or FAILURE variant (a gate-fail card,
+      a loud-floor result, a missing-data or fail-closed state). A variant that cannot be
+      produced from the fixtures live — no fixture drives that state, e.g. a real
+      gate-FAIL verdict with no failing fixture — is NOT thereby excused: when its SIBLING
+      variants render, the clause still owes a clearly-LABELLED STATIC representative of
+      the owed state (a representative card, an example row) so the surface is honest and
+      complete. Trace these like any other clause:
+      - a fail/error/edge variant whose siblings render but which itself has no
+        rendering — even when a code COMMENT asserts it "ships static" / "rendered
+        elsewhere" / "static example present" — is PARTIAL. The comment is a claim, not
+        evidence.
+      - NEVER accept a comment's, a task's, or the story doc's claim that an owed state
+        ships in place of the actual element that draws it. Find the code that renders it
+        (live OR labelled-static), or the clause is PARTIAL.
+      - a test that asserts the owed state's ABSENCE (expects it NOT to appear) is
+        evidence the representative was DROPPED, not evidence the clause is complete.
+      A missing owed representative typechecks, passes the suite, and reads as finished in
+      a diff-scoped review — the same blind spot as an incomplete handoff.
+    </step>
+
+    <step id="5" name="Verdict">
       Output one table: | AC | verdict | evidence |, verdict COMPLETE / PARTIAL / MISSING.
       COMPLETE requires positive file:line evidence for EVERY clause. If, after an honest
       search, you cannot find evidence for a clause, the verdict is PARTIAL — state exactly
