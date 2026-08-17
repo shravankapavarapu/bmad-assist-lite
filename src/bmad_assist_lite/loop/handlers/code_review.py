@@ -14,6 +14,10 @@ from bmad_assist_lite.core.config import (
 from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
+from bmad_assist_lite.loop.handlers.ac_audit_trigger import (
+    record_audit_trigger,
+    resolve_ac_audit_enabled,
+)
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_merge import reviewer_findings_addendum
 from bmad_assist_lite.loop.story_paths import resolve_story_path
@@ -205,11 +209,13 @@ class CodeReviewHandler(BaseHandler):
     def _build_lanes(self, state: State) -> list[dict[str, Any]]:
         """Assemble the parallel review lanes: N reviewers, plus the AC auditor.
 
-        With ``ac_audit.enabled`` false the lane set is exactly the pre-lever
-        reviewer set (byte-identical prompts, same efforts) — the lever is
-        strictly additive. The audit lane runs on the MASTER provider config at
-        the master's effort: it is a gate, not a reviewer, so the SP-3
-        lean-review effort notch does not apply to it.
+        Whether the AC-auditor lane is appended is resolved per story by
+        :func:`~bmad_assist_lite.loop.handlers.ac_audit_trigger.resolve_ac_audit_enabled`
+        (goal-run11): ``enabled`` forces it on, ``auto`` decides from worktree-local
+        signals, and both-off is byte-identical to the pre-lever reviewer set
+        (same prompts, same efforts, no signal gathering, no record). The audit
+        lane runs on the MASTER provider config at the master's effort: it is a
+        gate, not a reviewer, so the SP-3 lean-review effort notch does not apply.
         """
         prompt = self._review_prompt(state)
         lanes: list[dict[str, Any]] = []
@@ -228,7 +234,9 @@ class CodeReviewHandler(BaseHandler):
                     "prompt": prompt,
                 }
             )
-        if self.config.ac_audit.enabled and lanes:
+        decision = resolve_ac_audit_enabled(self.config, state, self.project_path)
+        record_audit_trigger(decision, state)
+        if decision.fire and lanes:
             master = self.config.providers.master
             lanes.append(
                 {
@@ -345,12 +353,12 @@ class CodeReviewHandler(BaseHandler):
 
             multi_configs = self.config.providers.multi
             if not multi_configs:
-                if self.config.ac_audit.enabled:
+                if self.config.ac_audit.enabled or self.config.ac_audit.auto:
                     msg = (
-                        "ac_audit is enabled but providers.multi is empty — the "
-                        "AC-completeness audit lane only runs alongside the "
-                        "multi-reviewer path and was SKIPPED. Fix: configure "
-                        "providers.multi with at least one reviewer."
+                        "ac_audit is active (enabled or auto) but providers.multi "
+                        "is empty — the AC-completeness audit lane only runs "
+                        "alongside the multi-reviewer path and was SKIPPED. Fix: "
+                        "configure providers.multi with at least one reviewer."
                     )
                     logger.warning("%s", msg)
                     write_progress(f"  WARNING: {msg}")
@@ -465,7 +473,7 @@ class CodeReviewHandler(BaseHandler):
                 return PhaseResult.fail(
                     "AC-completeness audit lane failed: "
                     f"{failed_audit.get('error', 'nonzero exit')} — "
-                    "the review cannot be trusted without it (ac_audit.enabled)"
+                    "the review cannot be trusted without it (ac_audit)"
                 )
 
             # Calculate Evidence Score aggregate from reviewer outputs

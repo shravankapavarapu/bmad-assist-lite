@@ -22,6 +22,7 @@ import yaml
 from bmad_assist_lite.compiler.core import get_workflow_compiler
 from bmad_assist_lite.core.config import load_config
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.loop.handlers.ac_audit_trigger import AuditDecision
 from bmad_assist_lite.loop.handlers.code_review import CodeReviewHandler
 from bmad_assist_lite.providers.base import ProviderResult
 
@@ -46,6 +47,21 @@ def _config(ac_audit: bool, multi: list[dict[str, Any]] | None = None) -> Any:
         "ac_audit": {"enabled": ac_audit},
     }
     return load_config(data)
+
+
+def _config_auto(*, enabled: bool = False, auto: bool = False) -> Any:
+    return load_config(
+        {
+            "providers": {
+                "master": {"provider": "claude", "model": "opus", "effort": "high"},
+                "multi": [
+                    {"provider": "claude", "model": "sonnet", "effort": "high"},
+                    {"provider": "claude", "model": "haiku", "effort": "high"},
+                ],
+            },
+            "ac_audit": {"enabled": enabled, "auto": auto},
+        }
+    )
 
 
 def _state() -> State:
@@ -161,6 +177,60 @@ class TestLaneComposition:
             lanes = handler._build_lanes(state)
         assert lanes[0]["prompt"].startswith("DELTA")
         assert lanes[-1]["prompt"].startswith("WF:ac-audit")
+
+
+# ============================================================================
+# Auto-trigger (goal-run11) lane composition
+# ============================================================================
+
+
+class TestAutoTriggerLanes:
+    def test_both_off_is_byte_identical(self, tmp_path):
+        """LOAD-BEARING: auto=false AND enabled=false ⇒ pre-lever reviewer set."""
+        handler = CodeReviewHandler(_config_auto(enabled=False, auto=False), tmp_path)
+        lanes = _lanes(handler)
+        assert [lane["label"] for lane in lanes] == ["Reviewer-1", "Reviewer-2"]
+        assert all(lane["prompt"].startswith("WF:code-review") for lane in lanes)
+
+    def test_auto_fires_on_uncertain_signals(self, tmp_path):
+        """auto=true over a non-git tmp dir ⇒ signals unavailable ⇒ audit lane."""
+        handler = CodeReviewHandler(_config_auto(auto=True), tmp_path)
+        lanes = _lanes(handler)
+        assert [lane["label"] for lane in lanes] == [
+            "Reviewer-1",
+            "Reviewer-2",
+            "AC-Auditor",
+        ]
+
+    def test_auto_quiet_decision_omits_audit_lane(self, tmp_path):
+        """When the resolver returns quiet, no audit lane is appended."""
+        with patch(
+            "bmad_assist_lite.loop.handlers.code_review.resolve_ac_audit_enabled",
+            return_value=AuditDecision(fire=False, mode="auto", reason="quiet(...)"),
+        ):
+            handler = CodeReviewHandler(_config_auto(auto=True), tmp_path)
+            lanes = _lanes(handler)
+        assert [lane["label"] for lane in lanes] == ["Reviewer-1", "Reviewer-2"]
+
+    def test_auto_records_decision_to_durable_jsonl(self, tmp_path, monkeypatch):
+        """Every auto decision is recorded for the Phase-4 trigger-accuracy harvest."""
+        import types
+
+        import bmad_assist_lite.core.paths as paths_mod
+
+        bmad_dir = tmp_path / ".bmad-assist-lite"
+        bmad_dir.mkdir()
+        fake = types.SimpleNamespace(
+            bmad_assist_dir=bmad_dir, epics_dir=tmp_path, stories_dir=tmp_path
+        )
+        monkeypatch.setattr(paths_mod, "get_paths", lambda: fake)
+        handler = CodeReviewHandler(_config_auto(auto=True), tmp_path)
+        _lanes(handler)
+        record = bmad_dir / "ac-audit-trigger.jsonl"
+        assert record.exists()
+        body = record.read_text()
+        assert '"fired": true' in body
+        assert '"mode": "auto"' in body
 
 
 # ============================================================================

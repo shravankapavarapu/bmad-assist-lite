@@ -751,8 +751,22 @@ class AcAuditConfig(BaseModel):
     input — the phase fails loudly if the epic file cannot be resolved, rather
     than silently auditing nothing). Its findings enter the normal structured
     merge, so a PARTIAL/MISSING AC becomes a blocking finding in the existing
-    triage/fix loop. Off by default: with ``enabled`` false the review phase is
-    byte-identical to the pre-lever behaviour.
+    triage/fix loop.
+
+    Three states, resolved per story at ``CodeReviewHandler._build_lanes`` by
+    :func:`bmad_assist_lite.loop.handlers.ac_audit_trigger.resolve_ac_audit_enabled`
+    (goal-run11 auto-trigger, SP-A1 pattern — cf.
+    :func:`~bmad_assist_lite.loop.handlers.dev_story.resolve_dev_lean_mode`):
+
+    * ``enabled: true``  — force-ON for every story (run10 behaviour, unchanged).
+    * ``auto: true``     — the tool decides per story from worktree-local
+      structural risk signals (diff spread, epic AC load + cross-boundary AC
+      markers, story-doc discovery markers, and dev/review escalation), biased
+      to FIRE when uncertain. Every decision is recorded.
+    * both false (default) — OFF, and OFF is byte-identical to the pre-lever
+      review phase (same lanes, same prompts, no signal gathering, no record).
+
+    ``enabled`` wins over ``auto`` (force-ON short-circuits the resolver).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -760,8 +774,17 @@ class AcAuditConfig(BaseModel):
     enabled: bool = Field(
         default=False,
         description=(
-            "Run the AC-completeness audit lane during code_review "
-            "(requires providers.multi; uses the master provider)"
+            "Force the AC-completeness audit lane ON for every story during "
+            "code_review (requires providers.multi; uses the master provider). "
+            "Wins over ``auto``."
+        ),
+    )
+    auto: bool = Field(
+        default=False,
+        description=(
+            "Let the tool decide per story whether to run the audit lane, from "
+            "worktree-local structural risk signals (goal-run11 auto-trigger). "
+            "Ignored when ``enabled`` is true. Byte-identical-off when both false."
         ),
     )
 
