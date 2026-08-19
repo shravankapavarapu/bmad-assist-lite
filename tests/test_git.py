@@ -2,7 +2,11 @@
 
 import subprocess
 
-from bmad_assist_lite.core.git import _title_from_story_key, auto_commit_story
+from bmad_assist_lite.core.git import (
+    _title_from_story_key,
+    auto_commit_story,
+    list_changed_files,
+)
 
 
 def _init_repo(path):
@@ -158,3 +162,28 @@ class TestAutoCommitStory:
         )
         assert "debug.log" not in ls_files.stdout
         assert "app.py" in ls_files.stdout
+
+
+class TestListChangedFiles:
+    """list_changed_files: [] (clean) and None (undeterminable) are distinct."""
+
+    def test_non_repo_returns_none(self, tmp_path):
+        """Not a git repo → None (could not determine), never []."""
+        assert list_changed_files(tmp_path) is None
+
+    def test_clean_tree_returns_empty_list(self, tmp_path):
+        """A committed, clean tree → [] (positively determined clean)."""
+        _init_repo(tmp_path)
+        assert list_changed_files(tmp_path) == []
+
+    def test_untracked_file_is_listed(self, tmp_path):
+        """An untracked new file is included (not just tracked diffs)."""
+        _init_repo(tmp_path)
+        (tmp_path / "new.py").write_text("x = 1\n")
+        assert "new.py" in list_changed_files(tmp_path)
+
+    def test_tracked_modification_is_listed(self, tmp_path):
+        """A modification to a tracked file appears in the list."""
+        _init_repo(tmp_path)
+        (tmp_path / "README.md").write_text("changed")
+        assert "README.md" in list_changed_files(tmp_path)

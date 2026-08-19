@@ -72,6 +72,31 @@ def git_diff(project_path: Path, *, stat: bool = False, timeout: int = 15) -> st
     return output.strip() if stat else output
 
 
+def list_changed_files(project_path: Path, *, timeout: int = 15) -> list[str] | None:
+    """Repo-relative paths changed vs HEAD (tracked diff + untracked), or None on failure.
+
+    Mirrors :func:`git_diff`'s HEAD-then-index fallback for an unborn HEAD, but
+    returns just the file list. The empty list and None are DISTINCT and callers
+    must treat them differently: ``[]`` means "the tree is clean" (a positive
+    determination), while ``None`` means "could not determine" (git missing,
+    errored, or timed out) — a guard keying on this must never block on ``None``.
+    """
+    tracked = _run_git(["git", "diff", "--name-only", "HEAD"], project_path, timeout)
+    if tracked is None:
+        # Unborn HEAD (no commits yet) or a transient failure: fall back to the
+        # index diff, exactly as git_diff() does for its textual diff.
+        tracked = _run_git(["git", "diff", "--name-only"], project_path, timeout)
+        if tracked is None:
+            return None
+    files = [ln.strip() for ln in tracked.splitlines() if ln.strip()]
+    untracked = _run_git(
+        ["git", "ls-files", "--others", "--exclude-standard"], project_path, timeout
+    )
+    if untracked is not None:
+        files.extend(ln.strip() for ln in untracked.splitlines() if ln.strip())
+    return files
+
+
 def _title_from_story_key(story_key: str) -> str:
     """Extract human-readable title from a story key.
 

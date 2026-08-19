@@ -20,7 +20,11 @@ from claude_agent_sdk import CLINotFoundError as SDKCLINotFoundError
 from claude_agent_sdk import ProcessError as SDKProcessError
 
 from bmad_assist_lite.core.exceptions import ProviderError, ProviderTimeoutError
-from bmad_assist_lite.providers.base import BaseProvider, ProviderResult
+from bmad_assist_lite.providers.base import (
+    MIN_USEFUL_RESPONSE_CHARS,
+    BaseProvider,
+    ProviderResult,
+)
 from bmad_assist_lite.providers.claude_sdk import (
     SUPPORTED_MODELS,
     ClaudeSDKProvider,
@@ -459,9 +463,16 @@ class TestBenignSuccessEscalation:
     def test_benign_success_with_text_returns_success(
         self, mock_query: MagicMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Benign 'error result: success' after real output → success result."""
+        """Benign 'error result: success' after a full turn's output → success result.
+
+        The output must clear MIN_USEFUL_RESPONSE_CHARS: post-goal-run11 the quirk
+        is swallowed only for a genuinely completed turn (a real turn produces far
+        more than the floor), never for a starved/truncated one.
+        """
+        completed_turn = "real completed output. " * 12  # ~280 chars, clears floor
+        assert len(completed_turn) >= MIN_USEFUL_RESPONSE_CHARS
         mock_query.return_value = query_yield_then_raise(
-            [make_msg(["real ", "output"])],
+            [make_msg([completed_turn])],
             Exception("Claude Code returned an error result: success"),
         )
 
@@ -471,8 +482,27 @@ class TestBenignSuccessEscalation:
 
         assert result.timed_out is False
         assert result.exit_code == 0
-        assert result.stdout == "real output"
+        assert result.stdout == completed_turn
         assert "known CLI/SDK 0.2.x quirk" in caplog.text
+
+    @patch("bmad_assist_lite.providers.claude_sdk.query")
+    def test_benign_success_below_floor_raises(self, mock_query: MagicMock) -> None:
+        """A sub-floor benign reply (the story-6.5 starvation signature) fails loud.
+
+        The ~47-char constant reply a usage/rate limit returns is non-empty, so
+        the pre-fix "any text ⇒ success" swallow accepted it and a hollow story
+        got committed. It must now raise so the phase retries/parks.
+        """
+        starved_reply = "x" * 47  # the observed 47-char usage-limit payload
+        assert len(starved_reply) < MIN_USEFUL_RESPONSE_CHARS
+        mock_query.return_value = query_yield_then_raise(
+            [make_msg([starved_reply])],
+            Exception("Claude Code returned an error result: success"),
+        )
+
+        provider = ClaudeSDKProvider()
+        with pytest.raises(ProviderError, match="truncated turn"):
+            provider.invoke("test")
 
     @patch("bmad_assist_lite.providers.claude_sdk.query")
     def test_benign_success_without_text_raises(self, mock_query: MagicMock) -> None:
@@ -483,7 +513,7 @@ class TestBenignSuccessEscalation:
         )
 
         provider = ClaudeSDKProvider()
-        with pytest.raises(ProviderError, match="Unexpected SDK error"):
+        with pytest.raises(ProviderError, match="truncated turn"):
             provider.invoke("test")
 
     @patch("bmad_assist_lite.providers.claude_sdk.query")

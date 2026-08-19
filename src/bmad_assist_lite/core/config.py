@@ -364,6 +364,23 @@ class QualityGateConfig(BaseModel):
             "spurious failure burns a full lean-off dev re-run."
         ),
     )
+    real_dev_gate_hollow_guard: bool = Field(
+        default=True,
+        description=(
+            "Fail the real dev gate when a story's working-tree changes are "
+            "confined to the run's own bookkeeping artifacts (its story doc + "
+            "sprint-status, which live under the implementation-artifacts dir) — "
+            "i.e. dev_story implemented nothing. An empty/near-empty diff passes "
+            "typecheck+tests trivially, so without this guard a hollow story (0 "
+            "implementation) reads as a clean pass (the goal-run11 story-6.5 "
+            "false-completion). On a confirmed-hollow story the gate fails the "
+            "phase (after the one lean-off adaptive retry, if enabled) so the run "
+            "stops/parks the story rather than committing empty work. "
+            "Positive-evidence only: if the changed-file set cannot be determined "
+            "(git unavailable) or the tree is completely clean, the gate proceeds "
+            "unchanged. Set false to restore the pre-goal-run11 behaviour."
+        ),
+    )
 
     def resolves_dev_gate_commands(self) -> bool:
         """True if the real dev gate would actually run at least one command.

@@ -466,10 +466,16 @@ class TestBenignSuccessKeepsMetrics:
     def test_metrics_survive_benign_success_escalation(
         self, mock_query: MagicMock, caplog: Any
     ) -> None:
-        """Text, then a ResultMessage, then the benign raise — metrics survive."""
+        """Text, then a ResultMessage, then the benign raise — metrics survive.
+
+        The text clears MIN_USEFUL_RESPONSE_CHARS so the benign quirk is swallowed
+        (post-goal-run11 a sub-floor turn fails loud instead — see
+        test_claude_sdk_timeout.test_benign_success_below_floor_raises).
+        """
+        long_turn = "long expensive turn output. " * 10  # ~280 chars, clears floor
         mock_query.return_value = make_raising_query(
             [
-                make_msg(["long ", "expensive ", "turn"]),
+                make_msg([long_turn]),
                 make_result_message(
                     usage={
                         "input_tokens": 11,
@@ -490,7 +496,7 @@ class TestBenignSuccessKeepsMetrics:
 
         # The real path was driven, not some other branch.
         assert any("known CLI/SDK 0.2.x quirk" in text for text in warning_texts(caplog))
-        assert result.stdout == "long expensive turn"
+        assert result.stdout == long_turn
         assert result.exit_code == 0
         assert result.timed_out is False
         # ...and the envelope collected before the raise was not thrown away.
@@ -507,9 +513,11 @@ class TestBenignSuccessKeepsMetrics:
         self, mock_query: MagicMock, caplog: Any
     ) -> None:
         """The metrics captured on the benign path are also logged, not just returned."""
+        # Clears MIN_USEFUL_RESPONSE_CHARS so the benign quirk is swallowed and the
+        # completion log line is emitted (a sub-floor turn would fail loud instead).
         mock_query.return_value = make_raising_query(
             [
-                make_msg(["text"]),
+                make_msg(["completion-log turn output. " * 10]),
                 make_result_message(usage={"input_tokens": 11, "output_tokens": 22}),
             ],
             Exception("Claude Code returned an error result: success"),

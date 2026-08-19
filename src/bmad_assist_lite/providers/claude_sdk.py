@@ -31,6 +31,7 @@ from claude_agent_sdk import (
 from bmad_assist_lite.core.exceptions import ProviderError, ProviderExitCodeError
 from bmad_assist_lite.providers._windows import is_pid_alive, terminate_process
 from bmad_assist_lite.providers.base import (
+    MIN_USEFUL_RESPONSE_CHARS,
     BaseProvider,
     ExitStatus,
     ProviderResult,
@@ -692,16 +693,41 @@ class ClaudeSDKProvider(BaseProvider):
                     capture.record_user(message)
         except Exception as e:
             # Swallow only the benign "error result: success" escalation, and
-            # only when the turn produced real output. Everything else (real
+            # only when the turn produced a *useful* amount of output. A benign
+            # non-zero exit paired with sub-floor output is NOT the 0.2.x
+            # completed-turn quirk: it is a starved/truncated turn — a usage- or
+            # rate-limit reply (~47 chars in the goal-run11 story-6.5 incident)
+            # that must fail loud (→ retry/park) instead of being blessed as a
+            # success and committed as if work had happened. The floor is the
+            # same MIN_USEFUL_RESPONSE_CHARS the timeout path already uses to
+            # separate a useful partial result from noise. Everything else (real
             # SDK errors, CLINotFoundError, empty-output benign quirk) re-raises
             # to the typed handlers in _do_invoke().
-            if _is_benign_success_error(e) and collector.text.strip():
-                logger.warning(
-                    "Claude SDK reported a non-zero exit with subtype 'success' "
-                    "after a completed turn (known CLI/SDK 0.2.x quirk); treating "
-                    "%d chars of collected output as success.",
-                    len(collector.text),
-                )
+            if _is_benign_success_error(e):
+                collected = collector.text.strip()
+                if len(collected) >= MIN_USEFUL_RESPONSE_CHARS:
+                    logger.warning(
+                        "Claude SDK reported a non-zero exit with subtype 'success' "
+                        "after a completed turn (known CLI/SDK 0.2.x quirk); treating "
+                        "%d chars of collected output as success.",
+                        len(collector.text),
+                    )
+                else:
+                    logger.error(
+                        "Claude SDK reported a non-zero exit with subtype 'success' "
+                        "but only %d chars were collected (below the %d-char "
+                        "useful-response floor): a starved/truncated turn (likely a "
+                        "usage or rate limit), not the 0.2.x completed-turn quirk — "
+                        "failing loud instead of treating it as success.",
+                        len(collected),
+                        MIN_USEFUL_RESPONSE_CHARS,
+                    )
+                    raise ProviderError(
+                        f"Claude SDK returned a truncated turn: {len(collected)} "
+                        f"chars, below the {MIN_USEFUL_RESPONSE_CHARS}-char "
+                        "useful-response floor (likely a usage or rate limit); "
+                        "refusing to treat a starved turn as success."
+                    ) from e
             else:
                 raise
         finally:
