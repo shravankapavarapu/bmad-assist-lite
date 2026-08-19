@@ -2077,3 +2077,40 @@ class TestSubprocessIsolation:
 
         call_kwargs = mock_exec.call_args[1]
         assert "creationflags" not in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Regression: the full Config must reach the MergeQueue.
+#
+# The orchestrator previously constructed the MergeQueue with only the
+# ParallelConfig, leaving MergeQueue._config None.  That made the post-merge
+# quality gate (a) fall back to toolchain auto-detection instead of the
+# configured quality_gate commands, and (b) skip make_base_bootstrap, so the
+# merge target was never reinstalled — a story that added a workspace package
+# or dependency failed the post-merge gate on stale deps, misreported as a
+# code failure rather than an environment one.
+# ---------------------------------------------------------------------------
+
+
+def test_orchestrator_threads_app_config_into_merge_queue() -> None:
+    """app_config is passed through to MergeQueue._config unchanged."""
+    sentinel_app_config = object()
+    orch = Orchestrator(
+        dependency_graph=_make_graph(all_ids=["3.1", "3.2", "3.3"]),
+        config=_make_config(),
+        project_root=Path("/fake/project"),
+        epic_num=3,
+        app_config=sentinel_app_config,
+    )
+    assert orch._app_config is sentinel_app_config
+    # The identity check is the point: the SAME object the CLI loaded must be
+    # the object the post-merge quality gate sources commands and bootstrap
+    # from.  A None here is the original defect.
+    assert orch._merge_queue._config is sentinel_app_config
+
+
+def test_orchestrator_app_config_defaults_to_none() -> None:
+    """Omitting app_config leaves the queue config unset (back-compat)."""
+    orch = _make_orchestrator()
+    assert orch._app_config is None
+    assert orch._merge_queue._config is None

@@ -43,6 +43,7 @@ from bmad_assist_lite.core.gate_runner import (
     GateClassification,
     GateCommand,
     make_base_bootstrap,
+    reset_base_bootstrap_state,
     run_gates,
 )
 from bmad_assist_lite.core.quality_gates import QualityGateEntry
@@ -1098,6 +1099,15 @@ def run_post_merge_qg(
     # The merge target was never bootstrapped before its gates ran — the verified
     # root cause of a post-merge gate failing for an environment reason and being
     # reported as a code failure. Reuses the worktree bootstrap pipeline.
+    #
+    # Each post-merge gate runs on a tree that a merge (or a fix commit) just
+    # changed, and that change can add a workspace package or a dependency. The
+    # base-bootstrap is otherwise once-per-process cached, so only the first
+    # post-merge gate would reinstall; forget that state here so every post-merge
+    # tree is reinstalled against its own package.json/lockfile. The install is a
+    # sub-second no-op when nothing changed (frozen-lockfile), and correct when a
+    # dependency did change.
+    reset_base_bootstrap_state()
     run = run_gates(
         [GateCommand(name=e.name, command=e.command) for e in commands],
         project_root,

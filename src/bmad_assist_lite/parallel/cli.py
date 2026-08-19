@@ -193,6 +193,7 @@ def parallel_run(
                 epic_num=epic_num,
                 base_branch=current_branch,
                 resume=resume,
+                app_config=app_config,
             )
             try:
                 asyncio.run(orchestrator.run())

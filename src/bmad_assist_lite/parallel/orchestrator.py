@@ -18,10 +18,14 @@ import sys
 import types
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bmad_assist_lite.parallel.bootstrap import BootstrapResult, bootstrap_worktree
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
+
+if TYPE_CHECKING:
+    from bmad_assist_lite.core.config import Config
 from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.logging import (
     log_dependency_unlocked,
@@ -182,6 +186,7 @@ class Orchestrator:
         *,
         base_branch: str = "main",
         resume: bool = False,
+        app_config: "Config | None" = None,
     ) -> None:
         """Initialize the orchestrator with injected dependencies.
 
@@ -194,10 +199,18 @@ class Orchestrator:
             resume: If ``True``, load existing ``parallel-state.yaml``
                 for crash recovery.  When ``False`` (default), always
                 create fresh state from the dependency graph.
+            app_config: The full loaded ``Config``.  Threaded into the
+                ``MergeQueue`` so the post-merge quality gate sources its
+                commands from ``quality_gate`` and reinstalls the base tree
+                from ``parallel`` after a merge.  Without it the queue falls
+                back to toolchain auto-detection and never bootstraps the
+                merge target — the verified cause of post-merge gates failing
+                on stale dependencies for a story that added a package.
 
         """
         self._dependency_graph = dependency_graph
         self._config = config
+        self._app_config = app_config
         self._project_root = project_root
         self._epic_num = epic_num
 
@@ -217,6 +230,7 @@ class Orchestrator:
         # wrapping internally for sync git/QG operations.
         self._merge_queue: MergeQueue = MergeQueue(
             project_root,
+            config=app_config,
             parallel_config=config,
             integration_ref=config.integration_branch or base_branch,
         )
