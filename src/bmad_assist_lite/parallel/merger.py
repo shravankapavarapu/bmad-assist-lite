@@ -1054,6 +1054,49 @@ def _write_post_merge_failure_report(
     return report_path
 
 
+def find_numbered_prefix_collisions(
+    project_root: Path,
+    globs: list[str],
+) -> list[str]:
+    """Find files that share a leading numeric ordering prefix.
+
+    Two parallel branches can each *add* a file with the same number
+    (``0003-a.sql`` on one, ``0003-b.sql`` on the other). Git sees two
+    independent additions — no conflict markers — and every compile-based
+    gate passes, so the broken ordering ships silently. This check is the
+    deterministic tripwire for that class.
+
+    Prefixes compare by numeric value (``0003`` collides with ``3``),
+    grouped per directory so distinct numbered families never cross-fire.
+
+    Args:
+        project_root: Path to the project root.
+        globs: Glob patterns relative to ``project_root``.
+
+    Returns:
+        One human-readable line per collision; empty when clean.
+
+    """
+    collisions: list[str] = []
+    for pattern in globs:
+        groups: dict[tuple[str, int], list[str]] = {}
+        for path in sorted(project_root.glob(pattern)):
+            match = re.match(r"(\d+)", path.name)
+            if match is None:
+                continue
+            try:
+                parent = str(path.parent.relative_to(project_root))
+            except ValueError:
+                parent = str(path.parent)
+            groups.setdefault((parent, int(match.group(1))), []).append(path.name)
+        for (parent, prefix), names in sorted(groups.items()):
+            if len(names) > 1:
+                collisions.append(
+                    f"{parent}: numeric prefix {prefix} shared by {', '.join(names)}"
+                )
+    return collisions
+
+
 def run_post_merge_qg(
     story_id: str,
     project_root: Path,
@@ -1081,6 +1124,55 @@ def run_post_merge_qg(
 
     """
     tag = f"[QG|post-merge|{story_id}]"
+
+    # Deterministic ordering-collision check, before any command gate: the
+    # hazard it catches (two branches each adding the same numeric prefix)
+    # produces no conflict markers and passes every compile-based gate, so
+    # no amount of command-gate budget would ever find it. A collision is
+    # definitively wrong — fail fast and skip the expensive suite.
+    numbered_globs = (
+        config.parallel.numbered_file_globs
+        if config is not None and config.parallel is not None
+        else []
+    )
+    if numbered_globs:
+        collisions = find_numbered_prefix_collisions(project_root, numbered_globs)
+        if collisions:
+            detail = "\n".join(collisions)
+            logger.warning("%s ✘ NumberedFileCollision: FAIL\n%s", tag, detail)
+            result = PostMergeQGResult(
+                all_passed=False,
+                story_id=story_id,
+                gate_results=[
+                    GateResult(
+                        name="NumberedFileCollision",
+                        command="(deterministic check: parallel.numbered_file_globs)",
+                        passed=False,
+                        exit_code=1,
+                        stdout=(
+                            "Two files share a numeric ordering prefix. Parallel "
+                            "branches each added the same number — git shows no "
+                            "conflict for independent additions, and compile-based "
+                            "gates cannot see broken ordering. Renumber the later "
+                            "addition to the next free number and update every "
+                            "reference to its filename.\n" + detail
+                        ),
+                        stderr="",
+                        duration_ms=0,
+                        classification=GateClassification.REAL.value,
+                    )
+                ],
+                duration_ms=0,
+                classification=GateClassification.REAL.value,
+                failure_reason="numbered-file ordering collision",
+            )
+            try:
+                _write_post_merge_failure_report(story_id, project_root, result)
+            except OSError:
+                logger.warning(
+                    "%s Failed to write failure report (non-fatal)", tag, exc_info=True
+                )
+            return result
 
     commands = _resolve_qg_commands(project_root, config)
     if not commands:

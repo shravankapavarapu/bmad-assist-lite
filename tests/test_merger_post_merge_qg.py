@@ -860,3 +860,144 @@ class TestMergeResultQGField:
         assert updated.qg_result is not None
         assert updated.qg_result.all_passed is True
         assert result.qg_result is None  # Original unchanged
+
+
+# ============================================================================
+# Numbered-file ordering collision check
+# ============================================================================
+
+
+class TestFindNumberedPrefixCollisions:
+    """Tests for find_numbered_prefix_collisions."""
+
+    def test_no_globs_returns_empty(self, tmp_path: Path) -> None:
+        from bmad_assist_lite.parallel.merger import find_numbered_prefix_collisions
+
+        assert find_numbered_prefix_collisions(tmp_path, []) == []
+
+    def test_distinct_prefixes_clean(self, tmp_path: Path) -> None:
+        from bmad_assist_lite.parallel.merger import find_numbered_prefix_collisions
+
+        mig = tmp_path / "db" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "0003-a.sql").touch()
+        (mig / "0004-b.sql").touch()
+        assert (
+            find_numbered_prefix_collisions(tmp_path, ["db/migrations/*.sql"]) == []
+        )
+
+    def test_shared_prefix_reported(self, tmp_path: Path) -> None:
+        from bmad_assist_lite.parallel.merger import find_numbered_prefix_collisions
+
+        mig = tmp_path / "db" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "0003-a.sql").touch()
+        (mig / "0003-b.sql").touch()
+        (mig / "0004-c.sql").touch()
+        collisions = find_numbered_prefix_collisions(
+            tmp_path, ["db/migrations/*.sql"]
+        )
+        assert len(collisions) == 1
+        assert "0003-a.sql" in collisions[0]
+        assert "0003-b.sql" in collisions[0]
+
+    def test_prefixes_compare_numerically(self, tmp_path: Path) -> None:
+        """'0003' and '3' occupy the same ordering slot."""
+        from bmad_assist_lite.parallel.merger import find_numbered_prefix_collisions
+
+        mig = tmp_path / "db" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "0003-a.sql").touch()
+        (mig / "3-b.sql").touch()
+        collisions = find_numbered_prefix_collisions(
+            tmp_path, ["db/migrations/*.sql"]
+        )
+        assert len(collisions) == 1
+
+    def test_unnumbered_files_ignored(self, tmp_path: Path) -> None:
+        from bmad_assist_lite.parallel.merger import find_numbered_prefix_collisions
+
+        mig = tmp_path / "db" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "README.md").touch()
+        (mig / "notes.sql").touch()
+        assert (
+            find_numbered_prefix_collisions(tmp_path, ["db/migrations/*"]) == []
+        )
+
+
+class TestRunPostMergeQGCollisionShortCircuit:
+    """The collision check fails the QG before any command gate runs."""
+
+    def _config_with_globs(self) -> Config:
+        data = {
+            **MINIMAL_CONFIG_DATA,
+            "quality_gate": {"lint": "false", "command_timeout": 60},
+            "parallel": {"numbered_file_globs": ["db/migrations/*.sql"]},
+        }
+        return Config.model_validate(data)
+
+    def test_collision_fails_without_running_command_gates(
+        self, tmp_path: Path
+    ) -> None:
+        mig = tmp_path / "db" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "0003-a.sql").touch()
+        (mig / "0003-b.sql").touch()
+
+        with patch(
+            "bmad_assist_lite.parallel.merger.run_gates"
+        ) as mock_run_gates:
+            result = run_post_merge_qg(
+                "7.9", tmp_path, self._config_with_globs()
+            )
+
+        mock_run_gates.assert_not_called()
+        assert result.all_passed is False
+        assert len(result.gate_results) == 1
+        gate = result.gate_results[0]
+        assert gate.name == "NumberedFileCollision"
+        assert gate.classification == "real"
+        assert "0003-a.sql" in gate.stdout
+        report = (
+            tmp_path
+            / ".bmad-assist-lite"
+            / "cache"
+            / "post-merge-qg-failures-7.9.md"
+        )
+        assert report.exists()
+        assert "NumberedFileCollision" in report.read_text(encoding="utf-8")
+
+    def test_collision_failure_is_fix_routable(self, tmp_path: Path) -> None:
+        from bmad_assist_lite.parallel.merger import _assert_fix_routable
+
+        mig = tmp_path / "db" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "0001-a.sql").touch()
+        (mig / "0001-b.sql").touch()
+        result = run_post_merge_qg("7.9", tmp_path, self._config_with_globs())
+        assert _assert_fix_routable(result) is True
+
+    def test_no_collision_falls_through_to_command_gates(
+        self, tmp_path: Path
+    ) -> None:
+        mig = tmp_path / "db" / "migrations"
+        mig.mkdir(parents=True)
+        (mig / "0003-a.sql").touch()
+
+        with patch(
+            "bmad_assist_lite.parallel.merger.run_gates"
+        ) as mock_run_gates:
+            mock_run = MagicMock()
+            mock_run.all_passed = True
+            mock_run.outcomes = []
+            mock_run.duration_ms = 0
+            mock_run.env_blocked = False
+            mock_run.overall_classification = None
+            mock_run_gates.return_value = mock_run
+            result = run_post_merge_qg(
+                "7.9", tmp_path, self._config_with_globs()
+            )
+
+        mock_run_gates.assert_called_once()
+        assert result.all_passed is True

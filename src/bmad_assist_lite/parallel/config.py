@@ -84,6 +84,27 @@ class ParallelConfig(BaseModel):
         ge=1,
         description="Timeout in seconds for each setup/validation command",
     )
+    numbered_file_globs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Globs, relative to the project root, of files whose leading numeric "
+            "prefix is an ordering contract (e.g. 'db/migrations/*.sql'). Two "
+            "parallel branches can each ADD a file with the same number — git "
+            "shows no conflict, lint/typecheck/build all pass, and the ordering "
+            "is silently broken. When set, the post-merge quality gate fails "
+            "loud on any shared prefix before running the command gates."
+        ),
+    )
+    retry_parked_on_resume: bool = Field(
+        default=True,
+        description=(
+            "On --resume, automatically un-park parked merges whose branch "
+            "still exists and send them back through the merge ladder at the "
+            "clean tier. A retry that fails simply re-parks — the branch and "
+            "worktree are never deleted, so the retry is safe and bounded to "
+            "one attempt per resume."
+        ),
+    )
 
     @field_validator("worktree_base_dir", mode="before")
     @classmethod

@@ -2114,3 +2114,113 @@ def test_orchestrator_app_config_defaults_to_none() -> None:
     orch = _make_orchestrator()
     assert orch._app_config is None
     assert orch._merge_queue._config is None
+
+
+# ============================================================================
+# Parked-merge reclaim on resume
+# ============================================================================
+
+
+class TestReclaimParkedMerges:
+    """_reclaim_parked_merges sends parked stories back through the ladder."""
+
+    def _orchestrator(self, retry: bool = True) -> Orchestrator:
+        from bmad_assist_lite.parallel.state import StoryStatus
+
+        config = ParallelConfig(
+            max_concurrency=1,
+            stagger_delay=0.0,
+            retry_parked_on_resume=retry,
+        )
+        graph = _make_graph(all_ids=["7.9"], story_count=1)
+        orch = Orchestrator(graph, config, Path("/fake/project"), 7)
+        orch._state = orch._state.with_story_status("7.9", StoryStatus.BLOCKED)
+        orch._blocked_ids = {"7.9"}
+        return orch
+
+    def _record(self):
+        from bmad_assist_lite.parallel.parked import ParkedMerge
+
+        return ParkedMerge(story_id="7.9", branch="parallel/7-9")
+
+    def test_blocked_parked_story_is_reclaimed(self) -> None:
+        from bmad_assist_lite.parallel.state import StoryStatus
+
+        orch = self._orchestrator()
+        with (
+            patch(
+                "bmad_assist_lite.parallel.parked.list_parked_merges",
+                return_value=[self._record()],
+            ),
+            patch(
+                "bmad_assist_lite.parallel.parked.unpark_merge",
+                return_value=True,
+            ) as mock_unpark,
+            patch(
+                "bmad_assist_lite.parallel.git_ops.ref_exists",
+                return_value=True,
+            ),
+        ):
+            orch._reclaim_parked_merges()
+
+        mock_unpark.assert_called_once_with(Path("/fake/project"), "7.9")
+        assert orch._state.stories["7.9"].status == StoryStatus.MERGING
+        assert "7.9" not in orch._blocked_ids
+        assert "7.9" in orch._merging_ids
+
+    def test_disabled_flag_leaves_parked_alone(self) -> None:
+        from bmad_assist_lite.parallel.state import StoryStatus
+
+        orch = self._orchestrator(retry=False)
+        with patch(
+            "bmad_assist_lite.parallel.parked.list_parked_merges",
+            return_value=[self._record()],
+        ) as mock_list:
+            orch._reclaim_parked_merges()
+
+        mock_list.assert_not_called()
+        assert orch._state.stories["7.9"].status == StoryStatus.BLOCKED
+
+    def test_missing_branch_leaves_record_for_inspection(self) -> None:
+        from bmad_assist_lite.parallel.state import StoryStatus
+
+        orch = self._orchestrator()
+        with (
+            patch(
+                "bmad_assist_lite.parallel.parked.list_parked_merges",
+                return_value=[self._record()],
+            ),
+            patch(
+                "bmad_assist_lite.parallel.parked.unpark_merge",
+            ) as mock_unpark,
+            patch(
+                "bmad_assist_lite.parallel.git_ops.ref_exists",
+                return_value=False,
+            ),
+        ):
+            orch._reclaim_parked_merges()
+
+        mock_unpark.assert_not_called()
+        assert orch._state.stories["7.9"].status == StoryStatus.BLOCKED
+        assert "7.9" in orch._blocked_ids
+
+    def test_non_blocked_story_not_touched(self) -> None:
+        """A parked record for a story the state says is DONE is left alone."""
+        from bmad_assist_lite.parallel.state import StoryStatus
+
+        orch = self._orchestrator()
+        orch._state = orch._state.with_story_status("7.9", StoryStatus.DONE)
+        orch._blocked_ids = set()
+        with (
+            patch(
+                "bmad_assist_lite.parallel.parked.list_parked_merges",
+                return_value=[self._record()],
+            ),
+            patch(
+                "bmad_assist_lite.parallel.parked.unpark_merge",
+            ) as mock_unpark,
+        ):
+            orch._reclaim_parked_merges()
+
+        mock_unpark.assert_not_called()
+        assert orch._state.stories["7.9"].status == StoryStatus.DONE
