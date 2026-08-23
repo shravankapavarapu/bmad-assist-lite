@@ -14,6 +14,10 @@ from bmad_assist_lite.core.config import (
 from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
+from bmad_assist_lite.loop.handlers.ac_audit_trigger import (
+    record_audit_trigger,
+    resolve_ac_audit_enabled,
+)
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_merge import reviewer_findings_addendum
 from bmad_assist_lite.loop.story_paths import resolve_story_path
@@ -173,6 +177,78 @@ class CodeReviewHandler(BaseHandler):
             prompt = f"{prompt}\n\n{reviewer_findings_addendum()}"
         return prompt
 
+    def _audit_prompt(self, state: State) -> str:
+        """Build the AC-completeness audit lane's prompt (ac_audit lever).
+
+        Always the FULL audit — never the SP-2 delta prompt, even on round-2:
+        after a fix round the audit must re-verify every criterion end-to-end,
+        because a fix can complete one AC while leaving another still partial.
+        The compiled ac-audit workflow REQUIRES the epic file; a resolution
+        failure surfaces as a ConfigError, failing the phase loudly before any
+        lane spends tokens — the audit never silently runs without the
+        authoritative acceptance criteria.
+        """
+        prompt = self.render_prompt(state, workflow_name="ac-audit")
+        diff = git_diff(self.project_path)
+        if diff and diff.strip():
+            prompt = (
+                f"{prompt}\n\n"
+                f"<changed-code-diff>\n{_cap_inline_diff(diff)}\n</changed-code-diff>\n"
+                "The diff above shows what this story changed, for ORIENTATION only. "
+                "Your audit target is the code as it is NOW — evidence for a criterion "
+                "may live in files the diff never touched, and a file the diff should "
+                "have touched but did not is exactly what you exist to catch.\n"
+            )
+        if self.config.speed.structured_review:
+            prompt = f"{prompt}\n\n{reviewer_findings_addendum()}"
+        return prompt
+
+    #: Lane label for the AC-completeness auditor; also its findings `source` tag.
+    AUDIT_LANE_LABEL = "AC-Auditor"
+
+    def _build_lanes(self, state: State) -> list[dict[str, Any]]:
+        """Assemble the parallel review lanes: N reviewers, plus the AC auditor.
+
+        Whether the AC-auditor lane is appended is resolved per story by
+        :func:`~bmad_assist_lite.loop.handlers.ac_audit_trigger.resolve_ac_audit_enabled`
+        (goal-run11): ``enabled`` forces it on, ``auto`` decides from worktree-local
+        signals, and both-off is byte-identical to the pre-lever reviewer set
+        (same prompts, same efforts, no signal gathering, no record). The audit
+        lane runs on the MASTER provider config at the master's effort: it is a
+        gate, not a reviewer, so the SP-3 lean-review effort notch does not apply.
+        """
+        prompt = self._review_prompt(state)
+        lanes: list[dict[str, Any]] = []
+        for idx, mc in enumerate(self.config.providers.multi):
+            lane_effort = (
+                notch_down_effort(mc.effort)
+                if self.config.speed.lean_review
+                else mc.effort
+            )
+            lanes.append(
+                {
+                    "label": f"Reviewer-{idx + 1}",
+                    "provider": mc.provider,
+                    "model": mc.model,
+                    "effort": lane_effort,
+                    "prompt": prompt,
+                }
+            )
+        decision = resolve_ac_audit_enabled(self.config, state, self.project_path)
+        record_audit_trigger(decision, state)
+        if decision.fire and lanes:
+            master = self.config.providers.master
+            lanes.append(
+                {
+                    "label": self.AUDIT_LANE_LABEL,
+                    "provider": master.provider,
+                    "model": master.model,
+                    "effort": master.effort,
+                    "prompt": self._audit_prompt(state),
+                }
+            )
+        return lanes
+
     def _lean_review_addendum(self) -> str:
         """SP-3: inline the changed-code diff + findings-only, diff-scoped guidance."""
         diff = git_diff(self.project_path)
@@ -273,21 +349,32 @@ class CodeReviewHandler(BaseHandler):
         """Run parallel multi-LLM code review with Evidence Score aggregation."""
         try:
             self._warn_if_self_review()
-            prompt = self._review_prompt(state)
             system_prompt = self.build_system_prompt(state)
 
             multi_configs = self.config.providers.multi
             if not multi_configs:
+                if self.config.ac_audit.enabled or self.config.ac_audit.auto:
+                    msg = (
+                        "ac_audit is active (enabled or auto) but providers.multi "
+                        "is empty — the AC-completeness audit lane only runs "
+                        "alongside the multi-reviewer path and was SKIPPED. Fix: "
+                        "configure providers.multi with at least one reviewer."
+                    )
+                    logger.warning("%s", msg)
+                    write_progress(f"  WARNING: {msg}")
                 return super().execute(state)
+
+            lanes = self._build_lanes(state)
 
             import asyncio
             import concurrent.futures
 
-            providers_desc = ", ".join(
-                f"{mc.provider}({mc.model or 'default'})" for mc in multi_configs
+            lanes_desc = ", ".join(
+                f"{lane['label']}={lane['provider']}({lane['model'] or 'default'})"
+                for lane in lanes
             )
             write_progress(
-                f"  Running {len(multi_configs)} reviewers in parallel: {providers_desc}"
+                f"  Running {len(lanes)} review lanes in parallel: {lanes_desc}"
             )
 
             async def _run_reviews() -> list[dict[str, Any]]:
@@ -300,10 +387,10 @@ class CodeReviewHandler(BaseHandler):
                 read_only_tools = list(READ_ONLY_TOOLS)
 
                 def _make_invoker(
-                    p: Any, m: str, t: int, e: str | None
+                    p: Any, lane_prompt: str, m: str, t: int, e: str | None
                 ) -> Any:
                     return lambda: p.invoke(
-                        prompt,
+                        lane_prompt,
                         model=m,
                         timeout=t,
                         cwd=self.project_path,
@@ -313,29 +400,27 @@ class CodeReviewHandler(BaseHandler):
                     )
 
                 with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=len(multi_configs)
+                    max_workers=len(lanes)
                 ) as executor:
                     futures = []
                     providers: list[Any] = []
                     # Stagger reviewer starts so reviewer-1 can warm the shared
                     # cached system prompt before the others begin (SP-4 drops it).
                     stagger = self._reviewer_stagger(system_prompt)
-                    for idx, mc in enumerate(multi_configs):
-                        provider = get_provider(mc.provider)
+                    for idx, lane in enumerate(lanes):
+                        provider = get_provider(lane["provider"])
                         providers.append(provider)
                         if idx > 0 and stagger > 0:
                             await asyncio.sleep(stagger)
-                        # SP-3: reviewer lanes run one effort notch lower.
-                        lane_effort = (
-                            notch_down_effort(mc.effort)
-                            if self.config.speed.lean_review
-                            else mc.effort
-                        )
                         futures.append(
                             loop.run_in_executor(
                                 executor,
                                 _make_invoker(
-                                    provider, mc.model, timeout, lane_effort
+                                    provider,
+                                    lane["prompt"],
+                                    lane["model"],
+                                    timeout,
+                                    lane["effort"],
                                 ),
                             )
                         )
@@ -344,7 +429,7 @@ class CodeReviewHandler(BaseHandler):
 
                 results: list[dict[str, Any]] = []
                 for i, raw in enumerate(raw_results):
-                    label = f"Reviewer-{i + 1}"
+                    label = lanes[i]["label"]
                     if isinstance(raw, BaseException):
                         logger.warning("%s failed: %s", label, raw)
                         results.append(
@@ -365,11 +450,31 @@ class CodeReviewHandler(BaseHandler):
 
             successful = [r for r in reviews if r.get("exit_code") == 0]
             write_progress(
-                f"  Reviewers complete: {len(successful)}/{len(multi_configs)} succeeded"
+                f"  Review lanes complete: {len(successful)}/{len(lanes)} succeeded"
             )
 
             if not successful:
                 return PhaseResult.fail("All reviewers failed")
+
+            # The audit lane is a GATE, not a reviewer: proceeding without it
+            # would silently recreate the blind spot it exists to close (an
+            # unverified AC reads as a clean review). A failed audit lane fails
+            # the phase; --resume re-runs it.
+            failed_audit = next(
+                (
+                    r
+                    for r in reviews
+                    if r.get("reviewer") == self.AUDIT_LANE_LABEL
+                    and r.get("exit_code") != 0
+                ),
+                None,
+            )
+            if failed_audit is not None:
+                return PhaseResult.fail(
+                    "AC-completeness audit lane failed: "
+                    f"{failed_audit.get('error', 'nonzero exit')} — "
+                    "the review cannot be trusted without it (ac_audit)"
+                )
 
             # Calculate Evidence Score aggregate from reviewer outputs
             evidence_aggregate = self._calculate_evidence_aggregate(reviews)
@@ -396,7 +501,7 @@ class CodeReviewHandler(BaseHandler):
 
             outputs: dict[str, Any] = {
                 "review_count": len(successful),
-                "total_reviewers": len(multi_configs),
+                "total_reviewers": len(lanes),
             }
             if evidence_aggregate:
                 outputs["evidence_score"] = evidence_aggregate["total_score"]

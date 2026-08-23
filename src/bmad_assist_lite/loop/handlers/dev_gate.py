@@ -21,6 +21,7 @@ from pathlib import Path
 
 from bmad_assist_lite.core.config import Config
 from bmad_assist_lite.core.gate_runner import GateCommand, run_gates
+from bmad_assist_lite.core.git import list_changed_files
 from bmad_assist_lite.core.state import Phase, State
 from bmad_assist_lite.loop.handlers.dev_story import resolve_dev_lean_mode
 from bmad_assist_lite.loop.types import PhaseResult
@@ -28,6 +29,63 @@ from bmad_assist_lite.loop.worktree_snapshot import restore_worktree
 from bmad_assist_lite.providers.base import write_progress
 
 logger = logging.getLogger(__name__)
+
+#: Default basename of the run's implementation-artifacts directory — the home of
+#: the story docs, validations, code-reviews, and sprint-status.yaml. A story
+#: whose entire diff sits under a directory with this name changed only the run's
+#: own bookkeeping, not the product. Used as the fallback when the paths
+#: singleton is not initialised (unit tests) or points at a different checkout
+#: than the worktree the gate runs in.
+_IMPL_ARTIFACTS_DIRNAME_DEFAULT = "implementation-artifacts"
+
+
+def _implementation_artifacts_dirname() -> str:
+    """Basename of the implementation-artifacts dir, or the default fallback.
+
+    The paths singleton is the source of truth when it is initialised; the
+    fallback keeps the hollow guard working before paths are wired and in a
+    parallel worktree whose singleton still points at the main checkout.
+    """
+    try:
+        from bmad_assist_lite.core.paths import get_paths
+
+        return get_paths().implementation_artifacts.name
+    except (RuntimeError, ImportError):
+        return _IMPL_ARTIFACTS_DIRNAME_DEFAULT
+
+
+def _is_bookkeeping_path(repo_rel_path: str, artifacts_dirname: str) -> bool:
+    """True if a repo-relative path lives under the implementation-artifacts dir.
+
+    Matches on the directory *name* as a path segment rather than a resolved
+    prefix, so it holds regardless of where the repo root is (worktree vs main
+    checkout) and of the depth the artifacts dir sits at.
+    """
+    return artifacts_dirname in Path(repo_rel_path).parts
+
+
+def story_change_is_hollow(project_path: Path) -> bool | None:
+    """Whether the story's working-tree changes are bookkeeping-only (hollow).
+
+    Returns:
+        True  — there ARE changes but every one is a run bookkeeping artifact
+                (the story doc / sprint-status under the implementation-artifacts
+                dir): dev_story implemented nothing. This is the goal-run11
+                story-6.5 false-completion signature.
+        False — at least one changed file is story-relevant (code, docs, or tests
+                outside the bookkeeping dir).
+        None  — undetermined: git is unavailable/errored, OR the tree is
+                completely clean (ambiguous with an already-committed resume).
+                A caller MUST NOT treat None as hollow — the guard blocks only on
+                the positive evidence of True.
+
+    """
+    changed = list_changed_files(project_path)
+    if not changed:  # None (git failure) or [] (clean tree) — both undetermined
+        return None
+    artifacts = _implementation_artifacts_dirname()
+    real = [f for f in changed if not _is_bookkeeping_path(f, artifacts)]
+    return len(real) == 0
 
 
 class DevGateHandler:
@@ -107,19 +165,35 @@ class DevGateHandler:
             self._write_adaptive_record(state, record)
             return PhaseResult.ok({"dev_gate_action": "no_commands"})
 
-        run = run_gates(
-            commands,
-            self.project_path,
-            timeout=self._timeout(),
-            label=f"dev-gate:{state.current_story or '?'}",
+        # Hollow-story guard: a story whose only working-tree changes are the
+        # run's own bookkeeping artifacts implemented nothing, and an empty diff
+        # passes typecheck+tests trivially — so short-circuit the gate to a fail
+        # instead of running (and trivially passing) the commands. Positive
+        # evidence only (see story_change_is_hollow): git failure or a clean tree
+        # is None and proceeds to the real gate unchanged.
+        hollow = (
+            story_change_is_hollow(self.project_path)
+            if qg.real_dev_gate_hollow_guard
+            else None
         )
-        passed = run.all_passed
-        failed = [o.name for o in run.failures]
-        if passed:
-            classification = "pass"
+        if hollow:
+            passed = False
+            failed = ["hollow-story: no story-relevant changes (bookkeeping only)"]
+            classification = "hollow"
         else:
-            cls = run.overall_classification
-            classification = cls.value if cls is not None else "real"
+            run = run_gates(
+                commands,
+                self.project_path,
+                timeout=self._timeout(),
+                label=f"dev-gate:{state.current_story or '?'}",
+            )
+            passed = run.all_passed
+            failed = [o.name for o in run.failures]
+            if passed:
+                classification = "pass"
+            else:
+                cls = run.overall_classification
+                classification = cls.value if cls is not None else "real"
 
         record = {
             "attempt": state.dev_attempt,
@@ -179,6 +253,36 @@ class DevGateHandler:
                 success=True,
                 next_phase=Phase.DEV_STORY,
                 outputs={"dev_gate_action": "retry", "dev_gate_passed": False},
+            )
+
+        # Confirmed-hollow story (guard tripped, and the one lean-off retry — if
+        # enabled — did not produce real work): fail the PHASE, not just record a
+        # verdict. SP-A0's normal fail advances to the quality gate, which also
+        # passes trivially on an empty diff; only failing the phase stops the run
+        # from certifying and committing an empty implementation. Nothing is
+        # committed at dev-gate time, so failing here leaves no hollow commit.
+        if classification == "hollow":
+            write_progress(
+                f"  Dev gate FAILED — story {state.current_story} implemented "
+                "nothing (only bookkeeping artifacts changed); halting rather "
+                "than certifying a hollow story"
+            )
+            logger.error(
+                "Dev gate hollow-guard: story %s produced no story-relevant "
+                "changes (bookkeeping only) after %d attempt(s) — failing the "
+                "phase so the run parks it instead of committing empty work",
+                state.current_story,
+                state.dev_attempt + 1,
+            )
+            return PhaseResult(
+                success=False,
+                error=(
+                    f"Hollow story {state.current_story}: dev_story produced no "
+                    "story-relevant changes (only run bookkeeping artifacts "
+                    "changed). Refusing to certify or commit an empty "
+                    "implementation."
+                ),
+                outputs={"dev_gate_action": "hollow", "dev_gate_passed": False},
             )
 
         env_note = (

@@ -364,6 +364,23 @@ class QualityGateConfig(BaseModel):
             "spurious failure burns a full lean-off dev re-run."
         ),
     )
+    real_dev_gate_hollow_guard: bool = Field(
+        default=True,
+        description=(
+            "Fail the real dev gate when a story's working-tree changes are "
+            "confined to the run's own bookkeeping artifacts (its story doc + "
+            "sprint-status, which live under the implementation-artifacts dir) — "
+            "i.e. dev_story implemented nothing. An empty/near-empty diff passes "
+            "typecheck+tests trivially, so without this guard a hollow story (0 "
+            "implementation) reads as a clean pass (the goal-run11 story-6.5 "
+            "false-completion). On a confirmed-hollow story the gate fails the "
+            "phase (after the one lean-off adaptive retry, if enabled) so the run "
+            "stops/parks the story rather than committing empty work. "
+            "Positive-evidence only: if the changed-file set cannot be determined "
+            "(git unavailable) or the tree is completely clean, the gate proceeds "
+            "unchanged. Set false to restore the pre-goal-run11 behaviour."
+        ),
+    )
 
     def resolves_dev_gate_commands(self) -> bool:
         """True if the real dev gate would actually run at least one command.
@@ -737,6 +754,58 @@ class ReviewConfig(BaseModel):
         return value
 
 
+class AcAuditConfig(BaseModel):
+    """Dedicated acceptance-criteria completeness audit lane in code_review.
+
+    Motivated by goal-run9 Phase 2 (L3, story 5.2): a story doc that omitted a
+    cross-screen dependency led dev to ship an AC half-built, and the gap passed
+    the automated gate (typecheck + suite) AND the multi-reviewer code review —
+    general-purpose reviewers spread attention across security/perf/tests and
+    review the diff, so a file that SHOULD have changed but didn't is invisible.
+
+    When enabled, code_review runs one extra read-only lane whose only job is
+    per-AC end-to-end tracing against the EPIC's acceptance criteria (required
+    input — the phase fails loudly if the epic file cannot be resolved, rather
+    than silently auditing nothing). Its findings enter the normal structured
+    merge, so a PARTIAL/MISSING AC becomes a blocking finding in the existing
+    triage/fix loop.
+
+    Three states, resolved per story at ``CodeReviewHandler._build_lanes`` by
+    :func:`bmad_assist_lite.loop.handlers.ac_audit_trigger.resolve_ac_audit_enabled`
+    (goal-run11 auto-trigger, SP-A1 pattern — cf.
+    :func:`~bmad_assist_lite.loop.handlers.dev_story.resolve_dev_lean_mode`):
+
+    * ``enabled: true``  — force-ON for every story (run10 behaviour, unchanged).
+    * ``auto: true``     — the tool decides per story from worktree-local
+      structural risk signals (diff spread, epic AC load + cross-boundary AC
+      markers, story-doc discovery markers, and dev/review escalation), biased
+      to FIRE when uncertain. Every decision is recorded.
+    * both false (default) — OFF, and OFF is byte-identical to the pre-lever
+      review phase (same lanes, same prompts, no signal gathering, no record).
+
+    ``enabled`` wins over ``auto`` (force-ON short-circuits the resolver).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Force the AC-completeness audit lane ON for every story during "
+            "code_review (requires providers.multi; uses the master provider). "
+            "Wins over ``auto``."
+        ),
+    )
+    auto: bool = Field(
+        default=False,
+        description=(
+            "Let the tool decide per story whether to run the audit lane, from "
+            "worktree-local structural risk signals (goal-run11 auto-trigger). "
+            "Ignored when ``enabled`` is true. Byte-identical-off when both false."
+        ),
+    )
+
+
 class Config(BaseModel):
     """Main bmad-assist-lite configuration model."""
 
@@ -761,6 +830,7 @@ class Config(BaseModel):
     speed: SpeedConfig = Field(default_factory=SpeedConfig)
     forensics: ForensicsConfig = Field(default_factory=ForensicsConfig)
     review: ReviewConfig = Field(default_factory=ReviewConfig)
+    ac_audit: AcAuditConfig = Field(default_factory=AcAuditConfig)
     parallel: ParallelConfig | None = Field(
         default=None, description="Parallel story execution configuration"
     )

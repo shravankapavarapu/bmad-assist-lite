@@ -1,0 +1,22 @@
+name: ac-audit
+description: "Single-purpose acceptance-criteria completeness audit: verify every AC is FULLY implemented end-to-end in the code as it stands, tracing both sides of every cross-boundary handoff. The epic file is REQUIRED — the audit refuses to run against a story doc alone."
+instructions: instructions.xml
+
+input_file_patterns:
+  story_file:
+    sharded: "{project-root}/**/story-{epic_num}.{story_num}.md"
+    pattern: "{project-root}/**/{epic_num}-{story_num}-*.md"
+    strategy: FULL_LOAD
+    required: true
+  epic_file:
+    sharded: "{project-root}/**/epic-{epic_num}.md"
+    pattern: "{project-root}/**/epic-{epic_num}-*.md"
+    strategy: SELECTIVE_LOAD
+    required: true
+  project_context:
+    pattern: "{project-root}/**/project-context.md"
+    strategy: SELECTIVE_LOAD
+    required: false
+
+variables:
+  mission: "Acceptance-criteria completeness audit for Epic {epic_num} Story {story_num}"

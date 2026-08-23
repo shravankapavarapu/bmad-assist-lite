@@ -18,10 +18,14 @@ import sys
 import types
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bmad_assist_lite.parallel.bootstrap import BootstrapResult, bootstrap_worktree
 from bmad_assist_lite.parallel.config import ParallelConfig
 from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
+
+if TYPE_CHECKING:
+    from bmad_assist_lite.core.config import Config
 from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.logging import (
     log_dependency_unlocked,
@@ -182,6 +186,7 @@ class Orchestrator:
         *,
         base_branch: str = "main",
         resume: bool = False,
+        app_config: "Config | None" = None,
     ) -> None:
         """Initialize the orchestrator with injected dependencies.
 
@@ -194,10 +199,18 @@ class Orchestrator:
             resume: If ``True``, load existing ``parallel-state.yaml``
                 for crash recovery.  When ``False`` (default), always
                 create fresh state from the dependency graph.
+            app_config: The full loaded ``Config``.  Threaded into the
+                ``MergeQueue`` so the post-merge quality gate sources its
+                commands from ``quality_gate`` and reinstalls the base tree
+                from ``parallel`` after a merge.  Without it the queue falls
+                back to toolchain auto-detection and never bootstraps the
+                merge target — the verified cause of post-merge gates failing
+                on stale dependencies for a story that added a package.
 
         """
         self._dependency_graph = dependency_graph
         self._config = config
+        self._app_config = app_config
         self._project_root = project_root
         self._epic_num = epic_num
 
@@ -217,6 +230,7 @@ class Orchestrator:
         # wrapping internally for sync git/QG operations.
         self._merge_queue: MergeQueue = MergeQueue(
             project_root,
+            config=app_config,
             parallel_config=config,
             integration_ref=config.integration_branch or base_branch,
         )
@@ -275,6 +289,10 @@ class Orchestrator:
                     self._merging_ids.add(story_id)
                 if story_state.worktree_path is not None:
                     self._story_worktrees[story_id] = story_state.worktree_path
+            # Parked merges are terminal for the run that parked them, not for
+            # the epic: un-park them ahead of the reconcile so it re-queues
+            # their branches through the merge ladder.
+            self._reclaim_parked_merges()
             # Git — not a persisted flag — is the authority for what landed.
             # Re-derive the merge queue from disk before anything is scheduled.
             self._reconcile_merge_queue()
@@ -307,6 +325,58 @@ class Orchestrator:
     # ========================================================================
     # Sprint-status seeding
     # ========================================================================
+
+    def _reclaim_parked_merges(self) -> None:
+        """Send parked merges back through the ladder on resume.
+
+        A parked merge keeps its branch and worktree; its record marks it
+        terminal for the run that parked it. On resume (when
+        ``retry_parked_on_resume`` is set, the default) each parked story
+        whose branch still exists is un-parked and set back to ``MERGING``,
+        so the git-based reconcile re-queues it at the clean tier — by then
+        the integration head has usually advanced past whatever conflicted.
+        A retry that fails simply re-parks: the branch is never deleted, so
+        the attempt is safe and bounded to one per resume. A record whose
+        branch is gone is left in place for manual inspection — removing it
+        would erase the only pointer to the lost work.
+        """
+        if not self._config.retry_parked_on_resume:
+            return
+
+        from bmad_assist_lite.parallel.git_ops import ref_exists
+        from bmad_assist_lite.parallel.parked import list_parked_merges, unpark_merge
+
+        try:
+            records = list_parked_merges(self._project_root)
+        except Exception:
+            logger.warning(
+                "[ORCHESTRATOR] Could not list parked merges (non-fatal)", exc_info=True,
+            )
+            return
+
+        for record in records:
+            story_id = record.story_id
+            story_state = self._state.stories.get(story_id)
+            if story_state is None or story_state.status != StoryStatus.BLOCKED:
+                continue
+            if not ref_exists(self._project_root, record.branch):
+                logger.warning(
+                    "[ORCHESTRATOR] Parked merge %s: branch %s is gone — leaving "
+                    "the record for manual inspection",
+                    story_id,
+                    record.branch,
+                )
+                continue
+            unpark_merge(self._project_root, story_id)
+            self._state = self._state.with_story_status(story_id, StoryStatus.MERGING)
+            self._blocked_ids.discard(story_id)
+            self._merging_ids.add(story_id)
+            logger.info(
+                "[ORCHESTRATOR] Reclaimed parked merge %s (branch %s) — "
+                "re-queueing through the merge ladder",
+                story_id,
+                record.branch,
+            )
 
     def _reconcile_merge_queue(self) -> None:
         """Re-derive merge state from git after a crash.
