@@ -244,3 +244,51 @@ class TestGitDiffHelper:
         assert diff is not None
         assert UNTRACKED_HEADING in diff
         assert "brand_new.py" in diff
+
+
+class TestFinalRoundNeverDelta:
+    """Review-owns-done: the promoting round is always a full review."""
+
+    def test_final_round_uses_full_prompt(self, tmp_path):
+        """At the cap (default 2) the round's verdict can promote to done, so
+        the scoped delta — which cannot see unfixed criteria outside its diff
+        — must not be the promoting review."""
+        handler = _handler(tmp_path, {"delta_round2": True})
+        _seed_findings(tmp_path, STORY, "round-1 findings body")
+        state = _round2_state()
+        state.review_iteration = 2  # == default cap
+        with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
+            prompt = handler._review_prompt(state)
+        assert "FULL PROMPT" in prompt
+        assert "Round-2 re-review" not in prompt
+        assert handler._round_was_delta is False
+
+    def test_middle_round_may_still_be_delta(self, tmp_path):
+        """Below the cap the round can spawn another fix, so the cheap scoped
+        re-review is allowed."""
+        handler = _handler(tmp_path, {"delta_round2": True})
+        _seed_findings(tmp_path, STORY, "round-1 findings body")
+        state = _round2_state()  # iteration 1 < default cap 2
+        with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
+            prompt = handler._review_prompt(state)
+        assert "Round-2 re-review" in prompt
+        assert handler._round_was_delta is True
+
+    def test_cap_one_has_no_delta_round_at_all(self, tmp_path):
+        """With cap 1 the only re-review IS the promoting one — full."""
+        from bmad_assist_lite.core.config import load_config
+
+        config = load_config(
+            {
+                "providers": BASE_PROVIDERS,
+                "speed": {**_SPEED_OFF, "delta_round2": True},
+                "loop": {"review_max_iterations": 1},
+            }
+        )
+        handler = CodeReviewHandler(config, tmp_path)
+        _seed_findings(tmp_path, STORY, "round-1 findings body")
+        state = _round2_state()  # iteration 1 == cap 1
+        with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
+            prompt = handler._review_prompt(state)
+        assert "FULL PROMPT" in prompt
+        assert handler._round_was_delta is False

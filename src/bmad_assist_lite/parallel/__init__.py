@@ -22,13 +22,14 @@ from bmad_assist_lite.parallel.merger import (
     MergeQueue,
     MergeResult,
     PostMergeQGResult,
+    decide_promotion,
     land_candidate,
     merge_story,
     resolve_conflicts,
     resolve_on_resolution_branch,
     run_post_merge_fix,
     run_post_merge_qg,
-    update_sprint_status_done,
+    update_sprint_status_landed,
 )
 from bmad_assist_lite.parallel.orchestrator import Orchestrator
 from bmad_assist_lite.parallel.output import OutputMultiplexer
@@ -95,6 +96,7 @@ __all__ = [
     "cleanup_worktree",
     "create_initial_state",
     "create_worktree",
+    "decide_promotion",
     "get_current_branch",
     "get_parallel_state_path",
     "is_protected_branch",
@@ -119,6 +121,6 @@ __all__ = [
     "setup_parallel_log",
     "teardown_parallel_log",
     "unpark_merge",
-    "update_sprint_status_done",
+    "update_sprint_status_landed",
     "write_report",
 ]

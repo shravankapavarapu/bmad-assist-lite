@@ -12,12 +12,15 @@ import logging
 import os
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import typer
 import yaml
 
 from bmad_assist_lite import __version__
+
+if TYPE_CHECKING:
+    from bmad_assist_lite.core.sprint_status import SprintStatus
 
 # Exit codes are a public CLI contract: 0 = completed, 1 = failed,
 # 130 = interrupted, and this one for "a run budget stopped the run cleanly".
@@ -349,6 +352,15 @@ def run(
 
     sprint_status = load_sprint_status(ss_path)
     backlog_stories = sprint_status.find_backlog_stories()
+
+    # A crash mid-review leaves the CURRENT story's tracker row at `review`,
+    # which is a parked status the queue no longer picks up — but a resumed
+    # run must still finish the story it was in the middle of, and losing it
+    # from the queue would make advance_story treat its epic as complete.
+    # Splice exactly the resume position back in; every OTHER `review` row
+    # stays parked for the out-of-band review pass.
+    if resume:
+        backlog_stories = _splice_resume_story(project, sprint_status, backlog_stories)
 
     if not backlog_stories:
         typer.echo("No backlog stories found in sprint-status.yaml")
@@ -813,6 +825,57 @@ def reset_lock(
 
 
 # --- Helper functions for sprint-status-driven discovery ---
+
+
+def _splice_resume_story(
+    project: Path,
+    sprint_status: "SprintStatus",
+    backlog_stories: list[tuple[int, int, str]],
+) -> list[tuple[int, int, str]]:
+    """Re-insert the resume position when its tracker row is parked at `review`.
+
+    `review` is not schedulable as new work, so the queue skips it — but the
+    story the interrupted run was actively reviewing must be finishable on
+    ``--resume``. Only the saved state's current story is spliced back, in
+    story order within its epic; any other `review` row stays parked. Never
+    raises: on any failure the queue is returned unchanged and the resume
+    proceeds as it would have before this guard existed.
+    """
+    logger = logging.getLogger("bmad_assist_lite")
+    try:
+        from bmad_assist_lite.core.state import get_state_path, load_state
+
+        state = load_state(get_state_path(project))
+        story_id = state.current_story
+        if not story_id:
+            return backlog_stories
+        if any(f"{e}.{s}" == story_id for e, s, _ in backlog_stories):
+            return backlog_stories
+        status = sprint_status.get_story_status(story_id)
+        if status is None or status.lower() != "review":
+            return backlog_stories
+        full_key = sprint_status.find_story_key(story_id)
+        epic_str, story_str = story_id.split(".")
+        entry = (int(epic_str), int(story_str), full_key or f"{epic_str}-{story_str}")
+
+        spliced = list(backlog_stories)
+        insert_at = len(spliced)
+        for idx, (e, s, _) in enumerate(spliced):
+            if e == entry[0] and s > entry[1]:
+                insert_at = idx
+                break
+        spliced.insert(insert_at, entry)
+        logger.info(
+            "Resume: story %s is mid-review in the tracker — spliced back "
+            "into the queue to finish its loop",
+            story_id,
+        )
+        return spliced
+    except Exception:
+        logger.warning(
+            "Resume splice check failed (non-fatal); queue unchanged", exc_info=True
+        )
+        return backlog_stories
 
 
 def _is_dedicated_epic_file(epic_file: Path, epic_num: int) -> bool:

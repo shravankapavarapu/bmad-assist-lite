@@ -13,6 +13,7 @@ from bmad_assist_lite.core.config import (
 )
 from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.core.verdict import parse_audit_table
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.ac_audit_trigger import (
     record_audit_trigger,
@@ -134,17 +135,24 @@ class CodeReviewHandler(BaseHandler):
             return None
 
     def _is_delta_round(self, state: State) -> bool:
-        """True when this call is a round-2+ re-review of the CURRENT story.
+        """True when this call is a middle-round re-review of the CURRENT story.
 
         ``review_iteration`` is only reset by the synthesis handler when it
         notices a story change — and the synthesis runs AFTER this phase. On the
         first review of a new story the counter therefore still holds the
         previous story's rounds; the ``review_story_id`` guard keeps that stale
         counter from turning a fresh story's round-1 into a scoped delta review.
+
+        The FINAL round (``review_iteration`` at the cap) is never a delta:
+        its verdict is the one that can promote the story to done, and a story
+        rejected for six missing criteria that fixes two must not come back
+        approved on a re-review scoped to the two. Only middle rounds — those
+        that can still spawn another fix — may be delta-scoped.
         """
         return (
             self.config.speed.delta_round2
             and state.review_iteration >= 1
+            and state.review_iteration < self.config.loop.review_max_iterations
             and state.review_story_id == state.current_story
         )
 
@@ -161,6 +169,10 @@ class CodeReviewHandler(BaseHandler):
             if self._is_delta_round(state)
             else None
         )
+        # What ACTUALLY ran, not what was intended: a delta round that fell
+        # back to the full prompt is a full pass, and the verdict record the
+        # synthesis writes must say so.
+        self._round_was_delta = delta_prompt is not None
         if delta_prompt is not None:
             # The delta prompt is already lean + diff-scoped; no lean addendum.
             prompt = delta_prompt
@@ -490,9 +502,36 @@ class CodeReviewHandler(BaseHandler):
             cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
             cache_dir.mkdir(parents=True, exist_ok=True)
 
+            # The round's shape, recorded beside the reviews so the synthesis
+            # can write the durable verdict record the three-witness "done"
+            # gate reads (core.verdict). The audit lane's verdict table is
+            # parsed HERE, where the lane's raw response is at hand.
+            audit_response = next(
+                (
+                    r.get("response", "")
+                    for r in reviews
+                    if r.get("reviewer") == self.AUDIT_LANE_LABEL
+                    and r.get("exit_code") == 0
+                ),
+                None,
+            )
             cache_data = {
                 "reviews": reviews,
                 "evidence_score": evidence_aggregate,
+                "round_meta": {
+                    "story_id": state.current_story,
+                    "review_iteration": state.review_iteration,
+                    "full_pass": not getattr(self, "_round_was_delta", False),
+                    "audit_required": (
+                        self.config.ac_audit.enabled or self.config.ac_audit.auto
+                    ),
+                    "audit_ran": audit_response is not None,
+                    "audit_passed": (
+                        parse_audit_table(audit_response)
+                        if audit_response is not None
+                        else None
+                    ),
+                },
             }
             cache_file = cache_dir / "reviews.json"
             temp_file = cache_file.with_suffix(".json.tmp")

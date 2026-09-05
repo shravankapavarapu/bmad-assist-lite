@@ -690,13 +690,19 @@ class LoopConfig(BaseModel):
         ),
     )
     review_max_iterations: int = Field(
-        default=1,
+        default=2,
         ge=0,
         description=(
             "Cap on review -> fix -> re-review iterations per story. 0 disables "
-            "the loop entirely (the kill switch). Deliberately NOT named "
-            "code_review_max_iterations: that key belongs to the BMAD job's own "
-            "cycle, and a grep for either name should land in exactly one world."
+            "the loop entirely (the kill switch). The final round is never a "
+            "delta review and is the only round whose verdict can promote a "
+            "story to done, so 2 is the smallest cap where the cheap "
+            "fix-verification delta round still exists (full review, fix, "
+            "delta re-review, fix, full promoting review). 3 is the "
+            "recommended quality setting; 1 trades the delta round away for "
+            "cost. Deliberately NOT named code_review_max_iterations: that key "
+            "belongs to the BMAD job's own cycle, and a grep for either name "
+            "should land in exactly one world."
         ),
     )
     story: list[str] = Field(

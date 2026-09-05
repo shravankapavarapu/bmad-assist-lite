@@ -259,3 +259,69 @@ class TestConfig:
         assert cfg.ac_audit.enabled is True
         assert cfg.ac_audit.auto is True
         assert resolve_ac_audit_enabled(cfg, State()).mode == "forced_on"
+
+
+class TestFinalRoundForcing:
+    """Review-owns-done: the promoting round always carries the audit."""
+
+    def test_final_round_fires_unconditionally_in_auto_mode(self):
+        """At the iteration cap the verdict can promote to done, so the audit
+        (witness three) must run — no signal gathering, no quiet skip."""
+        config = load_config(
+            {
+                "providers": {
+                    "master": {"provider": "claude", "model": "opus"},
+                    "multi": [{"provider": "claude", "model": "sonnet"}],
+                },
+                "ac_audit": {"auto": True},
+                "loop": {"review_max_iterations": 2},
+            }
+        )
+        state = State(current_epic=5, current_story="5.2")
+        state.review_iteration = 2
+        d = resolve_ac_audit_enabled(config, state)
+        assert d.fire is True
+        assert d.mode == "final_round"
+        assert d.signals is None
+
+    def test_middle_round_still_goes_through_signals(self, tmp_path):
+        config = load_config(
+            {
+                "providers": {
+                    "master": {"provider": "claude", "model": "opus"},
+                    "multi": [{"provider": "claude", "model": "sonnet"}],
+                },
+                "ac_audit": {"auto": True},
+                "loop": {"review_max_iterations": 2},
+            }
+        )
+        state = State(current_epic=5, current_story="5.2")
+        state.review_iteration = 1
+        d = resolve_ac_audit_enabled(config, state, tmp_path)
+        assert d.mode == "auto"
+
+    def test_both_off_stays_inert_even_on_the_final_round(self):
+        """The byte-identical-off guarantee survives: with the lever off the
+        gate's audit witness is vacuous, not force-fired."""
+        state = State(current_epic=5, current_story="5.2")
+        state.review_iteration = 99
+        d = resolve_ac_audit_enabled(_config(enabled=False, auto=False), state)
+        assert d.fire is False
+        assert d.mode == "off"
+
+    def test_disabled_loop_cap_zero_audits_its_only_round(self):
+        """With the review loop disabled the single round IS the promoting
+        round, so auto mode audits it."""
+        config = load_config(
+            {
+                "providers": {
+                    "master": {"provider": "claude", "model": "opus"},
+                    "multi": [{"provider": "claude", "model": "sonnet"}],
+                },
+                "ac_audit": {"auto": True},
+                "loop": {"review_max_iterations": 0},
+            }
+        )
+        d = resolve_ac_audit_enabled(config, State())
+        assert d.fire is True
+        assert d.mode == "final_round"

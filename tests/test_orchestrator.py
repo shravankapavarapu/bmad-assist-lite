@@ -742,8 +742,14 @@ class TestRunLoop:
         assert "3.1" in orch._merging_ids
         assert "3.2" in orch._blocked_ids
 
-    async def test_merging_ids_unioned_with_done_ids(self) -> None:
-        """get_ready_stories is called with done_ids | merging_ids."""
+    async def test_merging_ids_do_not_satisfy_dependency_edges(self) -> None:
+        """Only promoted (done) stories satisfy edges; merging ones do not.
+
+        Review-owns-done (2026-09-05): a merging story's verdicts are not
+        judged yet, so scheduling its dependents would build on unapproved
+        work — the epic-11 shape. Merging stories are excluded from
+        scheduling themselves instead.
+        """
         graph = _make_graph(
             ready_sequence=[["3.1"], [], []],
             all_ids=["3.1", "3.2"],
@@ -766,14 +772,16 @@ class TestRunLoop:
                 mock_complete.side_effect = complete_side_effect
                 await orch.run()
 
-        # Verify get_ready_stories was called with union of done + merging
         calls = graph.get_ready_stories.call_args_list
-        # Second call (after 3.1 completes) should include merging
+        # Second call (after 3.1 completes into merging): done stays done-only,
+        # and the merging story is held out of scheduling via the second arg.
         if len(calls) >= 2:  # noqa: PLR2004
             second_call = calls[1]
             done_arg = second_call[0][0]
+            in_flight_arg = second_call[0][1]
             assert "3.0" in done_arg  # from _done_ids
-            assert "3.1" in done_arg  # from _merging_ids (union)
+            assert "3.1" not in done_arg  # merging does NOT satisfy edges
+            assert "3.1" in in_flight_arg  # but is excluded from scheduling
 
     async def test_run_adds_to_in_flight(self) -> None:
         """Stories are added to _in_flight_ids when spawned."""
@@ -2224,3 +2232,45 @@ class TestReclaimParkedMerges:
 
         mock_unpark.assert_not_called()
         assert orch._state.stories["7.9"].status == StoryStatus.DONE
+
+
+class TestSeedGate:
+    """Resume/fresh seeding trusts the tracker only when nothing disagrees."""
+
+    def _write_tracker(self, project: Path, status: str = "done") -> None:
+        from bmad_assist_lite.core.sprint_status import (
+            SprintStatus,
+            get_sprint_status_path,
+            save_sprint_status,
+        )
+
+        ss = SprintStatus(development_status={"3-1-first": status, "3-2-second": "backlog"})
+        path = get_sprint_status_path(project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        save_sprint_status(ss, path)
+
+    async def test_does_not_seed_done_when_story_file_disagrees(
+        self, tmp_path: Path
+    ) -> None:
+        """The epic-11 cascade: tracker said done, the story file did not.
+        The row must not be seeded, so the scheduler holds its dependents."""
+        self._write_tracker(tmp_path)
+        stories = tmp_path / "_bmad-output" / "implementation-artifacts"
+        (stories / "story-3.1.md").write_text(
+            "# Story 3.1: first\n\nStatus: blocked\n", encoding="utf-8"
+        )
+
+        graph = _make_graph(all_ids=["3.1", "3.2"])
+        orch = _make_orchestrator(graph=graph, project_root=tmp_path)
+
+        assert "3.1" not in orch._done_ids
+
+    async def test_seeds_done_when_nothing_contradicts(self, tmp_path: Path) -> None:
+        """A tracker-done row with no artifacts to dispute it (pre-feature
+        rows on upgrade) seeds as done."""
+        self._write_tracker(tmp_path)
+
+        graph = _make_graph(all_ids=["3.1", "3.2"])
+        orch = _make_orchestrator(graph=graph, project_root=tmp_path)
+
+        assert "3.1" in orch._done_ids

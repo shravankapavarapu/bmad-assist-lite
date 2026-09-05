@@ -249,6 +249,12 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
         self._record_findings_artifact(findings, decision, story_id)
 
+        if decision.proceeds:
+            # The loop is exiting review: this round's verdict is the one the
+            # three-witness "done" gate will read. Record it durably — phase
+            # outputs and worker state do not survive a parallel merge.
+            self._write_verdict_record(state, decision)
+
         if decision.blocked:
             if story_id not in state.review_blocked_stories:
                 state.review_blocked_stories.append(story_id)
@@ -269,6 +275,74 @@ class CodeReviewSynthesisHandler(BaseHandler):
             write_progress(f"  Review loop: {decision.outcome.value} — {decision.reason}")
 
         return decision
+
+    def _write_verdict_record(self, state: State, decision: ReviewDecision) -> None:
+        """Persist the promoting round's verdict for the three-witness gate.
+
+        Reads the round's shape (full pass or delta, audit lane presence and
+        table verdict) from the ``round_meta`` the code_review handler saved
+        beside its cached reviews, and the aggregate verdict from the same
+        cache. A missing or story-mismatched meta is recorded conservatively
+        (``full_pass=False``): the gate then parks the story in ``review``,
+        which is recoverable, where a false ``done`` is the incident this
+        machinery exists to prevent. Never raises — a story whose record
+        cannot be written parks for the same reason.
+        """
+        story_id = state.current_story
+        if not story_id:
+            return
+        try:
+            from bmad_assist_lite.core.verdict import (
+                ReviewVerdictRecord,
+                write_review_verdict,
+            )
+
+            verdict: str | None = None
+            score: float | None = None
+            meta: dict[str, Any] = {}
+            cache_file = (
+                self.project_path / ".bmad-assist-lite" / "cache" / "reviews.json"
+            )
+            if cache_file.exists():
+                cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                evidence = cache_data.get("evidence_score") or {}
+                verdict = evidence.get("verdict")
+                score = evidence.get("total_score")
+                raw_meta = cache_data.get("round_meta") or {}
+                if raw_meta.get("story_id") == story_id:
+                    meta = raw_meta
+
+            from datetime import UTC, datetime
+
+            record = ReviewVerdictRecord(
+                story_id=story_id,
+                verdict=verdict,
+                outcome=decision.outcome.value,
+                review_iteration=state.review_iteration,
+                full_pass=bool(meta.get("full_pass", False)),
+                audit_required=bool(meta.get("audit_required", False)),
+                audit_ran=bool(meta.get("audit_ran", False)),
+                audit_passed=meta.get("audit_passed"),
+                evidence_score=score,
+                timestamp=datetime.now(UTC).replace(tzinfo=None),
+            )
+            path = write_review_verdict(record, self.project_path)
+            logger.info(
+                "Recorded review verdict for story %s: %s (full_pass=%s, "
+                "audit_passed=%s) at %s",
+                story_id,
+                verdict,
+                record.full_pass,
+                record.audit_passed,
+                path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not write review verdict record for story %s "
+                "(the story will park in 'review' rather than promote): %s",
+                story_id,
+                exc,
+            )
 
     def _structured_synthesis(
         self,

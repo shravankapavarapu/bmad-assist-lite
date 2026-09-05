@@ -130,3 +130,69 @@ class TestStoryQueueCache:
         (cache_dir / "story-queue.yaml").write_text(": [\ninvalid")
         result = load_story_queue_cache(cache_dir)
         assert result is None
+
+
+class TestSpliceResumeStory:
+    """Review-owns-done: `review` rows are parked, but a resumed run must
+    still finish the one story it was actively reviewing when it stopped."""
+
+    def _save_state(self, project, story_id):
+        from bmad_assist_lite.core.state import State, get_state_path, save_state
+
+        save_state(State(current_epic=3, current_story=story_id), get_state_path(project))
+
+    def test_mid_review_resume_position_is_spliced_back_in_order(self, tmp_path):
+        from bmad_assist_lite.cli import _splice_resume_story
+
+        self._save_state(tmp_path, "3.2")
+        ss = SprintStatus(
+            development_status={
+                "3-1-first": "backlog",
+                "3-2-current": "review",
+                "3-3-third": "backlog",
+            }
+        )
+        queue = ss.find_backlog_stories()
+        assert queue == [(3, 1, "3-1-first"), (3, 3, "3-3-third")]
+
+        spliced = _splice_resume_story(tmp_path, ss, queue)
+
+        assert spliced == [
+            (3, 1, "3-1-first"),
+            (3, 2, "3-2-current"),
+            (3, 3, "3-3-third"),
+        ]
+
+    def test_other_review_rows_stay_parked(self, tmp_path):
+        """Only the resume position is spliced; a story someone ELSE parked
+        waits for the out-of-band review pass."""
+        from bmad_assist_lite.cli import _splice_resume_story
+
+        self._save_state(tmp_path, "3.3")
+        ss = SprintStatus(
+            development_status={
+                "3-1-parked-earlier": "review",
+                "3-3-workable": "backlog",
+            }
+        )
+        queue = ss.find_backlog_stories()
+        spliced = _splice_resume_story(tmp_path, ss, queue)
+
+        assert spliced == queue  # 3.3 already queued; 3.1 stays parked
+
+    def test_non_review_current_story_is_not_spliced(self, tmp_path):
+        from bmad_assist_lite.cli import _splice_resume_story
+
+        self._save_state(tmp_path, "3.2")
+        ss = SprintStatus(
+            development_status={"3-2-current": "blocked", "3-3-third": "backlog"}
+        )
+        queue = ss.find_backlog_stories()
+        assert _splice_resume_story(tmp_path, ss, queue) == queue
+
+    def test_no_saved_state_leaves_queue_unchanged(self, tmp_path):
+        from bmad_assist_lite.cli import _splice_resume_story
+
+        ss = SprintStatus(development_status={"3-1-first": "backlog"})
+        queue = ss.find_backlog_stories()
+        assert _splice_resume_story(tmp_path, ss, queue) == queue

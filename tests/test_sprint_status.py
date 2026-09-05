@@ -557,3 +557,36 @@ class TestSprintStatusPath:
         assert path.name == "sprint-status.yaml"
         assert path.parent.name == "implementation-artifacts"
         assert path.parent.parent.name == "_bmad-output"
+
+
+class TestParkedStatuses:
+    """Review-owns-done (2026-09-05): `review` and `decision` park a story."""
+
+    def test_decision_is_a_valid_status(self):
+        from bmad_assist_lite.core.sprint_status import VALID_STATUSES
+
+        assert "decision" in VALID_STATUSES
+
+    def test_review_and_decision_are_inactive(self):
+        from bmad_assist_lite.core.sprint_status import INACTIVE_STATUSES
+
+        assert "review" in INACTIVE_STATUSES
+        assert "decision" in INACTIVE_STATUSES
+
+    def test_backlog_discovery_skips_parked_rows(self):
+        """A `review` row waits for the out-of-band review pass and a
+        `decision` row waits on the operator — neither is re-picked."""
+        ss = SprintStatus(
+            development_status={
+                "3-1-parked": "review",
+                "3-2-waiting-on-operator": "decision",
+                "3-3-workable": "backlog",
+            }
+        )
+        stories = ss.find_backlog_stories()
+        assert stories == [(3, 3, "3-3-workable")]
+
+    def test_find_story_key_is_public(self):
+        ss = SprintStatus(development_status={"3-1-parked": "review"})
+        assert ss.find_story_key("3.1") == "3-1-parked"
+        assert ss.find_story_key("9.9") is None

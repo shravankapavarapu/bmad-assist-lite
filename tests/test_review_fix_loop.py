@@ -51,9 +51,11 @@ REVIEW = ReviewConfig()
 
 
 class TestTheCap:
-    def test_the_default_cap_is_one(self) -> None:
-        """ADR-0005's 2 is superseded by operator answer D-0006 = C."""
-        assert LoopConfig().review_max_iterations == 1
+    def test_the_default_cap_is_two(self) -> None:
+        """Operator decision (2026-09-05, review-owns-done): the smallest cap
+        where the cheap delta fix-verification round still exists, since the
+        final round is never a delta. Supersedes D-0006 = C (cap 1)."""
+        assert LoopConfig().review_max_iterations == 2
 
     def test_the_cap_is_validated_non_negative(self) -> None:
         with pytest.raises(Exception):
@@ -396,7 +398,7 @@ class TestConfigSurface:
             {"providers": {"master": {"provider": "claude", "model": "opus"}}}
         )
         assert config.review == ReviewConfig()
-        assert config.loop.review_max_iterations == 1
+        assert config.loop.review_max_iterations == 2
 
     def test_decision_model_is_frozen(self) -> None:
         decision = decide_review_loop(
