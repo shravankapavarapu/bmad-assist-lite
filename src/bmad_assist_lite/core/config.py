@@ -218,6 +218,17 @@ class ProviderConfig(BaseModel):
 
     master: MasterProviderConfig
     multi: list[MultiProviderConfig] = Field(default_factory=list)
+    synthesis: MultiProviderConfig | None = Field(
+        default=None,
+        description=(
+            "Dedicated provider for code_review_synthesis — the seat holding the "
+            "review judgment (central severity, blocking threshold, reviewer "
+            "arbitration). Meant for a model at or above the reviewer lanes' "
+            "capability; a named role rather than phase routing, so the closed "
+            "routable set still bars cheaper models from review phases. Absent, "
+            "the master synthesizes, unchanged."
+        ),
+    )
     cli_paths: CliPathsConfig = Field(default_factory=CliPathsConfig)
     phase_models: PhaseModelsConfig | None = Field(
         default=None, description="Per-phase master-model overrides (routable phases only)"

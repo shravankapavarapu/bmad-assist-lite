@@ -92,6 +92,44 @@ class CodeReviewSynthesisHandler(BaseHandler):
         """Return the phase name."""
         return "code_review_synthesis"
 
+    def get_provider(self) -> Any:
+        """The dedicated synthesis provider when configured, else the master.
+
+        ``providers.synthesis`` exists to put a STRONGER model on the one seat
+        holding all the review judgment — central severity assignment, the
+        blocking threshold, and arbitration between reviewer lanes whose
+        measured consensus was 0-7%. It is a named role, not generic phase
+        routing, so the closed routable set (which exists to keep CHEAPER
+        models out of review phases) stays intact. Absent, behaviour is
+        byte-identical to before: the master synthesizes.
+        """
+        synthesis = self.config.providers.synthesis
+        if synthesis is not None:
+            from bmad_assist_lite.providers import get_provider
+
+            return get_provider(synthesis.provider)
+        return super().get_provider()
+
+    def get_model(self, *, model: str | None = None, attempt: int = 1) -> str | None:
+        """Resolve the synthesis role's model when configured, else defer.
+
+        Deliberately no attempt-based escalation back to the master: the
+        escalation path exists for routed models CHEAPER than the master,
+        and this role is configured to be stronger — falling back would
+        downgrade the retry.
+        """
+        synthesis = self.config.providers.synthesis
+        if synthesis is not None:
+            return synthesis.model
+        return super().get_model(model=model, attempt=attempt)
+
+    def invoke_provider(self, prompt: str, **kwargs: Any) -> Any:
+        """Carry the synthesis role's effort unless the call site sets one."""
+        synthesis = self.config.providers.synthesis
+        if synthesis is not None and synthesis.effort is not None and "effort" not in kwargs:
+            kwargs["effort"] = synthesis.effort
+        return super().invoke_provider(prompt, **kwargs)
+
     def build_context(self, state: State) -> dict[str, Any]:
         """Build template context for this phase."""
         return self._build_common_context(state)
@@ -242,6 +280,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
             previous_hashes=tuple(state.review_finding_hashes),
             review=self.config.review,
             story_id=story_id,
+            verdict=self._round_evidence(story_id)[0],
         )
 
         if decision.finding_hash:
@@ -276,6 +315,33 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
         return decision
 
+    def _round_evidence(
+        self, story_id: str | None
+    ) -> tuple[str | None, float | None, dict[str, Any]]:
+        """Read this round's aggregate verdict, score and meta from the cache.
+
+        The one read shared by the review-loop decision (which needs the
+        verdict to trigger a fix round on MAJOR_REWORK/REJECT) and the
+        durable verdict record. The verdict is only trusted when the cached
+        ``round_meta`` names the same story — a stale cache from another
+        story must neither trigger fixes nor testify for promotion.
+        Never raises; an unreadable cache is ``(None, None, {})``, which
+        changes nothing downstream.
+        """
+        try:
+            cache_file = self.project_path / ".bmad-assist-lite" / "cache" / "reviews.json"
+            if not cache_file.exists():
+                return None, None, {}
+            cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
+            raw_meta = cache_data.get("round_meta") or {}
+            if not story_id or raw_meta.get("story_id") != story_id:
+                return None, None, {}
+            evidence = cache_data.get("evidence_score") or {}
+            return evidence.get("verdict"), evidence.get("total_score"), raw_meta
+        except Exception as exc:
+            logger.warning("Could not read round evidence from reviews cache: %s", exc)
+            return None, None, {}
+
     def _write_verdict_record(self, state: State, decision: ReviewDecision) -> None:
         """Persist the promoting round's verdict for the three-witness gate.
 
@@ -297,20 +363,9 @@ class CodeReviewSynthesisHandler(BaseHandler):
                 write_review_verdict,
             )
 
-            verdict: str | None = None
-            score: float | None = None
-            meta: dict[str, Any] = {}
-            cache_file = (
-                self.project_path / ".bmad-assist-lite" / "cache" / "reviews.json"
-            )
-            if cache_file.exists():
-                cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
-                evidence = cache_data.get("evidence_score") or {}
-                verdict = evidence.get("verdict")
-                score = evidence.get("total_score")
-                raw_meta = cache_data.get("round_meta") or {}
-                if raw_meta.get("story_id") == story_id:
-                    meta = raw_meta
+            # Story-gated read: a verdict whose round_meta names another story
+            # is dropped along with the meta, not recorded against this one.
+            verdict, score, meta = self._round_evidence(story_id)
 
             from datetime import UTC, datetime
 

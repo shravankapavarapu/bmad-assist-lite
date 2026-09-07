@@ -35,7 +35,26 @@ from bmad_assist_lite.validation.findings import (
     followup_review_recommended,
 )
 
-__all__ = ["ReviewDecision", "ReviewOutcome", "decide_review_loop"]
+__all__ = ["REWORK_VERDICTS", "ReviewDecision", "ReviewOutcome", "decide_review_loop"]
+
+#: Aggregate verdicts that demand a fix round regardless of severity counts.
+#: The epic-11 verdict records showed the loop's central defect: a synthesis
+#: writing MAJOR_REWORK with one hand and "clean, no blocking findings" with
+#: the other, in the same record — 4 of 12 stories exited at iteration 0 with
+#: a rework verdict and parked for a human. A rework verdict is categorical:
+#: it never means "nothing to fix", so it must never resolve to CLEAN.
+REWORK_VERDICTS: frozenset[str] = frozenset({"MAJOR_REWORK", "REJECT"})
+
+
+def _is_rework(verdict: str | None) -> bool:
+    """Whether the aggregate verdict itself demands a fix round.
+
+    Accepts the display form (``MAJOR REWORK``) as well as the canonical one,
+    matching the tolerance in :mod:`bmad_assist_lite.core.verdict`.
+    """
+    if not verdict:
+        return False
+    return verdict.strip().upper().replace(" ", "_") in REWORK_VERDICTS
 
 
 class ReviewOutcome(StrEnum):
@@ -120,6 +139,7 @@ def decide_review_loop(
     previous_hashes: Sequence[str],
     review: ReviewConfig,
     story_id: str,
+    verdict: str | None = None,
 ) -> ReviewDecision:
     """Decide whether to spend another review -> fix round.
 
@@ -131,6 +151,12 @@ def decide_review_loop(
         previous_hashes: Finding-set hashes from this story's earlier passes.
         review: Severity threshold and follow-up score weights.
         story_id: The story, named in the console line.
+        verdict: The round's aggregate Evidence Score verdict, when one was
+            computed. A rework verdict (:data:`REWORK_VERDICTS`) triggers a
+            fix round even when no individual finding crosses the blocking
+            threshold, and overrides the follow-up-score economy gate — the
+            verdict is categorical where the score is a heuristic. ``None``
+            (no aggregate) changes nothing.
 
     Returns:
         A :class:`ReviewDecision`.
@@ -171,8 +197,9 @@ def decide_review_loop(
             blocking_count=len(findings.blocking(review.blocking_severity)),
         )
 
+    rework = _is_rework(verdict)
     blocking = findings.blocking(review.blocking_severity)
-    if not blocking:
+    if not blocking and not rework:
         return ReviewDecision(
             outcome=ReviewOutcome.CLEAN,
             reason=(
@@ -182,10 +209,22 @@ def decide_review_loop(
             finding_hash=finding_hash,
         )
 
+    # What is driving this round, named in every stop reason below: a rework
+    # verdict with zero blocking findings is a real, observed state (the
+    # synthesis downgraded severities past the threshold while still judging
+    # the story rework) and its stop messages must not claim findings it
+    # does not have.
+    if blocking:
+        driver = f"{len(blocking)} blocking finding(s)"
+        if rework:
+            driver += f" and a {verdict} verdict"
+    else:
+        driver = f"a {verdict} verdict (no finding crosses the blocking threshold)"
+
     if finding_hash in previous_hashes:
         detail = (
-            f"the same {len(blocking)} blocking finding(s) came back unchanged after "
-            "a fix round — the fixer is not moving the reviewer"
+            f"{driver} came back unchanged after a fix round — the fixer is not "
+            "moving the reviewer"
         )
         return ReviewDecision(
             outcome=ReviewOutcome.NON_CONVERGENT,
@@ -199,8 +238,8 @@ def decide_review_loop(
 
     if iteration >= max_iterations:
         detail = (
-            f"{len(blocking)} blocking finding(s) remain after {iteration} fix "
-            f"round(s), which is the configured cap"
+            f"{driver} remain(s) after {iteration} fix round(s), which is the "
+            f"configured cap"
         )
         return ReviewDecision(
             outcome=ReviewOutcome.CAP_EXHAUSTED,
@@ -212,7 +251,9 @@ def decide_review_loop(
             ),
         )
 
-    if not followup_review_recommended(
+    # The follow-up score is an economy heuristic over finding severities; a
+    # rework verdict is a categorical judgment and is never argued down by it.
+    if not rework and not followup_review_recommended(
         findings.findings,
         medium_weight=review.followup_medium_weight,
         low_weight=review.followup_low_weight,
@@ -230,7 +271,7 @@ def decide_review_loop(
 
     return ReviewDecision(
         outcome=ReviewOutcome.FIX,
-        reason=f"{len(blocking)} blocking finding(s) worth one fix round",
+        reason=f"{driver} worth one fix round",
         finding_hash=finding_hash,
         blocking_count=len(blocking),
     )
