@@ -72,7 +72,7 @@
       | Severity | Description | Source | Score |
       |----------|-------------|--------|-------|
       (one row per finding with emoji: 🔴 CRITICAL, 🟠 IMPORTANT, 🟡 MINOR)
-      | 🟢 CLEAN PASS | (count) categories | -X.X |
+      | 🟢 CLEAN PASS | (count) |
 
       ### Evidence Score: (calculated score)
 
