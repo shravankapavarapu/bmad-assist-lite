@@ -10,22 +10,18 @@
     - Be concise. Focus on specific, actionable findings with file:line references.
   </constraints>
 
-  <requirement>YOU ARE AN ADVERSARIAL CODE REVIEWER - Find what is wrong or missing!</requirement>
-  <requirement>Validate story file claims against actual implementation. Find 3-10 specific issues minimum.</requirement>
-  <requirement>Read EVERY file in the File List. Tasks marked complete but not done = CRITICAL. AC not implemented = HIGH.</requirement>
+  <requirement>Review adversarially: treat every claim in the story file as unproven until the code shows it. Report every real problem you find, each with its severity; do not pad the list to reach a count. An empty list is the correct result when the code holds up.</requirement>
+  <requirement>Read every file in the File List. A task marked complete but not done is CRITICAL. An acceptance criterion not implemented is HIGH.</requirement>
 
   <steps>
     <step id="1" name="Load Story and Discover Changes">
       Load the story file. Parse: Story, Acceptance Criteria, Tasks/Subtasks,
       Dev Agent Record, File List, Change Log.
 
-      Use git to discover actual changes:
-      - git status --porcelain (uncommitted changes)
-      - git diff --name-only (modified files)
-      - git diff --cached --name-only (staged files)
-
-      Cross-reference story File List vs git reality. Files in git but not in story = finding.
-      Files in story but no git changes = finding (false claims).
+      You have Read, Glob and Grep only and cannot run git. When a changed-code diff is
+      inlined below, it is the record of what changed; otherwise work from the File List.
+      A file changed but not listed in the story is a finding; a file listed but not
+      changed is a finding (a false claim).
     </step>
 
     <step id="2" name="Build Review Attack Plan">
@@ -34,7 +30,7 @@
     </step>
 
     <step id="3" name="Execute Adversarial Review">
-      VALIDATE EVERY CLAIM against git reality.
+      Check every claim against the code.
 
       AC Validation: For each AC, search implementation files for evidence.
       MISSING/PARTIAL AC = HIGH finding with specific proof.
@@ -54,12 +50,10 @@
       - Check for real assertions (not placeholders, not empty test bodies)
       - Check negative scenario coverage (not happy-path-only)
       - Lying tests: always pass regardless, mocked everything, tautological
-
-      If fewer than 3 issues found: NOT LOOKING HARD ENOUGH!
     </step>
 
     <step id="4" name="Calculate Evidence Score and Present Findings">
-      CRITICAL: You MUST output the Evidence Score in this EXACT format for parsing.
+      Output the Evidence Score in exactly this format; a parser reads it.
 
       Map each finding to severity:
       - CRITICAL (+3): Security vulnerabilities, data corruption, blocking bugs, task lies
