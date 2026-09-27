@@ -10,10 +10,14 @@ import re
 from typing import Any
 
 from bmad_assist_lite.core.git import git_diff
-from bmad_assist_lite.core.state import State
+from bmad_assist_lite.core.state import Phase, State
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.base import BaseHandler
-from bmad_assist_lite.loop.review_loop import ReviewDecision, decide_review_loop
+from bmad_assist_lite.loop.review_loop import (
+    ReviewDecision,
+    ReviewOutcome,
+    decide_review_loop,
+)
 from bmad_assist_lite.loop.review_merge import (
     high_severity_preserved,
     merge_findings,
@@ -269,10 +273,27 @@ class CodeReviewSynthesisHandler(BaseHandler):
         where the findings came from; every current caller (legacy and
         structured paths alike) parses a synthesis response first. ``None``
         findings mean a parse failure, never a clean review.
+
+        Two things happen between the decision and the verdict record, both
+        because the promoting round is whichever round the loop EXITS from,
+        not the round at the iteration cap:
+
+        * A clean DELTA round does not exit. A delta cannot promote, so
+          recording it would park every story that took a fix round. Instead
+          the loop goes back to code_review for one full promoting round (see
+          :meth:`_loop_back_for_full_review`). Checked first.
+        * A clean FULL round whose audit never ran gets the audit now, before
+          the record is written (see :meth:`_maybe_audit_on_exit`). A clean
+          round 1 exits at iteration 0, where the auto trigger's final-round
+          rule never fires.
         """
         story_id = state.current_story or "unknown"
         self._reset_review_state_for_story(state)
+        # Per decision, so a loop-back can never leak into the next story's
+        # PhaseResult on this long-lived handler instance.
+        self._loop_back_to_review = False
 
+        verdict, _score, meta = self._round_evidence(story_id)
         decision = decide_review_loop(
             findings,
             iteration=state.review_iteration,
@@ -280,7 +301,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
             previous_hashes=tuple(state.review_finding_hashes),
             review=self.config.review,
             story_id=story_id,
-            verdict=self._round_evidence(story_id)[0],
+            verdict=verdict,
         )
 
         if decision.finding_hash:
@@ -288,7 +309,10 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
         self._record_findings_artifact(findings, decision, story_id)
 
-        if decision.proceeds:
+        if self._clean_delta_exit(decision, meta):
+            self._loop_back_for_full_review(state, story_id)
+        elif decision.proceeds:
+            self._maybe_audit_on_exit(state, story_id, verdict, meta)
             # The loop is exiting review: this round's verdict is the one the
             # three-witness "done" gate will read. Record it durably — phase
             # outputs and worker state do not survive a parallel merge.
@@ -314,6 +338,221 @@ class CodeReviewSynthesisHandler(BaseHandler):
             write_progress(f"  Review loop: {decision.outcome.value} — {decision.reason}")
 
         return decision
+
+    @staticmethod
+    def _clean_delta_exit(decision: ReviewDecision, meta: dict[str, Any]) -> bool:
+        """Whether the loop is about to exit on a clean DELTA round.
+
+        ``full_pass`` must be present and literally False. An empty meta (no
+        cache, or a cache naming another story) is NOT read as a delta: there
+        is no round of this story to re-run, and looping back on missing
+        evidence could repeat forever because the forced round would find the
+        same missing evidence. That case keeps the old posture — the record is
+        written with ``full_pass=False`` and the story parks, which is
+        recoverable.
+
+        The forced round cannot trigger this again: it runs the full prompt,
+        so code_review records ``full_pass=True`` for it.
+
+        Only CLEAN loops back. The other exits that proceed (not-worth-it,
+        cap-exhausted, non-convergent, parse-failed) carry findings or doubt,
+        and a full re-review would not change what they mean.
+        """
+        return (
+            decision.outcome is ReviewOutcome.CLEAN
+            and meta.get("full_pass") is False
+        )
+
+    def _loop_back_for_full_review(self, state: State, story_id: str) -> None:
+        """Send a clean delta back through code_review as one full round.
+
+        ``review_iteration`` is left alone: this is a re-review, not a fix
+        round, and the runner only counts an iteration on entry to
+        FIX_REVIEW. Nothing is recorded — the forced round is the promoting
+        round and writes its own record. It runs at ``review_iteration >= 1``,
+        so in ``auto`` mode the trigger's escalation rule fires the audit lane
+        on it without any help from here.
+
+        The two clean rounds in a row cannot read as non-convergence: the
+        decision returns CLEAN before its hash check whenever nothing blocks.
+        """
+        state.force_full_review = True
+        self._loop_back_to_review = True
+        logger.info(
+            "Story %s: clean delta re-review cannot promote; running one full "
+            "promoting review",
+            story_id,
+        )
+        write_progress(
+            f"  Story {story_id}: a clean delta re-review cannot promote — "
+            "running one full promoting review"
+        )
+
+    def _next_phase(self, decision: ReviewDecision) -> Phase | None:
+        """The PhaseResult override: the loop-back to code_review, or the decision's own."""
+        if getattr(self, "_loop_back_to_review", False):
+            return Phase.CODE_REVIEW
+        return decision.next_phase
+
+    def _maybe_audit_on_exit(
+        self,
+        state: State,
+        story_id: str,
+        verdict: str | None,
+        meta: dict[str, Any],
+    ) -> None:
+        """Run the AC audit on a clean full round that exits without one.
+
+        The auto trigger fires unconditionally only at the iteration cap, but
+        a clean round 1 exits at iteration 0. When the risk signals stayed
+        quiet on that round, the only round there was carried no audit, and
+        the gate parks the story for it. This closes that gap on the round
+        that actually promotes.
+
+        Runs only when all of these hold, cheapest first:
+
+        * the round was a FULL pass (a delta never reaches here: it loops
+          back, and its record could not promote anyway);
+        * the audit was required for this run and did not run on the round;
+        * the verdict is approving. The gate checks the verdict before the
+          audit, so auditing a story whose verdict already parks it spends
+          real money to change nothing.
+
+        Never raises. Any failure leaves the story parked, which is
+        recoverable; a false "done" is the incident the gate exists to stop.
+        """
+        if not (
+            meta.get("full_pass") is True
+            and meta.get("audit_required")
+            and not meta.get("audit_ran")
+        ):
+            return
+        from bmad_assist_lite.core.verdict import APPROVING_VERDICTS
+
+        if verdict is None or verdict.upper() not in APPROVING_VERDICTS:
+            return
+
+        write_progress(
+            f"  Story {story_id}: the acceptance-criteria audit did not run on "
+            "this clean round — running it now, before the verdict is recorded"
+        )
+        try:
+            audit_passed, raw = self._run_audit_on_exit(state)
+        except Exception as exc:
+            logger.warning(
+                "On-exit acceptance-criteria audit for story %s failed; the "
+                "story will park in 'review': %s",
+                story_id,
+                exc,
+            )
+            write_progress(
+                f"  On-exit audit for story {story_id} FAILED to run ({exc}) — "
+                "the story will park in review"
+            )
+            return
+        if raw is None:
+            # Nonzero exit: the lane did not produce an answer. The meta keeps
+            # audit_ran=False, which is exactly what happened.
+            return
+
+        self._save_audit_forensics(story_id, raw)
+        self._update_round_meta(
+            story_id, {"audit_ran": True, "audit_passed": audit_passed}
+        )
+        label = {True: "PASS", False: "FAIL", None: "UNPARSEABLE"}[audit_passed]
+        if audit_passed is None:
+            logger.warning(
+                "On-exit audit for story %s returned no verdict table; recorded "
+                "as unparseable (dissent)",
+                story_id,
+            )
+        write_progress(f"  On-exit audit for story {story_id}: {label}")
+
+    def _run_audit_on_exit(self, state: State) -> tuple[bool | None, str | None]:
+        """Invoke the audit lane once, the way code_review invokes it.
+
+        Same prompt (the shared ``build_audit_prompt``), same seat (the MASTER
+        provider at the master's effort, not the synthesis role — the audit is
+        a gate, and which seat runs a gate must not depend on the path that
+        reached it), same read-only tools, same code_review timeout.
+
+        Returns:
+            ``(audit_passed, raw_response)``; ``(None, None)`` when the
+            provider exited nonzero. Raises on anything else going wrong; the
+            caller turns that into a warning.
+
+        """
+        from bmad_assist_lite.core.config import get_phase_timeout
+        from bmad_assist_lite.core.verdict import parse_audit_table
+        from bmad_assist_lite.loop.handlers.audit_lane import build_audit_prompt
+        from bmad_assist_lite.providers import get_provider
+        from bmad_assist_lite.providers.base import READ_ONLY_TOOLS
+
+        prompt = build_audit_prompt(
+            self.render_prompt(state, workflow_name="ac-audit"),
+            git_diff(self.project_path),
+            structured_review=self.config.speed.structured_review,
+        )
+        master = self.config.providers.master
+        provider = get_provider(master.provider)
+        raw = provider.invoke(
+            prompt,
+            model=master.model,
+            timeout=get_phase_timeout(self.config, "code_review"),
+            cwd=self.project_path,
+            allowed_tools=list(READ_ONLY_TOOLS),
+            effort=master.effort,
+            system_prompt=self.build_system_prompt(state),
+        )
+        if raw.exit_code != 0:
+            logger.warning(
+                "On-exit audit for story %s exited %s: %s",
+                state.current_story,
+                raw.exit_code,
+                (raw.stderr or "")[:500],
+            )
+            write_progress(
+                f"  On-exit audit for story {state.current_story} exited "
+                f"{raw.exit_code} — the story will park in review"
+            )
+            return None, None
+        response = provider.parse_output(raw)
+        return parse_audit_table(response), response
+
+    def _save_audit_forensics(self, story_id: str, raw: str) -> None:
+        """Keep the on-exit audit's raw answer beside the other round artifacts."""
+        try:
+            cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            (cache_dir / f"audit-on-exit-{story_id}.md").write_text(raw, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not save on-exit audit response: %s", exc)
+
+    def _update_round_meta(self, story_id: str, updates: dict[str, Any]) -> None:
+        """Patch this round's cached ``round_meta`` in place.
+
+        The verdict record reads the round's shape from this meta via
+        :meth:`_round_evidence`, so updating it here is the whole plumbing:
+        no second source of truth for "did the audit run". Written atomically
+        (temp file + ``os.replace``), as code_review writes it. The cached
+        ``reviews`` list is left as it was — the synthesis already consumed
+        it. Story-gated like the read: a meta naming another story is not
+        touched. Never raises.
+        """
+        import os
+
+        try:
+            cache_file = self.project_path / ".bmad-assist-lite" / "cache" / "reviews.json"
+            cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
+            meta = cache_data.get("round_meta")
+            if not isinstance(meta, dict) or meta.get("story_id") != story_id:
+                return
+            meta.update(updates)
+            temp_file = cache_file.with_suffix(".json.tmp")
+            temp_file.write_text(json.dumps(cache_data, indent=2))
+            os.replace(temp_file, cache_file)
+        except Exception as exc:
+            logger.warning("Could not update round_meta with the on-exit audit: %s", exc)
 
     def _round_evidence(
         self, story_id: str | None
@@ -541,7 +780,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
         }
         return PhaseResult(
             success=True,
-            next_phase=decision.next_phase,
+            next_phase=self._next_phase(decision),
             outputs=outputs,
         )
 
@@ -679,7 +918,7 @@ class CodeReviewSynthesisHandler(BaseHandler):
 
             return PhaseResult(
                 success=True,
-                next_phase=decision.next_phase,
+                next_phase=self._next_phase(decision),
                 outputs=outputs,
             )
 

@@ -185,6 +185,12 @@ class State(BaseModel):
     review_finding_hashes: list[str] = Field(default_factory=list)
     review_blocked_stories: list[str] = Field(default_factory=list)
     review_story_id: str | None = None
+    # Set by the synthesis when a delta re-review comes back clean: a delta
+    # cannot promote (core.verdict), so the loop re-enters code_review for one
+    # FULL promoting round instead of exiting on the delta. code_review clears
+    # it once that round's lanes are built. Persisted so a crash between the
+    # two phases resumes into the full round, not into another delta.
+    force_full_review: bool = False
     # SP-A0 real dev gate: one objective verdict per dev_gate run of the current
     # story, appended in order (attempt 0 first, then any SP-A1 fallback retry).
     dev_gate_records: list[dict[str, Any]] = Field(default_factory=list)

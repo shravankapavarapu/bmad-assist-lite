@@ -352,3 +352,58 @@ class TestAuditWorkflowBundle:
         assert "CONSUMING side" in text
         assert "scope boundary" in text
         assert "intent_gap" in text
+
+
+# ============================================================================
+# The audit lane is not an Evidence Score reviewer
+# ============================================================================
+
+
+class TestAuditLaneExcludedFromEvidenceScore:
+    """The auditor emits an AC verdict table, not an Evidence Score."""
+
+    REVIEWER = {
+        "reviewer": "Reviewer-1",
+        "response": "| 🟡 MINOR | nit | a.py:1 | 0.3 |\n| 🟢 CLEAN PASS | 4 |\nEvidence Score: -1.7",
+        "exit_code": 0,
+    }
+
+    def test_no_parse_attempt_and_no_warning_for_the_auditor(self, tmp_path, caplog):
+        caplog.set_level(logging.WARNING)
+        handler = CodeReviewHandler(_config(ac_audit=True), tmp_path)
+        audit = {
+            "reviewer": "AC-Auditor",
+            "response": "| AC1 | COMPLETE | a.py:1 |",
+            "exit_code": 0,
+        }
+        from bmad_assist_lite.validation import evidence_score
+
+        with patch.object(
+            evidence_score,
+            "parse_evidence_findings",
+            wraps=evidence_score.parse_evidence_findings,
+        ) as spy:
+            aggregate = handler._calculate_evidence_aggregate([self.REVIEWER, audit])
+        assert [c.args[1] for c in spy.call_args_list] == ["Reviewer-1"]
+        assert "AC-Auditor" not in caplog.text
+        assert aggregate is not None
+        assert list(aggregate["per_reviewer"]) == ["Reviewer-1"]
+
+    def test_auditor_content_does_not_move_the_score(self, tmp_path):
+        handler = CodeReviewHandler(_config(ac_audit=True), tmp_path)
+        alone = handler._calculate_evidence_aggregate([self.REVIEWER])
+        noisy_audit = {
+            "reviewer": "AC-Auditor",
+            "response": (
+                "| 🔴 CRITICAL | AC3 consumer never reads the value | b.py:9 | 3 |\n"
+                "Evidence Score: 9"
+            ),
+            "exit_code": 0,
+        }
+        with_audit = handler._calculate_evidence_aggregate([self.REVIEWER, noisy_audit])
+        assert with_audit == alone
+
+    def test_audit_only_round_has_no_aggregate(self, tmp_path):
+        handler = CodeReviewHandler(_config(ac_audit=True), tmp_path)
+        audit = {"reviewer": "AC-Auditor", "response": "Evidence Score: 1", "exit_code": 0}
+        assert handler._calculate_evidence_aggregate([audit]) is None

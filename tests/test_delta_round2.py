@@ -292,3 +292,77 @@ class TestFinalRoundNeverDelta:
             prompt = handler._review_prompt(state)
         assert "FULL PROMPT" in prompt
         assert handler._round_was_delta is False
+
+
+class TestDeltaEvidenceScoreFormat:
+    """The delta prompt carries its own Evidence Score contract.
+
+    It replaces the compiled workflow, whose Evidence Score step was the only
+    thing asking reviewers for a score; without a contract of its own every
+    delta lane parsed to None and the round had no aggregate verdict.
+    """
+
+    def _prompt(self, tmp_path: Path) -> str:
+        _seed_findings(tmp_path, STORY, "R1 finding")
+        handler = _handler(tmp_path, {"delta_round2": True})
+        with patch("bmad_assist_lite.loop.handlers.code_review.git_diff", return_value="DIFF"):
+            prompt = handler._build_delta_review_prompt(_round2_state())
+        assert prompt is not None
+        return prompt
+
+    def test_delta_prompt_carries_the_score_block(self, tmp_path):
+        prompt = self._prompt(tmp_path)
+        assert "<output-format>" in prompt
+        assert "| 🟢 CLEAN PASS | <count> |" in prompt
+        assert "Evidence Score: <total>" in prompt
+        for row in ("| 🔴 CRITICAL |", "| 🟠 IMPORTANT |", "| 🟡 MINOR |"):
+            assert row in prompt
+
+    def test_full_prompt_is_unchanged(self, tmp_path):
+        handler = _handler(tmp_path, {"delta_round2": True})
+        with patch.object(CodeReviewHandler, "render_prompt", return_value="FULL PROMPT"):
+            prompt = handler._review_prompt(State(current_epic=3, current_story=STORY))
+        assert prompt == "FULL PROMPT"
+
+    def test_a_response_in_the_block_format_parses_with_findings(self):
+        from bmad_assist_lite.validation.evidence_score import (
+            Verdict,
+            parse_evidence_findings,
+        )
+
+        response = (
+            "Checked both round-1 findings.\n\n"
+            "| Severity | Description | Source | Score |\n"
+            "|----------|-------------|--------|-------|\n"
+            "| 🟠 IMPORTANT | Round-1 null check still missing | src/a.py:12 | 1 |\n"
+            "| 🟡 MINOR | New helper lacks a docstring | src/b.py:3 | 0.3 |\n"
+            "| 🟢 CLEAN PASS | 6 |\n\n"
+            "Evidence Score: -1.7\n"
+        )
+        report = parse_evidence_findings(response, "Reviewer-1")
+        assert report is not None
+        assert len(report.findings) == 2
+        assert report.clean_passes == 6
+        assert report.total_score == -1.7
+        assert report.verdict is Verdict.PASS
+        assert report.parse_warnings == ()  # stated total agrees with the rows
+
+    def test_a_clean_response_in_the_block_format_parses(self):
+        from bmad_assist_lite.validation.evidence_score import (
+            Verdict,
+            parse_evidence_findings,
+        )
+
+        response = (
+            "All round-1 blocking findings are fixed; the fix diff is clean.\n\n"
+            "| Severity | Description | Source | Score |\n"
+            "|----------|-------------|--------|-------|\n"
+            "| 🟢 CLEAN PASS | 9 |\n\n"
+            "Evidence Score: -4.5\n"
+        )
+        report = parse_evidence_findings(response, "Reviewer-1")
+        assert report is not None
+        assert report.findings == ()
+        assert report.clean_passes == 9
+        assert report.total_score == -4.5
+        assert report.verdict is Verdict.EXCELLENT
