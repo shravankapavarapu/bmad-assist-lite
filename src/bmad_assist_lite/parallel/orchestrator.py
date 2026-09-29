@@ -59,6 +59,7 @@ from bmad_assist_lite.parallel.state import (
     load_state,
     save_state,
 )
+from bmad_assist_lite.parallel.telemetry_harvest import harvest_story_telemetry
 from bmad_assist_lite.parallel.worktree_manager import cleanup_worktree, create_worktree
 
 logger = logging.getLogger(__name__)
@@ -935,6 +936,28 @@ class Orchestrator:
 
         # Log story completion to parallel-run.log
         log_story_completed(story_id, exit_code)
+
+        # Harvest worktree-local telemetry (phase metrics, audit-trigger
+        # decisions) into the project-level files while the worktree still
+        # exists — the merge and blocked paths delete it later, and post-epic
+        # supervisors may remove leftovers this process never touches. Move
+        # semantics make a re-entered path a no-op; failure never fails the
+        # story.
+        worktree = self._story_worktrees.get(story_id)
+        if worktree is not None:
+            try:
+                await asyncio.to_thread(
+                    harvest_story_telemetry,
+                    story_id,
+                    Path(worktree),
+                    self._project_root,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[ORCHESTRATOR] Telemetry harvest failed for %s: %s",
+                    story_id,
+                    exc,
+                )
 
         if exit_code == 0:
             self._merging_ids.add(story_id)
