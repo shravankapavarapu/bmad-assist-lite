@@ -272,3 +272,103 @@ class TestStructuredSynthesisKeepsFixer:
         assert "structured_review" not in result.outputs  # legacy path took over
         # Legacy prompt embeds the raw reviewer prose, so nothing was lost.
         assert "code-review-reports" in captured["prompt"]
+
+
+class TestVerdictRecordWritten:
+    """The loop's exit writes the durable record the three-witness gate reads."""
+
+    def _seed_cache(self, project: Path, meta: dict[str, Any] | None) -> None:
+        cache = project / ".bmad-assist-lite" / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {
+            "reviews": [],
+            "evidence_score": {"total_score": 1.5, "verdict": "PASS"},
+        }
+        if meta is not None:
+            payload["round_meta"] = meta
+        (cache / "reviews.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def _state(self) -> State:
+        state = State(current_epic=3, current_story=STORY)
+        state.review_story_id = STORY
+        state.review_iteration = 1  # == the cap in CONFIG_STRUCTURED
+        return state
+
+    def test_loop_exit_records_the_promoting_round(self, tmp_path: Path) -> None:
+        from bmad_assist_lite.core.verdict import load_review_verdict
+        from bmad_assist_lite.validation.findings import FindingSet
+
+        self._seed_cache(
+            tmp_path,
+            {
+                "story_id": STORY,
+                "review_iteration": 1,
+                "full_pass": True,
+                "audit_required": True,
+                "audit_ran": True,
+                "audit_passed": True,
+            },
+        )
+        handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
+
+        decision = handler._decide_and_record(self._state(), FindingSet(findings=()))
+        assert decision.proceeds
+
+        record = load_review_verdict(tmp_path, STORY)
+        assert record is not None
+        assert record.verdict == "PASS"
+        assert record.full_pass is True
+        assert record.audit_passed is True
+        assert record.outcome == "clean"
+
+    def test_fix_round_writes_no_record(self, tmp_path: Path) -> None:
+        """Mid-loop rounds are not the promoting round; recording them would
+        let a later merge promote on a stale verdict."""
+        from bmad_assist_lite.core.verdict import load_review_verdict
+        from bmad_assist_lite.validation.findings import FindingSet
+
+        cfg = {**CONFIG_STRUCTURED, "loop": {"review_max_iterations": 2}}
+        self._seed_cache(tmp_path, None)
+        handler = CodeReviewSynthesisHandler(load_config(cfg), tmp_path)
+
+        state = State(current_epic=3, current_story=STORY)
+        state.review_story_id = STORY
+        state.review_iteration = 0
+        blocking = FindingSet(
+            findings=(
+                _finding("a.py", "broken", Severity.HIGH, "x"),
+                _finding("b.py", "also broken", Severity.HIGH, "y"),
+            )
+        )
+        decision = handler._decide_and_record(state, blocking)
+        assert not decision.proceeds  # FIX round
+
+        assert load_review_verdict(tmp_path, STORY) is None
+
+    def test_stale_meta_for_another_story_is_recorded_conservatively(
+        self, tmp_path: Path
+    ) -> None:
+        """A story-mismatched round_meta must not lend its full_pass to this
+        story: the record says full_pass=False, and the gate parks in review
+        (recoverable) rather than promoting on borrowed evidence."""
+        from bmad_assist_lite.core.verdict import load_review_verdict
+        from bmad_assist_lite.validation.findings import FindingSet
+
+        self._seed_cache(
+            tmp_path,
+            {
+                "story_id": "9.9",
+                "review_iteration": 1,
+                "full_pass": True,
+                "audit_required": True,
+                "audit_ran": True,
+                "audit_passed": True,
+            },
+        )
+        handler = CodeReviewSynthesisHandler(load_config(CONFIG_STRUCTURED), tmp_path)
+
+        handler._decide_and_record(self._state(), FindingSet(findings=()))
+
+        record = load_review_verdict(tmp_path, STORY)
+        assert record is not None
+        assert record.full_pass is False

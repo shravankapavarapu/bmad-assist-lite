@@ -51,9 +51,11 @@ REVIEW = ReviewConfig()
 
 
 class TestTheCap:
-    def test_the_default_cap_is_one(self) -> None:
-        """ADR-0005's 2 is superseded by operator answer D-0006 = C."""
-        assert LoopConfig().review_max_iterations == 1
+    def test_the_default_cap_is_two(self) -> None:
+        """Operator decision (2026-09-05, review-owns-done): the smallest cap
+        where the cheap delta fix-verification round still exists, since the
+        final round is never a delta. Supersedes D-0006 = C (cap 1)."""
+        assert LoopConfig().review_max_iterations == 2
 
     def test_the_cap_is_validated_non_negative(self) -> None:
         with pytest.raises(Exception):
@@ -396,7 +398,7 @@ class TestConfigSurface:
             {"providers": {"master": {"provider": "claude", "model": "opus"}}}
         )
         assert config.review == ReviewConfig()
-        assert config.loop.review_max_iterations == 1
+        assert config.loop.review_max_iterations == 2
 
     def test_decision_model_is_frozen(self) -> None:
         decision = decide_review_loop(
@@ -588,3 +590,120 @@ class TestLoopThroughTheHandler:
         )
         assert state.review_iteration == 0
         assert state.review_finding_hashes == [handler._parse_review_findings(same).hash]
+
+
+# ---------------------------------------------------------------------------
+# The verdict triggers the fix round (epic-11 journal pull, 2026-09-07):
+# 4 of 12 verdict records read MAJOR_REWORK beside outcome=clean at iteration
+# 0 — the synthesis downgraded every severity past the threshold while still
+# judging the story rework, so no fix round ever ran and the story parked.
+# A rework verdict is categorical: it must never resolve to CLEAN.
+# ---------------------------------------------------------------------------
+
+
+class TestVerdictTriggersFix:
+    def test_a_rework_verdict_with_zero_blocking_findings_spends_a_fix_round(self) -> None:
+        """The observed epic-11 contradiction: MAJOR_REWORK + clean."""
+        decision = decide_review_loop(
+            _set(_finding(severity=Severity.LOW)),
+            iteration=0,
+            max_iterations=2,
+            previous_hashes=(),
+            review=REVIEW,
+            story_id="11.22",
+            verdict="MAJOR_REWORK",
+        )
+        assert decision.outcome is ReviewOutcome.FIX
+        assert decision.next_phase is Phase.FIX_REVIEW
+        assert "MAJOR_REWORK" in decision.reason
+
+    def test_the_display_form_of_the_verdict_counts_too(self) -> None:
+        """core.verdict tolerates 'MAJOR REWORK'; the trigger must match."""
+        decision = decide_review_loop(
+            _set(_finding(severity=Severity.LOW)),
+            iteration=0,
+            max_iterations=2,
+            previous_hashes=(),
+            review=REVIEW,
+            story_id="11.30",
+            verdict="MAJOR REWORK",
+        )
+        assert decision.outcome is ReviewOutcome.FIX
+
+    def test_a_reject_verdict_triggers_like_rework(self) -> None:
+        decision = decide_review_loop(
+            _set(_finding(severity=Severity.LOW)),
+            iteration=0,
+            max_iterations=2,
+            previous_hashes=(),
+            review=REVIEW,
+            story_id="11.30",
+            verdict="REJECT",
+        )
+        assert decision.outcome is ReviewOutcome.FIX
+
+    def test_neg_an_approving_or_absent_verdict_changes_nothing(self) -> None:
+        for verdict in (None, "PASS", "EXCELLENT", "APPROVE"):
+            decision = decide_review_loop(
+                _set(_finding(severity=Severity.LOW)),
+                iteration=0,
+                max_iterations=2,
+                previous_hashes=(),
+                review=REVIEW,
+                story_id="1.1",
+                verdict=verdict,
+            )
+            assert decision.outcome is ReviewOutcome.CLEAN, verdict
+
+    def test_a_rework_verdict_overrides_the_followup_economy_gate(self) -> None:
+        """A set the score declines still spends the round on a categorical verdict."""
+        low_set = _set(
+            _finding("nit one", severity=Severity.MEDIUM),
+        )
+        declined = decide_review_loop(
+            low_set,
+            iteration=0,
+            max_iterations=2,
+            previous_hashes=(),
+            review=REVIEW,
+            story_id="1.1",
+        )
+        assert declined.outcome is ReviewOutcome.NOT_WORTH_IT, (
+            "precondition: without a verdict this set is declined by the score"
+        )
+        decision = decide_review_loop(
+            low_set,
+            iteration=0,
+            max_iterations=2,
+            previous_hashes=(),
+            review=REVIEW,
+            story_id="1.1",
+            verdict="MAJOR_REWORK",
+        )
+        assert decision.outcome is ReviewOutcome.FIX
+
+    def test_neg_the_verdict_does_not_bypass_the_cap(self) -> None:
+        decision = decide_review_loop(
+            _set(_finding(severity=Severity.LOW)),
+            iteration=2,
+            max_iterations=2,
+            previous_hashes=(),
+            review=REVIEW,
+            story_id="1.1",
+            verdict="MAJOR_REWORK",
+        )
+        assert decision.outcome is ReviewOutcome.CAP_EXHAUSTED
+        assert "MAJOR_REWORK" in decision.reason
+
+    def test_neg_the_verdict_does_not_bypass_the_convergence_hash(self) -> None:
+        findings = _set(_finding(severity=Severity.LOW))
+        decision = decide_review_loop(
+            findings,
+            iteration=1,
+            max_iterations=2,
+            previous_hashes=(findings.hash,),
+            review=REVIEW,
+            story_id="1.1",
+            verdict="MAJOR_REWORK",
+        )
+        assert decision.outcome is ReviewOutcome.NON_CONVERGENT

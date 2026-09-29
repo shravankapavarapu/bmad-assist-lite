@@ -1027,3 +1027,22 @@ class TestReadyStories:
             graph.get_ready_stories(set(), set(), set())
         assert "Ready stories" in caplog.text
 
+
+
+class TestReviewParkedDependencies:
+    """Review-owns-done: `done_ids` is the promotion set, nothing weaker."""
+
+    def test_review_parked_story_does_not_satisfy_edges(self) -> None:
+        """A merged-but-unpromoted story is deliberately absent from
+        done_ids, and its dependents must read as not-ready. This is the
+        contract the orchestrator relies on: the fix for the epic-11 cascade
+        is what feeds done_ids, and this pins that a parked story's id being
+        merely 'in the tracker' buys a dependent nothing."""
+        graph = DependencyGraph([_story("3.1"), _story("3.2", deps=["3.1"])])
+
+        # 3.1 merged but parked in review -> NOT in done_ids
+        assert graph.are_dependencies_satisfied("3.2", set()) is False
+        assert graph.get_ready_stories(set(), set(), {"3.1"}) == []
+
+        # Only promotion (membership in done_ids) unlocks the dependent
+        assert graph.are_dependencies_satisfied("3.2", {"3.1"}) is True

@@ -133,3 +133,44 @@ class TestTriggerSync:
         )
         # Should not raise
         trigger_sync(state, tmp_path)
+
+
+class TestDonePostconditions:
+    """Review-owns-done: the sequential sync consults the verdict gate."""
+
+    def test_gate_active_by_default_and_dissents_without_evidence(self, tmp_path):
+        """The default loop runs code_review_synthesis, so the three-witness
+        gate is on — and a story with no artifacts has not earned done."""
+        from bmad_assist_lite.core.sprint_sync import _done_postconditions
+
+        check = _done_postconditions(tmp_path)
+        assert check is not None
+        reason = check("3.1")
+        assert reason is not None
+        assert "no recorded review verdict" in reason
+
+    def test_gate_off_when_loop_has_no_review_phase(self, tmp_path):
+        """A loop that never reviews cannot produce the evidence; demanding
+        it would withhold done for an unsatisfiable reason."""
+        from bmad_assist_lite.core.config import load_config
+        from bmad_assist_lite.core.sprint_sync import _done_postconditions
+
+        load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "loop": {"story": ["create_story", "dev_story", "quality_gate"]},
+            }
+        )
+        assert _done_postconditions(tmp_path) is None
+
+    def test_sync_withholds_done_and_keeps_parked_status(self, tmp_path):
+        """A completed story whose gate dissents stays at its last status —
+        the parked `review` row the out-of-band pass picks up."""
+        state = State(current_epic=3, completed_stories=["3.1"])
+        sprint = SprintStatus(development_status={"3-1-parked": "review"})
+
+        synced = sync_state_to_sprint(
+            state, sprint, signoff_check=lambda sid: "verdict gate dissents"
+        )
+
+        assert synced.get_story_status("3.1") == "review"

@@ -138,12 +138,16 @@ class ReportData(BaseModel):
     total_stories: int
     completed_count: int
     blocked_count: int
+    # Stories that merged but the promotion gate parked in `review` — with
+    # the dissenting witness's reason. Input to the out-of-band review pass.
+    review_count: int = 0
     wall_clock_seconds: float
     sequential_estimate_seconds: float
     per_story_timings: list[StoryTiming]
     merge_stats: MergeStats
     qg_stats: QGStats
     blocked_stories: list[tuple[str, str]]
+    review_stories: list[tuple[str, str]] = []
 
 
 # ============================================================================
@@ -236,8 +240,10 @@ def build_report(
     per_story_timings: list[StoryTiming] = []
     completed_count = 0
     blocked_count = 0
+    review_count = 0
     sequential_estimate = 0.0
     blocked_stories: list[tuple[str, str]] = []
+    review_stories: list[tuple[str, str]] = []
 
     for story_id in sorted(state.stories.keys()):
         story = state.stories[story_id]
@@ -269,6 +275,10 @@ def build_report(
             blocked_count += 1
             reason = story.error or "Unknown error"
             blocked_stories.append((story_id, reason))
+        elif story.status == StoryStatus.REVIEW:
+            review_count += 1
+            reason = story.error or "promotion gate dissented"
+            review_stories.append((story_id, reason))
 
     # Merge statistics
     clean = 0
@@ -317,12 +327,14 @@ def build_report(
         total_stories=len(state.stories),
         completed_count=completed_count,
         blocked_count=blocked_count,
+        review_count=review_count,
         wall_clock_seconds=wall_clock_seconds,
         sequential_estimate_seconds=sequential_estimate,
         per_story_timings=per_story_timings,
         merge_stats=merge_stats,
         qg_stats=qg_stats,
         blocked_stories=blocked_stories,
+        review_stories=review_stories,
     )
 
 
@@ -357,6 +369,7 @@ def render_report(report: ReportData) -> str:
     lines.append(
         f"  Total stories: {report.total_stories}  |  "
         f"Completed: {report.completed_count}  |  "
+        f"In review: {report.review_count}  |  "
         f"Blocked: {report.blocked_count}"
     )
     lines.append("")
@@ -439,6 +452,14 @@ def render_report(report: ReportData) -> str:
         lines.append("")
         lines.append("  Blocked Stories:")
         for story_id, reason in report.blocked_stories:
+            lines.append(f"    - {story_id}: {reason}")
+
+    # Review-parked stories (only if present): merged, not promoted — these
+    # are what the out-of-band review pass picks up next.
+    if report.review_stories:
+        lines.append("")
+        lines.append("  Stories Parked In Review (merged, not promoted):")
+        for story_id, reason in report.review_stories:
             lines.append(f"    - {story_id}: {reason}")
 
     lines.append("")

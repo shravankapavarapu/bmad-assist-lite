@@ -28,6 +28,7 @@ VALID_STATUSES = frozenset(
         "review",
         "done",
         "blocked",
+        "decision",
         "deferred",
         "optional",
     }
@@ -35,8 +36,19 @@ VALID_STATUSES = frozenset(
 
 DONE_STATUSES = frozenset({"done", "complete", "completed"})
 
-# Statuses that should NOT appear in the work queue
-INACTIVE_STATUSES = DONE_STATUSES | frozenset({"blocked", "deferred", "optional"})
+# Statuses that should NOT appear in the work queue.
+#
+# `review` is a parked terminal state, not a schedulable one: a story lands
+# there when it merged but its verdicts fell short of promotion to done. It is
+# the input to the operator's out-of-band per-tier review pass, which is what
+# clears it — re-running the same in-loop reviewers on the same code buys
+# nothing. `decision` means the story names a product choice with no stated
+# default; it waits on the operator specifically, and only the operator (or a
+# planning skill acting for them) moves it. `blocked` keeps its historical
+# meaning: environment or tooling failure.
+INACTIVE_STATUSES = DONE_STATUSES | frozenset(
+    {"blocked", "decision", "deferred", "optional", "review"}
+)
 
 
 def _utc_now() -> datetime:
@@ -152,8 +164,10 @@ class SprintStatus(BaseModel):
         """Find all actionable stories in development_status order.
 
         Returns stories that still need work: backlog, drafted, ready-for-dev,
-        in-progress, review. Skips done/blocked/deferred/optional stories,
-        epic entries, and retrospective entries.
+        in-progress. Skips done/blocked/review/decision/deferred/optional
+        stories, epic entries, and retrospective entries. A `review` row is
+        parked for the out-of-band review pass, and a `decision` row waits on
+        the operator — neither re-enters the loop by being re-picked here.
 
         Parses key format '{epic_num}-{story_num}-{title}' (e.g., '1-2-user-auth').
 
@@ -192,6 +206,10 @@ class SprintStatus(BaseModel):
             return None
 
     # --- Key resolution ---
+
+    def find_story_key(self, story_id: str) -> str | None:
+        """Public key lookup for a story ID (dot or dash notation)."""
+        return self._find_key(story_id)
 
     def _find_key(self, story_id: str) -> str | None:
         """Find matching key for a story ID.

@@ -167,6 +167,36 @@ class TestParseEvidenceFindings:
         assert report.clean_passes == 4
         assert report.validator_id == "Validator A"
 
+    def test_parse_clean_pass_workflow_template_form(self):
+        """The row shape the code-review/validate-story templates prescribed
+        until 2026-09-25 ("N categories" plus a score cell) must parse: it is
+        what every historical full review actually emitted, and dropping it
+        silently zeroed the clean-pass credit (scores ran ~0.5 x clean-passes
+        high, feeding spurious rework verdicts — prompt bake-off finding)."""
+        content = """
+| Severity | Description | Source | Score |
+|----------|-------------|--------|-------|
+| 🔴 CRITICAL | SQL injection in login | auth.py:42 | +3 |
+| 🟢 CLEAN PASS | 5 categories | -2.5 |
+
+### Evidence Score: 0.5
+"""
+        report = parse_evidence_findings(content, "Validator A")
+        assert report is not None
+        assert report.clean_passes == 5
+        assert report.total_score == 0.5
+
+    def test_parse_clean_pass_singular_category(self):
+        content = """
+| Severity | Description | Source | Score |
+|----------|-------------|--------|-------|
+| 🟡 MINOR | Inconsistent naming | utils.py:5 | +0.3 |
+| 🟢 CLEAN PASS | 1 category | -0.5 |
+"""
+        report = parse_evidence_findings(content, "Validator A")
+        assert report is not None
+        assert report.clean_passes == 1
+
     def test_parse_bullet_format(self):
         content = """
 - **CRITICAL** (+3): Missing authentication check [auth.py:10]

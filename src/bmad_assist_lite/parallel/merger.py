@@ -14,8 +14,10 @@ integration issues between parallel stories are caught immediately.
 
 Post-merge fix (``run_post_merge_fix()``) invokes Claude CLI with the
 ``fix-quality-gate`` workflow to auto-fix integration failures on the base
-branch.  ``update_sprint_status_done()`` marks a story as done in
-``sprint-status.yaml``.
+branch.  ``update_sprint_status_landed()`` records a landed story in
+``sprint-status.yaml`` — ``done`` only when the three-witness promotion gate
+(``decide_promotion()``) agrees, ``review`` otherwise. The merger never
+writes ``done`` on its own authority.
 
 This module does **not** write to ``parallel-state.yaml``; state transitions
 are the orchestrator's responsibility.
@@ -180,6 +182,12 @@ class MergeResult(BaseModel):
     attempts: list[MergeAttempt] = []
     gate_observations: list[GateObservation] = []
     landed_commit_sha: str | None = None
+    # Three-witness promotion gate outcome for a landed story: True -> the
+    # tracker row reads `done`, False -> parked in `review` (reason says which
+    # witness dissented), None -> the story did not land so no decision was
+    # made. The orchestrator mirrors this into its own story state.
+    promoted: bool | None = None
+    promotion_reason: str = ""
 
 
 # ============================================================================
@@ -1481,18 +1489,52 @@ def run_post_merge_fix(
 # ============================================================================
 
 
-def update_sprint_status_done(
+def decide_promotion(story_id: str, project_root: Path, config: Config | None) -> tuple[bool, str]:
+    """Decide whether a landed story earns ``done``, or parks in ``review``.
+
+    The merger never writes ``done`` on its own authority — that is the
+    epic-11 incident (six stories whose last review verdict was REJECT or
+    MAJOR REWORK read ``done`` because the merge, not the review, owned the
+    flip). Promotion requires the three witnesses in
+    :func:`bmad_assist_lite.core.verdict.verdict_blocks_done` to agree,
+    reading the artifacts the merge just landed on the integration branch.
+
+    The gate applies only when the configured story loop runs
+    ``code_review_synthesis`` — the phase that records the verdict. A loop
+    with no review phase cannot produce the evidence, and withholding
+    ``done`` for a reason the run can never satisfy would park everything;
+    such configs keep the legacy merge-means-done behaviour.
+
+    Returns:
+        ``(promoted, reason)`` — reason is empty on promotion and names the
+        dissenting witness otherwise.
+
+    """
+    if config is None or "code_review_synthesis" not in config.loop.story:
+        return True, ""
+
+    from bmad_assist_lite.core.verdict import verdict_blocks_done
+
+    reason = verdict_blocks_done(project_root, story_id)
+    if reason is None:
+        return True, ""
+    return False, reason
+
+
+def update_sprint_status_landed(
     story_id: str,
     project_root: Path,
-    all_done_ids: set[str] | None = None,
+    *,
+    promoted: bool,
+    reason: str = "",
 ) -> None:
-    """Mark stories as ``done`` in ``sprint-status.yaml`` and commit.
+    """Record a landed story in ``sprint-status.yaml`` and commit.
 
-    Marks ``story_id`` plus any previously completed stories in
-    ``all_done_ids`` as done.  This prevents a merge from overwriting
-    earlier stories' statuses back to ``backlog`` — each story branch
-    carries a stale snapshot of sprint-status.yaml from when it was
-    created, and merging it can revert other stories' progress.
+    Writes ``done`` when the three-witness promotion gate agreed, ``review``
+    otherwise. Only the landed story's own row is touched: the old behaviour
+    of re-marking every previously completed story ``done`` "as a repair" is
+    exactly how a stale, falsified ``done`` survived the epic-11 incident,
+    and is gone on purpose.
 
     After writing, commits ``sprint-status.yaml`` so the working tree is
     clean before the next story merge.
@@ -1501,14 +1543,14 @@ def update_sprint_status_done(
     logged as a warning, and not re-raised.
 
     Args:
-        story_id: Story identifier being marked done (e.g. ``"4.4"``).
+        story_id: Story identifier that landed (e.g. ``"4.4"``).
         project_root: Path to the project root directory.
-        all_done_ids: Set of all story IDs that have completed so far.
-            Each is re-marked ``done`` to repair any stale status
-            introduced by the merge.
+        promoted: Whether the promotion gate agreed to ``done``.
+        reason: The dissenting witness's reason, logged when parked.
 
     """
     tag = f"[SPRINT|{story_id}]"
+    status = "done" if promoted else "review"
     try:
         from bmad_assist_lite.core.sprint_status import (
             get_sprint_status_path,
@@ -1518,20 +1560,21 @@ def update_sprint_status_done(
 
         path = get_sprint_status_path(project_root)
         sprint_status = load_sprint_status(path)
-
-        ids_to_mark = {story_id}
-        if all_done_ids:
-            ids_to_mark |= all_done_ids
-
-        for sid in ids_to_mark:
-            sprint_status.set_story_status(sid, "done")
-
+        sprint_status.set_story_status(story_id, status)
         save_sprint_status(sprint_status, path)
-        logger.info("%s Updated sprint-status: %s → done", tag, sorted(ids_to_mark))
+
+        if promoted:
+            logger.info("%s Updated sprint-status: %s → done", tag, story_id)
+        else:
+            logger.warning(
+                "%s Story landed but is NOT done — parked in 'review': %s",
+                tag,
+                reason,
+            )
 
         _run_git(["add", str(path)], cwd=project_root, check=False)
         _run_git(
-            ["commit", "-m", f"chore: mark story {story_id} done in sprint-status"],
+            ["commit", "-m", f"chore: mark story {story_id} {status} in sprint-status"],
             cwd=project_root,
             check=False,
         )
@@ -1849,7 +1892,6 @@ class MergeQueue:
         self._parallel_config = parallel_config
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._lock = asyncio.Lock()
-        self._done_ids: set[str] = set()
         self._integration_ref = integration_ref or (
             parallel_config.integration_branch
             if parallel_config is not None and parallel_config.integration_branch
@@ -2147,9 +2189,12 @@ class MergeQueue:
         is invoked up to ``post_merge_fix_retries`` times (from
         ``ParallelConfig``).
 
-        On success (QG passes, with or without fix), the story is marked
-        as ``done`` in ``sprint-status.yaml`` via
-        :func:`update_sprint_status_done`.
+        On success (QG passes, with or without fix), the landed story goes
+        through the three-witness promotion gate: ``done`` in
+        ``sprint-status.yaml`` when the gate agrees, parked in ``review``
+        otherwise (see :func:`decide_promotion` /
+        :func:`update_sprint_status_landed`). The outcome rides back on
+        ``MergeResult.promoted``.
 
         Returns:
             A ``MergeResult`` on success/failure, or ``None`` when the
@@ -2166,11 +2211,8 @@ class MergeQueue:
 
         # If the re-gate passed (or none ran), no fix needed
         if result.qg_result is None or result.qg_result.all_passed:
-            if result.qg_result is not None and result.qg_result.all_passed:
-                update_sprint_status_done(
-                    result.story_id, self._project_root, self._done_ids,
-                )
-                self._done_ids.add(result.story_id)
+            if result.landed:
+                result = self._record_landed(result)
             return result
 
         # An environment failure has no code for the fixer to fix. Routing is
@@ -2242,9 +2284,27 @@ class MergeQueue:
                 if not relanded.landed:
                     return relanded
                 result = relanded
-            update_sprint_status_done(
-                story_id, self._project_root, self._done_ids,
-            )
-            self._done_ids.add(story_id)
+            result = self._record_landed(result)
 
         return result
+
+    def _record_landed(self, result: MergeResult) -> MergeResult:
+        """Run the promotion gate for a landed story and record the outcome.
+
+        Reads the witnesses from the integration checkout (the merge has
+        already landed the story's artifacts there), writes ``done`` or
+        ``review`` to the tracker, and returns the result with the gate's
+        decision attached.
+        """
+        promoted, reason = decide_promotion(
+            result.story_id, self._project_root, self._config
+        )
+        update_sprint_status_landed(
+            result.story_id,
+            self._project_root,
+            promoted=promoted,
+            reason=reason,
+        )
+        return result.model_copy(
+            update={"promoted": promoted, "promotion_reason": reason}
+        )

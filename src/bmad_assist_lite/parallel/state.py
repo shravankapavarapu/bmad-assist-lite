@@ -58,13 +58,18 @@ class StoryStatus(Enum):
     """Lifecycle status for a parallel story.
 
     Stories progress through: backlog -> in_flight -> merging -> done
-    (or blocked at any point after in_flight).
+    (or blocked at any point after in_flight). A story whose merge landed
+    but whose verdicts fell short of the three-witness promotion gate parks
+    as ``review``: its code is on the integration branch, it is not
+    re-scheduled, and it does not satisfy anyone's dependency edge — the
+    operator's out-of-band review pass is what moves it on.
     """
 
     BACKLOG = "backlog"
     IN_FLIGHT = "in_flight"
     MERGING = "merging"
     DONE = "done"
+    REVIEW = "review"
     BLOCKED = "blocked"
 
 

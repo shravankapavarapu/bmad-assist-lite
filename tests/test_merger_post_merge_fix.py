@@ -10,8 +10,9 @@ from bmad_assist_lite.parallel.merger import (
     MergeQueue,
     MergeResult,
     PostMergeQGResult,
+    decide_promotion,
     run_post_merge_fix,
-    update_sprint_status_done,
+    update_sprint_status_landed,
 )
 
 # ============================================================================
@@ -360,7 +361,7 @@ class TestRunPostMergeFix:
 class TestProcessMergeWithFix:
     """Test MergeQueue.process_merge_with_fix() orchestration method."""
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
@@ -390,7 +391,7 @@ class TestProcessMergeWithFix:
         mock_sprint.assert_called_once()
         assert mock_sprint.call_args[0][:2] == ("3.1", Path("/repo"))
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
@@ -424,7 +425,7 @@ class TestProcessMergeWithFix:
         mock_sprint.assert_called_once()
         assert mock_sprint.call_args[0][:2] == ("3.1", Path("/repo"))
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
@@ -456,7 +457,7 @@ class TestProcessMergeWithFix:
         assert mock_fix.call_count == 3
         mock_sprint.assert_not_called()
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
@@ -488,7 +489,7 @@ class TestProcessMergeWithFix:
         assert result.qg_result.all_passed is False  # QG still failing
         mock_sprint.assert_not_called()
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
@@ -520,7 +521,7 @@ class TestProcessMergeWithFix:
         mock_fix.assert_not_called()
         mock_qg.assert_not_called()
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
@@ -551,7 +552,7 @@ class TestProcessMergeWithFix:
         mock_fix.assert_not_called()
         mock_sprint.assert_not_called()
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
     async def test_returns_none_when_queue_empty(
         self,
@@ -565,7 +566,7 @@ class TestProcessMergeWithFix:
 
         assert result is None
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
@@ -590,7 +591,7 @@ class TestProcessMergeWithFix:
         assert result is not None
         assert mock_fix.call_count == 1  # Default of 1 retry
 
-    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_done")
+    @patch("bmad_assist_lite.parallel.merger.update_sprint_status_landed")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_fix")
     @patch("bmad_assist_lite.parallel.merger.run_post_merge_qg")
     @patch("bmad_assist_lite.parallel.merger.merge_story")
@@ -626,12 +627,12 @@ class TestProcessMergeWithFix:
 
 
 # ============================================================================
-# update_sprint_status_done() Tests (Task 5.13-5.15)
+# update_sprint_status_landed() Tests (Task 5.13-5.15)
 # ============================================================================
 
 
-class TestUpdateSprintStatusDone:
-    """Test update_sprint_status_done() helper function."""
+class TestUpdateSprintStatusLanded:
+    """Test update_sprint_status_landed() helper function."""
 
     @patch("bmad_assist_lite.core.sprint_status.save_sprint_status")
     @patch("bmad_assist_lite.core.sprint_status.load_sprint_status")
@@ -649,13 +650,35 @@ class TestUpdateSprintStatusDone:
         sprint = SprintStatus(development_status={"story-3-1": "in-progress"})
         mock_load.return_value = sprint
 
-        update_sprint_status_done("3.1", Path("/repo"))
+        update_sprint_status_landed("3.1", Path("/repo"), promoted=True)
 
         mock_path.assert_called_once_with(Path("/repo"))
         mock_load.assert_called_once_with(Path("/repo/_bmad-output/sprint-status.yaml"))
         mock_save.assert_called_once()
         # Verify the status was set to "done"
         assert sprint.get_story_status("3.1") == "done"
+
+    @patch("bmad_assist_lite.core.sprint_status.save_sprint_status")
+    @patch("bmad_assist_lite.core.sprint_status.load_sprint_status")
+    @patch("bmad_assist_lite.core.sprint_status.get_sprint_status_path")
+    def test_unpromoted_story_parks_in_review_never_done(
+        self,
+        mock_path: MagicMock,
+        mock_load: MagicMock,
+        mock_save: MagicMock,
+    ) -> None:
+        """A landed story the promotion gate refused is written `review`."""
+        from bmad_assist_lite.core.sprint_status import SprintStatus
+
+        mock_path.return_value = Path("/repo/_bmad-output/sprint-status.yaml")
+        sprint = SprintStatus(development_status={"story-3-1": "in-progress"})
+        mock_load.return_value = sprint
+
+        update_sprint_status_landed(
+            "3.1", Path("/repo"), promoted=False, reason="verdict is REJECT"
+        )
+
+        assert sprint.get_story_status("3.1") == "review"
 
     @patch("bmad_assist_lite.core.sprint_status.load_sprint_status")
     @patch("bmad_assist_lite.core.sprint_status.get_sprint_status_path")
@@ -671,7 +694,7 @@ class TestUpdateSprintStatusDone:
         mock_load.return_value = SprintStatus()  # Empty status
 
         # Should not raise
-        update_sprint_status_done("3.1", Path("/repo"))
+        update_sprint_status_landed("3.1", Path("/repo"), promoted=True)
 
     @patch("bmad_assist_lite.core.sprint_status.get_sprint_status_path")
     def test_catches_and_logs_errors_without_raising(
@@ -684,7 +707,7 @@ class TestUpdateSprintStatusDone:
 
         with caplog.at_level("WARNING"):
             # Should NOT raise
-            update_sprint_status_done("3.1", Path("/repo"))
+            update_sprint_status_landed("3.1", Path("/repo"), promoted=True)
 
         assert any("[SPRINT|3.1]" in r.message for r in caplog.records)
         assert any("non-fatal" in r.message for r in caplog.records)
@@ -706,7 +729,7 @@ class TestUpdateSprintStatusDone:
         mock_load.return_value = SprintStatus()
 
         with caplog.at_level("INFO"):
-            update_sprint_status_done("3.1", Path("/repo"))
+            update_sprint_status_landed("3.1", Path("/repo"), promoted=True)
 
         assert any("[SPRINT|3.1]" in r.message for r in caplog.records)
 
@@ -728,6 +751,113 @@ class TestUpdateSprintStatusDone:
         mock_save.side_effect = OSError("write failed")
 
         with caplog.at_level("WARNING"):
-            update_sprint_status_done("3.1", Path("/repo"))
+            update_sprint_status_landed("3.1", Path("/repo"), promoted=True)
 
         assert any("non-fatal" in r.message for r in caplog.records)
+
+
+# ============================================================================
+# decide_promotion() — the merger never writes done on its own authority
+# ============================================================================
+
+
+class TestDecidePromotion:
+    """Three-witness promotion gate at the merge boundary."""
+
+    def _config_with_review(self):
+        from bmad_assist_lite.core.config import load_config
+
+        return load_config(
+            {"providers": {"master": {"provider": "claude", "model": "opus"}}}
+        )
+
+    def _config_without_review(self):
+        from bmad_assist_lite.core.config import load_config
+
+        return load_config(
+            {
+                "providers": {"master": {"provider": "claude", "model": "opus"}},
+                "loop": {"story": ["create_story", "dev_story", "quality_gate"]},
+            }
+        )
+
+    def test_no_config_keeps_legacy_behaviour(self, tmp_path: Path) -> None:
+        promoted, reason = decide_promotion("3.1", tmp_path, None)
+        assert promoted is True
+        assert reason == ""
+
+    def test_loop_without_review_phase_keeps_legacy_behaviour(
+        self, tmp_path: Path
+    ) -> None:
+        promoted, _ = decide_promotion("3.1", tmp_path, self._config_without_review())
+        assert promoted is True
+
+    def test_gate_dissents_without_evidence(self, tmp_path: Path) -> None:
+        """The reviewing loop is configured but nothing testifies: parked."""
+        promoted, reason = decide_promotion("3.1", tmp_path, self._config_with_review())
+        assert promoted is False
+        assert "no recorded review verdict" in reason
+
+    def test_gate_promotes_when_all_witnesses_agree(self, tmp_path: Path) -> None:
+        from datetime import UTC, datetime
+
+        from bmad_assist_lite.core.verdict import (
+            ReviewVerdictRecord,
+            write_review_verdict,
+        )
+
+        write_review_verdict(
+            ReviewVerdictRecord(
+                story_id="3.1",
+                verdict="PASS",
+                outcome="clean",
+                review_iteration=2,
+                full_pass=True,
+                audit_required=True,
+                audit_ran=True,
+                audit_passed=True,
+                timestamp=datetime.now(UTC).replace(tzinfo=None),
+            ),
+            tmp_path,
+        )
+        stories = tmp_path / "_bmad-output" / "implementation-artifacts"
+        stories.mkdir(parents=True, exist_ok=True)
+        (stories / "story-3.1.md").write_text(
+            "# Story 3.1: t\n\nStatus: done\n", encoding="utf-8"
+        )
+
+        promoted, reason = decide_promotion("3.1", tmp_path, self._config_with_review())
+        assert promoted is True
+        assert reason == ""
+
+
+class TestNoReMarkOfPriorStories:
+    """The `all_done_ids` repair re-mark is gone — it is how a stale,
+    falsified `done` survived the epic-11 incident."""
+
+    @patch("bmad_assist_lite.core.sprint_status.save_sprint_status")
+    @patch("bmad_assist_lite.core.sprint_status.load_sprint_status")
+    @patch("bmad_assist_lite.core.sprint_status.get_sprint_status_path")
+    def test_only_the_landed_story_row_is_touched(
+        self,
+        mock_path: MagicMock,
+        mock_load: MagicMock,
+        mock_save: MagicMock,
+    ) -> None:
+        from bmad_assist_lite.core.sprint_status import SprintStatus
+
+        mock_path.return_value = Path("/repo/ss.yaml")
+        sprint = SprintStatus(
+            development_status={
+                "story-3-1": "in-progress",
+                "story-3-0": "review",  # parked earlier; must stay parked
+                "story-2-9": "in-progress",  # stale snapshot survivor
+            }
+        )
+        mock_load.return_value = sprint
+
+        update_sprint_status_landed("3.1", Path("/repo"), promoted=True)
+
+        assert sprint.get_story_status("3.1") == "done"
+        assert sprint.get_story_status("3.0") == "review"
+        assert sprint.get_story_status("2.9") == "in-progress"

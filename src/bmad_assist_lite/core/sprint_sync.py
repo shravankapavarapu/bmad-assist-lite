@@ -113,31 +113,62 @@ def trigger_sync(state: State, project_path: Path) -> None:
     try:
         ss_path = get_sprint_status_path(project_path)
         sprint_status = load_sprint_status(ss_path)
-        sync_state_to_sprint(state, sprint_status, signoff_check=_signoff_check(project_path))
+        sync_state_to_sprint(
+            state, sprint_status, signoff_check=_done_postconditions(project_path)
+        )
         save_sprint_status(sprint_status, ss_path)
     except Exception as e:
         logger.warning("Sprint status sync failed (non-fatal): %s", e)
 
 
-def _signoff_check(project_path: Path) -> Callable[[str], str | None] | None:
-    """Build the sign-off postcondition, or None when it is switched off.
+def _done_postconditions(project_path: Path) -> Callable[[str], str | None] | None:
+    """Compose every active postcondition consulted before a ``done`` flip.
+
+    Two guards can be active, and each returns a reason string or None:
+
+    * The three-witness verdict gate (``core.verdict.verdict_blocks_done``) —
+      on whenever the configured story loop runs ``code_review_synthesis``,
+      because that is the phase that records the verdict the gate reads. A
+      loop without a review phase cannot produce the evidence, so demanding
+      it would withhold ``done`` for a reason the run could never satisfy.
+    * The opt-in sign-off gate (``signoff.required``), unchanged.
 
     Resolving the config here rather than in the pure sync function keeps that
     function testable without a config singleton, and keeps the default path
-    (``signoff.required: false``) free of any git work at all.
+    free of any git work at all.
     """
+    checks: list[Callable[[str], str | None]] = []
+
+    verdict_gated = True
+    signoff_required = False
     try:
         from bmad_assist_lite.core.config import get_config
 
-        if not get_config().signoff.required:
-            return None
+        config = get_config()
+        verdict_gated = "code_review_synthesis" in config.loop.story
+        signoff_required = config.signoff.required
     except Exception:
-        logger.debug("Config unavailable; sign-off postcondition not applied")
+        logger.debug("Config unavailable; done postconditions not applied")
         return None
 
-    from bmad_assist_lite.core.signoff import signoff_blocks_done
+    if verdict_gated:
+        from bmad_assist_lite.core.verdict import verdict_blocks_done
+
+        checks.append(lambda sid: verdict_blocks_done(project_path, sid))
+
+    if signoff_required:
+        from bmad_assist_lite.core.signoff import signoff_blocks_done
+
+        checks.append(lambda sid: signoff_blocks_done(project_path, sid))
+
+    if not checks:
+        return None
 
     def check(story_id: str) -> str | None:
-        return signoff_blocks_done(project_path, story_id)
+        for postcondition in checks:
+            reason = postcondition(story_id)
+            if reason is not None:
+                return reason
+        return None
 
     return check

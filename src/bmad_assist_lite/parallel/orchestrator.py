@@ -26,6 +26,7 @@ from bmad_assist_lite.parallel.dependency_graph import DependencyGraph
 
 if TYPE_CHECKING:
     from bmad_assist_lite.core.config import Config
+    from bmad_assist_lite.parallel.merger import MergeResult
 from bmad_assist_lite.parallel.exceptions import ParallelError
 from bmad_assist_lite.parallel.logging import (
     log_dependency_unlocked,
@@ -235,11 +236,14 @@ class Orchestrator:
             integration_ref=config.integration_branch or base_branch,
         )
 
-        # Status tracking sets
+        # Status tracking sets. `_review_ids` holds stories that merged but
+        # failed the three-witness promotion gate: parked, not schedulable,
+        # and never a satisfied dependency edge — dependents wait.
         self._done_ids: set[str] = set()
         self._in_flight_ids: set[str] = set()
         self._blocked_ids: set[str] = set()
         self._merging_ids: set[str] = set()
+        self._review_ids: set[str] = set()
 
         # Report data accumulation (Story 6.3)
         self._merge_outcomes: list[MergeOutcome] = []
@@ -287,6 +291,8 @@ class Orchestrator:
                     self._blocked_ids.add(story_id)
                 elif story_state.status == StoryStatus.MERGING:
                     self._merging_ids.add(story_id)
+                elif story_state.status == StoryStatus.REVIEW:
+                    self._review_ids.add(story_id)
                 if story_state.worktree_path is not None:
                     self._story_worktrees[story_id] = story_state.worktree_path
             # Parked merges are terminal for the run that parked them, not for
@@ -299,11 +305,12 @@ class Orchestrator:
             save_state(self._state, self._state_path)
             logger.info(
                 "[ORCHESTRATOR] Resumed from persisted state: "
-                "done=%d, in_flight=%d, blocked=%d, merging=%d",
+                "done=%d, in_flight=%d, blocked=%d, merging=%d, review=%d",
                 len(self._done_ids),
                 len(self._in_flight_ids),
                 len(self._blocked_ids),
                 len(self._merging_ids),
+                len(self._review_ids),
             )
         else:
             self._state = create_initial_state(
@@ -397,11 +404,49 @@ class Orchestrator:
             )
             return
 
+        # Git confirmed these landed, but landing is not promotion: the
+        # three-witness gate decides done vs review, exactly as it does on
+        # the live merge path. The sets are updated here too — they were
+        # populated from pre-reconcile statuses, and a landed story must
+        # either satisfy dependency edges (done) or park them (review).
+        from bmad_assist_lite.parallel.merger import (
+            decide_promotion,
+            update_sprint_status_landed,
+        )
+
         for story_id in outcome.landed:
-            if self._state.stories[story_id].status != StoryStatus.DONE:
+            if self._state.stories[story_id].status == StoryStatus.DONE:
+                # Already promoted (or legitimately seeded) — confirming a
+                # land must never demote it.
+                self._merging_ids.discard(story_id)
+                self._done_ids.add(story_id)
+                continue
+            promoted, reason = decide_promotion(
+                story_id, self._project_root, self._app_config
+            )
+            target = StoryStatus.DONE if promoted else StoryStatus.REVIEW
+            if self._state.stories[story_id].status != target:
                 self._state = self._state.with_story_status(
-                    story_id, StoryStatus.DONE, completed_at=_utc_now(),
+                    story_id,
+                    target,
+                    error=None if promoted else (reason or None),
+                    completed_at=_utc_now(),
                 )
+                # The crash may have preceded the tracker write; repeat it —
+                # the write is idempotent.
+                update_sprint_status_landed(
+                    story_id,
+                    self._project_root,
+                    promoted=promoted,
+                    reason=reason,
+                )
+            self._merging_ids.discard(story_id)
+            if promoted:
+                self._done_ids.add(story_id)
+                self._review_ids.discard(story_id)
+            else:
+                self._review_ids.add(story_id)
+                self._done_ids.discard(story_id)
         for story_id in outcome.requeue:
             self._state = self._state.with_story_status(story_id, StoryStatus.MERGING)
             self._pending_remerge.append(story_id)
@@ -416,15 +461,21 @@ class Orchestrator:
         """Reconcile parallel state with sprint-status.yaml.
 
         Marks stories as DONE when sprint-status says they're already
-        complete — regardless of their current parallel state (BACKLOG,
-        BLOCKED, etc.).  Called on both fresh and resume paths so the
-        orchestrator never schedules already-completed work.
-        Failures are non-fatal — logged and silently ignored.
+        complete AND nothing on disk contradicts the claim. The tracker
+        alone is not trusted: the epic-11 incident began with a resume that
+        seeded a story DONE from a tracker row whose story file said
+        otherwise, and five dependents then built on work that did not
+        exist. :func:`~bmad_assist_lite.core.verdict.seed_blocks_done` is
+        the contradiction check — a story it refuses stays in its current
+        state, so the scheduler holds its dependents instead of building on
+        it. Called on both fresh and resume paths. Failures are non-fatal —
+        logged and silently ignored.
         """
         from bmad_assist_lite.core.sprint_status import (
             get_sprint_status_path,
             load_sprint_status,
         )
+        from bmad_assist_lite.core.verdict import seed_blocks_done
 
         ss_path = get_sprint_status_path(self._project_root)
         if not ss_path.exists():
@@ -443,6 +494,15 @@ class Orchestrator:
             if story_id in self._done_ids:
                 continue
             if sprint_status.is_story_done(story_id):
+                reason = seed_blocks_done(self._project_root, story_id)
+                if reason is not None:
+                    logger.warning(
+                        "[ORCHESTRATOR] NOT seeding story %s as done despite "
+                        "the tracker: %s — its dependents will wait",
+                        story_id,
+                        reason,
+                    )
+                    continue
                 self._state = self._state.with_story_status(
                     story_id,
                     StoryStatus.DONE,
@@ -451,6 +511,7 @@ class Orchestrator:
                 self._done_ids.add(story_id)
                 self._blocked_ids.discard(story_id)
                 self._in_flight_ids.discard(story_id)
+                self._review_ids.discard(story_id)
 
     # ========================================================================
     # Bootstrap config detection (Story 9.2 — Task 1)
@@ -939,7 +1000,7 @@ class Orchestrator:
             completed_story_id: The story that just completed.
 
         """
-        completed_set = self._done_ids | self._merging_ids
+        completed_set = self._done_ids
         try:
             dependents = self._dependency_graph.dependents_of(completed_story_id)
         except (KeyError, AttributeError):
@@ -965,7 +1026,9 @@ class Orchestrator:
         Calls ``process_merge_with_fix()`` in a loop until it returns ``None``
         (empty queue). For each result, transitions the story state:
 
-        - **merge + QG success**: ``merging`` -> ``done``
+        - **merge + QG success**: ``merging`` -> ``done`` when the
+          three-witness promotion gate agreed, ``review`` (parked, dependents
+          wait) when it dissented
         - **merge conflict**: ``merging`` -> ``blocked`` (worktree cleaned)
         - **merge success + QG failure**: ``merging`` -> ``blocked``
 
@@ -973,7 +1036,7 @@ class Orchestrator:
         ``asyncio.to_thread()`` wrapping internally for sync git/QG
         operations — the orchestrator does NOT add its own thread-bridging.
         Sprint-status update (FR26) is handled inside ``process_merge_with_fix()``
-        via ``update_sprint_status_done()`` — NOT duplicated here.
+        via ``update_sprint_status_landed()`` — NOT duplicated here.
         """
         while True:
             merge_start = _utc_now()
@@ -1013,27 +1076,11 @@ class Orchestrator:
             )
 
             if result.success and result.qg_result is not None and result.qg_result.all_passed:
-                # Merge + QG success -> done
+                # Merge + QG success -> the promotion gate decides done vs review
                 log_qg_result(
                     story_id, True, list(result.qg_result.gate_results),
                 )
-                self._done_ids.add(story_id)
-                self._merging_ids.discard(story_id)
-                self._state = self._state.with_story_status(
-                    story_id,
-                    StoryStatus.DONE,
-                    completed_at=_utc_now(),
-                    landed_commit_sha=result.landed_commit_sha,
-                    merge_attempts=list(result.attempts),
-                    gate_observations=list(result.gate_observations),
-                )
-                save_state(self._state, self._state_path)
-                # Clean up worktree mapping (worktree already removed by merge_story)
-                self._story_worktrees.pop(story_id, None)
-                self._log_unlocked_dependents(story_id)
-                await self._output_mux.write_orchestrator(
-                    f"Story {story_id} merged and QG passed, status -> done"
-                )
+                await self._transition_landed(story_id, result, "merged and QG passed")
 
             elif result.success and result.qg_result is not None and not result.qg_result.all_passed:
                 # Merge success but QG failure after fix retries -> blocked
@@ -1069,19 +1116,10 @@ class Orchestrator:
                 )
 
             elif result.success and result.qg_result is None:
-                # Merge success, no QG was run (no commands found) -> done
-                self._done_ids.add(story_id)
-                self._merging_ids.discard(story_id)
-                self._state = self._state.with_story_status(
-                    story_id,
-                    StoryStatus.DONE,
-                    completed_at=_utc_now(),
-                )
-                save_state(self._state, self._state_path)
-                self._story_worktrees.pop(story_id, None)
-                self._log_unlocked_dependents(story_id)
-                await self._output_mux.write_orchestrator(
-                    f"Story {story_id} merged (no QG configured), status -> done"
+                # Merge success, no QG was run (no commands found) -> the
+                # promotion gate still decides done vs review
+                await self._transition_landed(
+                    story_id, result, "merged (no QG configured)"
                 )
 
             else:
@@ -1123,6 +1161,57 @@ class Orchestrator:
                     f"Story {story_id} merge failed ({error_msg}), status -> blocked"
                 )
 
+    async def _transition_landed(
+        self, story_id: str, result: "MergeResult", note: str
+    ) -> None:
+        """Move a landed story to DONE or REVIEW per the promotion gate.
+
+        The merger already ran the gate and wrote the tracker row
+        (``MergeResult.promoted``); this mirrors that verdict into the
+        orchestrator's state and sets. A parked story keeps its dependents
+        waiting: it never enters ``_done_ids``, and ``_review_ids`` is
+        excluded from scheduling. ``promoted`` is None only for results that
+        did not land, which this method is never given; an unset value is
+        read as promoted to preserve legacy behaviour for configs without a
+        review phase.
+        """
+        promoted = result.promoted is not False
+        self._merging_ids.discard(story_id)
+        if promoted:
+            self._done_ids.add(story_id)
+            self._state = self._state.with_story_status(
+                story_id,
+                StoryStatus.DONE,
+                completed_at=_utc_now(),
+                landed_commit_sha=result.landed_commit_sha,
+                merge_attempts=list(result.attempts),
+                gate_observations=list(result.gate_observations),
+            )
+            save_state(self._state, self._state_path)
+            self._story_worktrees.pop(story_id, None)
+            self._log_unlocked_dependents(story_id)
+            await self._output_mux.write_orchestrator(
+                f"Story {story_id} {note}, status -> done"
+            )
+        else:
+            self._review_ids.add(story_id)
+            self._state = self._state.with_story_status(
+                story_id,
+                StoryStatus.REVIEW,
+                error=result.promotion_reason or None,
+                completed_at=_utc_now(),
+                landed_commit_sha=result.landed_commit_sha,
+                merge_attempts=list(result.attempts),
+                gate_observations=list(result.gate_observations),
+            )
+            save_state(self._state, self._state_path)
+            self._story_worktrees.pop(story_id, None)
+            await self._output_mux.write_orchestrator(
+                f"Story {story_id} {note} but NOT promoted — parked in review: "
+                f"{result.promotion_reason or 'promotion gate dissented'} "
+                f"(its dependents will wait)"
+            )
+
     # ========================================================================
     # Exit summary (Task 5)
     # ========================================================================
@@ -1139,7 +1228,13 @@ class Orchestrator:
         """
         all_ids = set(self._dependency_graph.all_story_ids)
         completed = self._done_ids | self._merging_ids
-        remaining = all_ids - completed - self._blocked_ids - self._in_flight_ids
+        remaining = (
+            all_ids
+            - completed
+            - self._blocked_ids
+            - self._in_flight_ids
+            - self._review_ids
+        )
 
         await self._output_mux.write_orchestrator(
             f"Exit summary: "
@@ -1147,8 +1242,20 @@ class Orchestrator:
             f"Merging: {len(self._merging_ids)}, "
             f"In-flight: {len(self._in_flight_ids)}, "
             f"Blocked: {len(self._blocked_ids)}, "
+            f"In review: {len(self._review_ids)}, "
             f"Remaining: {len(remaining)}"
         )
+
+        # List review-parked stories with the dissenting witness's reason —
+        # these are the input to the operator's out-of-band review pass.
+        if self._review_ids:
+            for story_id in sorted(self._review_ids):
+                story_state = self._state.stories.get(story_id)
+                reason = story_state.error if story_state is not None else None
+                await self._output_mux.write_orchestrator(
+                    f"  In review: {story_id} — merged but not promoted"
+                    + (f": {reason}" if reason else "")
+                )
 
         # List blocked stories with their error details and unmet dependencies
         if self._blocked_ids:
@@ -1229,7 +1336,9 @@ class Orchestrator:
         Returns:
             ``True`` only when ALL stories in the parallel state have
             ``status == StoryStatus.DONE``. Returns ``False`` if any story
-            is ``BLOCKED``, ``IN_FLIGHT``, ``MERGING``, or ``BACKLOG``.
+            is ``BLOCKED``, ``IN_FLIGHT``, ``MERGING``, ``REVIEW``, or
+            ``BACKLOG`` — a review-parked story means the epic is not done
+            and its teardown must wait for the out-of-band review pass.
 
         """
         if not self._state.stories:
@@ -1396,7 +1505,7 @@ class Orchestrator:
     def _update_epic_sprint_status(self, status: str) -> None:
         """Update the epic status in ``sprint-status.yaml`` and commit.
 
-        Follows the non-fatal pattern from ``update_sprint_status_done()``
+        Follows the non-fatal pattern from ``update_sprint_status_landed()``
         in ``merger.py``: load → mutate → save → git commit, wrap in
         try/except, log warning on failure, never propagate exceptions.
 
@@ -1551,11 +1660,13 @@ class Orchestrator:
                 and not self._canary_passed
                 and self._has_bootstrap_config()
             ):
-                # Pick the first ready story as canary
+                # Pick the first ready story as canary. Only promoted (done)
+                # stories satisfy dependency edges — merging and
+                # review-parked stories do not.
                 canary_ready = self._dependency_graph.get_ready_stories(
-                    self._done_ids | self._merging_ids,
-                    self._in_flight_ids,
-                    self._blocked_ids,
+                    self._done_ids,
+                    self._in_flight_ids | self._merging_ids,
+                    self._blocked_ids | self._review_ids,
                 )
                 if canary_ready:
                     canary_id = canary_ready[0]
@@ -1683,12 +1794,16 @@ class Orchestrator:
                 if self._draining and not self._running_tasks:
                     break
 
-                # Re-evaluate ready stories: union _merging_ids with _done_ids
-                # so dependents of successfully-completed stories can proceed
+                # Re-evaluate ready stories. Only promoted (done) stories
+                # satisfy dependency edges: a merging story's verdicts are
+                # not judged yet, and a review-parked story's fell short —
+                # scheduling dependents on either is how epic-11's dependents
+                # got built on unapproved work. Merging and review-parked
+                # stories are excluded from scheduling themselves, too.
                 ready = self._dependency_graph.get_ready_stories(
-                    self._done_ids | self._merging_ids,
-                    self._in_flight_ids,
-                    self._blocked_ids,
+                    self._done_ids,
+                    self._in_flight_ids | self._merging_ids,
+                    self._blocked_ids | self._review_ids,
                 )
 
                 # Spawn ready stories only if NOT draining (Task 3.2)
@@ -1710,20 +1825,28 @@ class Orchestrator:
 
                 # Check termination: no running tasks and no new ready stories
                 if not self._running_tasks:
-                    # Stalemate detection: log warning with status summary
+                    # Stalemate detection: log warning with status summary.
+                    # Review-parked stories are accounted for, not remaining:
+                    # they wait on the out-of-band review pass, and their
+                    # dependents show up in `remaining` by design.
                     all_ids = set(self._dependency_graph.all_story_ids)
                     completed = self._done_ids | self._merging_ids
                     remaining = (
-                        all_ids - completed - self._blocked_ids - self._in_flight_ids
+                        all_ids
+                        - completed
+                        - self._blocked_ids
+                        - self._in_flight_ids
+                        - self._review_ids
                     )
                     if remaining:
                         logger.warning(
                             "[ORCHESTRATOR] Stalemate detected: no stories ready and "
                             "none in-flight. Done: %d, Merging: %d, Blocked: %d, "
-                            "Remaining: %d (%s)",
+                            "In review: %d, Remaining: %d (%s)",
                             len(self._done_ids),
                             len(self._merging_ids),
                             len(self._blocked_ids),
+                            len(self._review_ids),
                             len(remaining),
                             sorted(remaining),
                         )
@@ -1807,12 +1930,20 @@ class Orchestrator:
             elif not self._draining and not self._force_exit:
                 # Not all stories done — some are blocked, stalled by
                 # dependency cycles, or otherwise incomplete.
-                # Update epic sprint-status to "blocked" and clean up
-                # all worktrees (both completed and blocked — per FR35).
-                # Note: _blocked_ids may be empty in stalemate scenarios
-                # (stories stuck due to unresolvable dependencies), so we
-                # unconditionally update status and clean up.
-                self._update_epic_sprint_status("blocked")
+                # When review-parked stories (and the dependents waiting on
+                # them) are the ONLY reason, the epic reads "review": that
+                # tells the operator the next move is the out-of-band review
+                # pass, not debugging. Anything genuinely blocked or
+                # in-flight keeps the historical "blocked".
+                # Clean up all worktrees (both completed and blocked — per
+                # FR35). Note: _blocked_ids may be empty in stalemate
+                # scenarios, so status is updated unconditionally.
+                only_reviews_remain = bool(self._review_ids) and not (
+                    self._blocked_ids | self._in_flight_ids | self._merging_ids
+                )
+                self._update_epic_sprint_status(
+                    "review" if only_reviews_remain else "blocked"
+                )
                 await self._cleanup_remaining_worktrees()
 
         finally:

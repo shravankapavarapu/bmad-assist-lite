@@ -149,7 +149,7 @@ class AuditDecision:
     """The resolved per-story audit decision, with its reasons for the record."""
 
     fire: bool
-    mode: str  # "forced_on" | "off" | "auto"
+    mode: str  # "forced_on" | "off" | "auto" | "final_round"
     reason: str
     signals: AuditTriggerSignals | None = None
 
@@ -434,8 +434,13 @@ def resolve_ac_audit_enabled(
 
     ``enabled`` (force-ON) wins and short-circuits before any signal gathering.
     With both flags off the function returns immediately with ``fire=False`` and
-    no side effects — the byte-identical-off guarantee. In ``auto`` mode it
-    gathers worktree-local signals and applies :func:`decide_from_signals`.
+    no side effects — the byte-identical-off guarantee. In ``auto`` mode the
+    FINAL review round fires unconditionally, before any signal gathering: the
+    final round's verdict is the one that can promote a story to done, and the
+    audit's pass is one of the three witnesses that promotion requires — a
+    quiet signal set must not skip the gate on exactly the round that counts.
+    Other rounds gather worktree-local signals and apply
+    :func:`decide_from_signals`.
     """
     ac = config.ac_audit
     if ac.enabled:
@@ -445,6 +450,16 @@ def resolve_ac_audit_enabled(
     if not ac.auto:
         return AuditDecision(
             fire=False, mode="off", reason="ac_audit.auto=false, enabled=false"
+        )
+    cap = config.loop.review_max_iterations
+    if state.review_iteration >= cap:
+        return AuditDecision(
+            fire=True,
+            mode="final_round",
+            reason=(
+                f"final review round (review_iteration={state.review_iteration} "
+                f">= cap={cap}) — the promoting round always carries the audit"
+            ),
         )
     signals = gather_audit_signals(config, state, project_path or Path("."))
     fire, reason = decide_from_signals(signals)

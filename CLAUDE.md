@@ -77,6 +77,17 @@ Deterministic, non-LLM quality gate enforcement after code review synthesis:
 
 **Auto-commit timing:** Moved from after code_review_synthesis to after quality_gate outcomes (both pass and skip_story).
 
+### Review Owns "done" (three-witness promotion gate)
+
+Added 2026-09-05 after two runs marked stories `done` whose last review verdict was REJECT (and one that implemented nothing). The merger and the tracker no longer own the `done` claim — the review does.
+
+- **`core/verdict.py`** — `ReviewVerdictRecord` written by `code_review_synthesis` when the review loop exits, to `_bmad-output/implementation-artifacts/verdicts/story-{id}.yaml` (committed content, survives parallel merges). `verdict_blocks_done()` is the promotion gate: three witnesses must agree — final FULL-pass review verdict is APPROVE or better, the story file's own `Status:` line reads `done`, and the AC-audit lane ran and passed on that final round. Absence of evidence is dissent. `seed_blocks_done()` is the lenient resume-seeding gate: blocks only on positive disagreement; the story file is the senior witness (the operator's out-of-band pass promotes by editing it).
+- **Parallel merger** (`parallel/merger.py`) — `decide_promotion()` + `update_sprint_status_landed()`: a landed story is written `done` only when the gate agrees, else parked in `review` with the reason logged. The old `all_done_ids` re-mark is gone. The gate applies only when `loop.story` contains `code_review_synthesis`; configs without a review phase keep merge-means-done.
+- **Scheduling** — only `done` satisfies dependency edges. `StoryStatus.REVIEW` (parallel state) stories are excluded from scheduling and never unlock dependents; merging stories no longer satisfy edges either.
+- **Parked tracker statuses** — `review` (merged, verdicts fell short; input to the operator's per-tier review pass, which promotes by flipping story file + tracker to done) and `decision` (story names a product choice with no default; waits on the operator). Both are in `INACTIVE_STATUSES`, so the work queue never re-picks them. `blocked` keeps meaning environment/tooling failure. On `--resume`, `cli.py::_splice_resume_story` re-inserts only the saved state's current story if its row is mid-review.
+- **Review loop shape** — the final round (`review_iteration == review_max_iterations`) is never a delta prompt (`code_review.py::_is_delta_round`) and always carries the audit lane in auto mode (`ac_audit_trigger.py`, mode `final_round`). Default cap is 2 (smallest cap where the delta round still exists); 3 is the recommended quality setting.
+- **Sequential sync** — `sprint_sync.py::_done_postconditions` composes the verdict gate (on when the loop reviews) with the opt-in sign-off gate; a withheld `done` leaves the row at `review`.
+
 ### Key Patterns
 
 - **Plugin-first** — Providers, phases, and workflows are all pluggable. Built-ins register first, plugins override
@@ -226,7 +237,9 @@ parallel:
 
 # Bounded review -> fix -> re-review loop
 loop:
-  review_max_iterations: 1  # fix rounds per story; 0 disables the loop entirely
+  review_max_iterations: 3  # fix rounds per story; 0 disables. Default 2. The final
+                            # round is never a delta and is the only round whose
+                            # verdict can promote a story to done.
 
 review:
   blocking_severity: medium   # low|medium|high — below this, findings are recorded only

@@ -13,10 +13,16 @@ from bmad_assist_lite.core.config import (
 )
 from bmad_assist_lite.core.git import git_diff
 from bmad_assist_lite.core.state import State
+from bmad_assist_lite.core.verdict import parse_audit_table
 from bmad_assist_lite.loop.autonomy import AutonomyLevel
 from bmad_assist_lite.loop.handlers.ac_audit_trigger import (
     record_audit_trigger,
     resolve_ac_audit_enabled,
+)
+from bmad_assist_lite.loop.handlers.audit_lane import (
+    MAX_INLINE_DIFF_CHARS,
+    build_audit_prompt,
+    cap_inline_diff,
 )
 from bmad_assist_lite.loop.handlers.base import BaseHandler
 from bmad_assist_lite.loop.review_merge import reviewer_findings_addendum
@@ -27,20 +33,45 @@ from bmad_assist_lite.providers.base import READ_ONLY_TOOLS, write_progress
 
 logger = logging.getLogger(__name__)
 
-#: Hard cap on a diff inlined into a reviewer prompt (~15K tokens). A
-#: lockfile-sized change set must not blow the very prompt these levers exist
-#: to shrink; reviewers can Read the files for anything past the cap.
-_MAX_INLINE_DIFF_CHARS = 60_000
+#: The inline-diff cap and its truncator live beside the shared audit prompt
+#: (both call sites of the audit lane inline the same capped diff); these
+#: module names are kept so the reviewer prompts here read unchanged.
+_MAX_INLINE_DIFF_CHARS = MAX_INLINE_DIFF_CHARS
+_cap_inline_diff = cap_inline_diff
 
 
-def _cap_inline_diff(diff: str) -> str:
-    """Truncate an inlined diff at the cap, with an explicit marker."""
-    if len(diff) <= _MAX_INLINE_DIFF_CHARS:
-        return diff
-    return (
-        diff[:_MAX_INLINE_DIFF_CHARS]
-        + "\n... [diff truncated for length — read the remaining files directly]\n"
-    )
+#: Output contract for the delta (round-2) re-review, so its lanes emit an
+#: Evidence Score the parser in ``validation.evidence_score`` can read. The
+#: full review gets this from the compiled workflow's Evidence Score step; the
+#: delta prompt replaces that workflow, and without its own contract every
+#: delta lane parsed to None, the aggregate verdict was None, and a rework
+#: verdict on a delta round could never trigger the next fix round.
+#:
+#: The row shapes are the parser's, not the workflow's prose: a finding row
+#: needs its severity emoji and a bare number in the Score column
+#: (``_FINDING_TABLE_PATTERN``); the clean-pass row needs a bare count
+#: (``_CLEAN_PASS_TABLE_PATTERN``); the total needs ``Evidence Score:``
+#: followed by a number (``_EVIDENCE_SCORE_PATTERN``). Clean passes use the
+#: full review's nine categories so a delta score sits on the same scale.
+_DELTA_EVIDENCE_SCORE_FORMAT = (
+    "<output-format>\n"
+    "End with this Evidence Score block; a parser reads it, so keep the row "
+    "shapes exact.\n\n"
+    "| Severity | Description | Source | Score |\n"
+    "|----------|-------------|--------|-------|\n"
+    "| 🔴 CRITICAL | <finding> | <file:line> | 3 |\n"
+    "| 🟠 IMPORTANT | <finding> | <file:line> | 1 |\n"
+    "| 🟡 MINOR | <finding> | <file:line> | 0.3 |\n"
+    "| 🟢 CLEAN PASS | <count> |\n\n"
+    "Evidence Score: <total>\n\n"
+    "- One row per finding: a round-1 blocking finding still unfixed, or a new "
+    "defect in the fix diff. No findings means no finding rows.\n"
+    "- CLEAN PASS <count> is a bare integer: how many of SOLID, Hidden Bugs, "
+    "Abstraction, Tests, Performance, Tech Debt, Style, Type Safety, Security "
+    "show no issue in the fix diff.\n"
+    "- <total> = sum of finding scores - 0.5 x clean passes.\n"
+    "</output-format>\n"
+)
 
 
 class CodeReviewHandler(BaseHandler):
@@ -84,6 +115,13 @@ class CodeReviewHandler(BaseHandler):
             reports = []
             for r in reviews:
                 if r.get("exit_code") != 0:
+                    continue
+                # The AC auditor emits an acceptance-criteria verdict table,
+                # not an Evidence Score: parsing it only logs a spurious
+                # "failed to parse" warning every audited round, and a stray
+                # match in its prose must never move the aggregate. Its
+                # verdict reaches the gate through round_meta instead.
+                if r.get("reviewer") == self.AUDIT_LANE_LABEL:
                     continue
                 content = r.get("response", "")
                 reviewer_id = r.get("reviewer", "Unknown")
@@ -134,17 +172,32 @@ class CodeReviewHandler(BaseHandler):
             return None
 
     def _is_delta_round(self, state: State) -> bool:
-        """True when this call is a round-2+ re-review of the CURRENT story.
+        """True when this call is a middle-round re-review of the CURRENT story.
 
         ``review_iteration`` is only reset by the synthesis handler when it
         notices a story change — and the synthesis runs AFTER this phase. On the
         first review of a new story the counter therefore still holds the
         previous story's rounds; the ``review_story_id`` guard keeps that stale
         counter from turning a fresh story's round-1 into a scoped delta review.
+
+        The FINAL round (``review_iteration`` at the cap) is never a delta:
+        its verdict is the one that can promote the story to done, and a story
+        rejected for six missing criteria that fixes two must not come back
+        approved on a re-review scoped to the two. Only middle rounds — those
+        that can still spawn another fix — may be delta-scoped.
+
+        ``state.force_full_review`` also forces a full round. The synthesis
+        sets it when a delta round comes back clean: the loop would exit on
+        that round, and a delta cannot promote, so one full promoting review
+        runs instead. The promoting round is whichever round the loop exits
+        from, which is not always the one at the cap.
         """
+        if state.force_full_review:
+            return False
         return (
             self.config.speed.delta_round2
             and state.review_iteration >= 1
+            and state.review_iteration < self.config.loop.review_max_iterations
             and state.review_story_id == state.current_story
         )
 
@@ -161,6 +214,10 @@ class CodeReviewHandler(BaseHandler):
             if self._is_delta_round(state)
             else None
         )
+        # What ACTUALLY ran, not what was intended: a delta round that fell
+        # back to the full prompt is a full pass, and the verdict record the
+        # synthesis writes must say so.
+        self._round_was_delta = delta_prompt is not None
         if delta_prompt is not None:
             # The delta prompt is already lean + diff-scoped; no lean addendum.
             prompt = delta_prompt
@@ -187,21 +244,16 @@ class CodeReviewHandler(BaseHandler):
         failure surfaces as a ConfigError, failing the phase loudly before any
         lane spends tokens — the audit never silently runs without the
         authoritative acceptance criteria.
+
+        The prompt itself is built by the shared
+        :func:`~bmad_assist_lite.loop.handlers.audit_lane.build_audit_prompt`,
+        so the synthesis's on-exit audit asks exactly the same question.
         """
-        prompt = self.render_prompt(state, workflow_name="ac-audit")
-        diff = git_diff(self.project_path)
-        if diff and diff.strip():
-            prompt = (
-                f"{prompt}\n\n"
-                f"<changed-code-diff>\n{_cap_inline_diff(diff)}\n</changed-code-diff>\n"
-                "The diff above shows what this story changed, for ORIENTATION only. "
-                "Your audit target is the code as it is NOW — evidence for a criterion "
-                "may live in files the diff never touched, and a file the diff should "
-                "have touched but did not is exactly what you exist to catch.\n"
-            )
-        if self.config.speed.structured_review:
-            prompt = f"{prompt}\n\n{reviewer_findings_addendum()}"
-        return prompt
+        return build_audit_prompt(
+            self.render_prompt(state, workflow_name="ac-audit"),
+            git_diff(self.project_path),
+            structured_review=self.config.speed.structured_review,
+        )
 
     #: Lane label for the AC-completeness auditor; also its findings `source` tag.
     AUDIT_LANE_LABEL = "AC-Auditor"
@@ -343,6 +395,7 @@ class CodeReviewHandler(BaseHandler):
             f"<round-1-findings>\n{findings_text}\n</round-1-findings>\n\n"
             f"<fix-diff>\n{diff}\n</fix-diff>\n\n"
             f"{story_block}"
+            f"{_DELTA_EVIDENCE_SCORE_FORMAT}"
         )
 
     def execute(self, state: State) -> PhaseResult:
@@ -365,6 +418,12 @@ class CodeReviewHandler(BaseHandler):
                 return super().execute(state)
 
             lanes = self._build_lanes(state)
+            # The round's shape is fixed once its lanes exist, so the forced
+            # full round has consumed the flag. Clearing it here, not at the
+            # synthesis, means a resume that re-runs this phase after a crash
+            # mid-lanes still gets its full round, and the flag can never
+            # outlive the one round it was set for.
+            state.force_full_review = False
 
             import asyncio
             import concurrent.futures
@@ -490,9 +549,36 @@ class CodeReviewHandler(BaseHandler):
             cache_dir = self.project_path / ".bmad-assist-lite" / "cache"
             cache_dir.mkdir(parents=True, exist_ok=True)
 
+            # The round's shape, recorded beside the reviews so the synthesis
+            # can write the durable verdict record the three-witness "done"
+            # gate reads (core.verdict). The audit lane's verdict table is
+            # parsed HERE, where the lane's raw response is at hand.
+            audit_response = next(
+                (
+                    r.get("response", "")
+                    for r in reviews
+                    if r.get("reviewer") == self.AUDIT_LANE_LABEL
+                    and r.get("exit_code") == 0
+                ),
+                None,
+            )
             cache_data = {
                 "reviews": reviews,
                 "evidence_score": evidence_aggregate,
+                "round_meta": {
+                    "story_id": state.current_story,
+                    "review_iteration": state.review_iteration,
+                    "full_pass": not getattr(self, "_round_was_delta", False),
+                    "audit_required": (
+                        self.config.ac_audit.enabled or self.config.ac_audit.auto
+                    ),
+                    "audit_ran": audit_response is not None,
+                    "audit_passed": (
+                        parse_audit_table(audit_response)
+                        if audit_response is not None
+                        else None
+                    ),
+                },
             }
             cache_file = cache_dir / "reviews.json"
             temp_file = cache_file.with_suffix(".json.tmp")
