@@ -524,10 +524,14 @@ class TestOnStoryComplete:
         with patch(to_thread_path, new_callable=AsyncMock) as mock_tt:
             await orch._on_story_complete("3.2", exit_code=1)
 
-            mock_tt.assert_called_once()
-            call_args = mock_tt.call_args[0]
-            assert call_args[0].__name__ == "cleanup_worktree"
-            assert call_args[1] == "3.2"
+            # to_thread carries both the telemetry harvest and the cleanup;
+            # this test cares only that cleanup ran for the blocked story.
+            cleanup_calls = [
+                c for c in mock_tt.call_args_list
+                if c[0][0].__name__ == "cleanup_worktree"
+            ]
+            assert len(cleanup_calls) == 1
+            assert cleanup_calls[0][0][1] == "3.2"
 
     async def test_success_does_not_clean_worktree(self) -> None:
         """Successful stories keep their worktree for the merge phase."""
@@ -541,7 +545,105 @@ class TestOnStoryComplete:
         with patch(to_thread_path, new_callable=AsyncMock) as mock_tt:
             await orch._on_story_complete("3.2", exit_code=0)
 
+            # The telemetry harvest may run through to_thread, but no call
+            # may be cleanup_worktree — the merge phase needs the worktree.
+            assert not [
+                c for c in mock_tt.call_args_list
+                if c[0][0].__name__ == "cleanup_worktree"
+            ]
+
+    async def test_harvests_telemetry_on_success(self) -> None:
+        """Story completion invokes the telemetry harvest with the worktree."""
+        orch = _make_orchestrator(project_root=Path("/proj"))
+        task = MagicMock()
+        orch._running_tasks["3.2"] = task
+        orch._task_to_story[task] = "3.2"
+        orch._story_worktrees["3.2"] = Path("/fake/worktree")
+
+        to_thread_path = "bmad_assist_lite.parallel.orchestrator.asyncio.to_thread"
+        with patch(to_thread_path, new_callable=AsyncMock) as mock_tt:
+            await orch._on_story_complete("3.2", exit_code=0)
+
+            harvest_calls = [
+                c for c in mock_tt.call_args_list
+                if c[0][0].__name__ == "harvest_story_telemetry"
+            ]
+            assert len(harvest_calls) == 1
+            assert harvest_calls[0][0][1] == "3.2"
+            assert harvest_calls[0][0][2] == Path("/fake/worktree")
+            assert harvest_calls[0][0][3] == Path("/proj")
+
+    async def test_harvests_telemetry_on_failure_before_cleanup(self) -> None:
+        """A failed story is harvested too, before its worktree is removed."""
+        orch = _make_orchestrator(project_root=Path("/proj"))
+        orch._config = _make_config(worktree_base_dir=Path("/base"))  # type: ignore[misc]
+        task = MagicMock()
+        orch._running_tasks["3.2"] = task
+        orch._task_to_story[task] = "3.2"
+        orch._story_worktrees["3.2"] = Path("/fake/worktree")
+
+        to_thread_path = "bmad_assist_lite.parallel.orchestrator.asyncio.to_thread"
+        with patch(to_thread_path, new_callable=AsyncMock) as mock_tt:
+            await orch._on_story_complete("3.2", exit_code=1)
+
+            names = [c[0][0].__name__ for c in mock_tt.call_args_list]
+            assert "harvest_story_telemetry" in names
+            assert names.index("harvest_story_telemetry") < names.index(
+                "cleanup_worktree"
+            )
+
+    async def test_no_harvest_without_worktree(self) -> None:
+        """A story with no tracked worktree (bootstrap failure) skips harvest."""
+        orch = _make_orchestrator()
+        task = MagicMock()
+        orch._running_tasks["3.2"] = task
+        orch._task_to_story[task] = "3.2"
+
+        to_thread_path = "bmad_assist_lite.parallel.orchestrator.asyncio.to_thread"
+        with patch(to_thread_path, new_callable=AsyncMock) as mock_tt:
+            await orch._on_story_complete("3.2", exit_code=0)
+
             mock_tt.assert_not_called()
+
+    async def test_harvest_failure_never_fails_the_story(self) -> None:
+        """A raising harvest logs a warning; the story still transitions."""
+        orch = _make_orchestrator()
+        task = MagicMock()
+        orch._running_tasks["3.2"] = task
+        orch._task_to_story[task] = "3.2"
+        orch._story_worktrees["3.2"] = Path("/fake/worktree")
+
+        to_thread_path = "bmad_assist_lite.parallel.orchestrator.asyncio.to_thread"
+        with patch(
+            to_thread_path,
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ):
+            await orch._on_story_complete("3.2", exit_code=0)
+
+        assert "3.2" in orch._merging_ids
+
+    async def test_harvest_moves_real_files(self, tmp_path: Path) -> None:
+        """End to end through _on_story_complete with a real worktree dir."""
+        project = tmp_path / "proj"
+        worktree = tmp_path / "wt"
+        src = worktree / ".bmad-assist-lite" / "phase-metrics.jsonl"
+        src.parent.mkdir(parents=True)
+        src.write_text('{"story_id": "3.2", "phase": "dev"}\n', encoding="utf-8")
+
+        orch = _make_orchestrator(project_root=project)
+        task = MagicMock()
+        orch._running_tasks["3.2"] = task
+        orch._task_to_story[task] = "3.2"
+        orch._story_worktrees["3.2"] = worktree
+
+        await orch._on_story_complete("3.2", exit_code=0)
+
+        dst = project / ".bmad-assist-lite" / "phase-metrics.jsonl"
+        assert dst.read_text(encoding="utf-8") == (
+            '{"story_id": "3.2", "phase": "dev"}\n'
+        )
+        assert not src.exists()
 
     async def test_cleans_up_running_tasks_and_task_to_story(self) -> None:
         """Both _running_tasks and _task_to_story are cleaned up atomically."""
