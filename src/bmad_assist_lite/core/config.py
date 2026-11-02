@@ -48,7 +48,11 @@ class MasterProviderConfig(BaseModel):
     settings: str | None = Field(None, description="Path to provider settings JSON")
     effort: str | None = Field(
         None,
-        description="Claude effort: low|medium|high|xhigh|max (Opus 4.7 only; ignored elsewhere)",
+        description=(
+            "Reasoning effort: low|medium|high|xhigh|max (Claude Opus 4.7+; "
+            "Codex maps it to model_reasoning_effort, max->xhigh; ignored by "
+            "Gemini and Cursor)"
+        ),
     )
 
     @property
@@ -75,7 +79,11 @@ class MultiProviderConfig(BaseModel):
     settings: str | None = Field(None, description="Path to provider settings JSON")
     effort: str | None = Field(
         None,
-        description="Claude effort: low|medium|high|xhigh|max (Opus 4.7 only; ignored elsewhere)",
+        description=(
+            "Reasoning effort: low|medium|high|xhigh|max (Claude Opus 4.7+; "
+            "Codex maps it to model_reasoning_effort, max->xhigh; ignored by "
+            "Gemini and Cursor)"
+        ),
     )
 
     @property

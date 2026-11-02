@@ -203,6 +203,32 @@ def _extract_agent_message_text(item: dict[str, Any]) -> str:
     return "".join(parts)
 
 
+#: Claude effort ladder -> Codex ``model_reasoning_effort`` levels. Codex has
+#: no ``max`` level, so it caps at ``xhigh``.
+_CODEX_EFFORT_MAP: dict[str, str] = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "xhigh",
+}
+
+
+def _map_reasoning_effort(effort: str | None) -> str | None:
+    """Map a config effort value to a Codex ``model_reasoning_effort`` level.
+
+    Returns None for unset or unrecognised values, in which case no flag is
+    passed and the Codex CLI default applies — a bad value degrades to the
+    default instead of failing the lane.
+    """
+    if effort is None:
+        return None
+    level = _CODEX_EFFORT_MAP.get(effort.strip().lower())
+    if level is None:
+        logger.warning("Unrecognised effort %r for Codex; using the CLI default", effort)
+    return level
+
+
 class CodexProvider(BaseProvider):
     """Codex CLI subprocess-based provider with Windows-safe process management.
 
@@ -296,7 +322,9 @@ class CodexProvider(BaseProvider):
             settings_file: Optional path to provider settings file (unused).
             cwd: Working directory for the provider process.
             allowed_tools: List of tool names the provider may use.
-            effort: Accepted for signature compatibility and ignored.
+            effort: Reasoning-effort hint, forwarded to the CLI as a
+                ``model_reasoning_effort`` config override (``max`` maps to
+                ``xhigh``; unrecognised values fall back to the CLI default).
             color_index: Index for ANSI color differentiation in output.
 
         Returns:
@@ -314,8 +342,7 @@ class CodexProvider(BaseProvider):
         if timeout <= 0:
             raise ValueError(f"timeout must be positive, got {timeout}")
 
-        if effort:
-            logger.debug("Codex ignores effort=%s (Claude-only feature)", effort)
+        reasoning_effort = _map_reasoning_effort(effort)
 
         if is_hermetic():
             logger.debug("Codex ignores hermetic=True (Claude-only mechanism)")
@@ -349,6 +376,11 @@ class CodexProvider(BaseProvider):
             "--model",
             effective_model,
         ]
+
+        # Forward reasoning effort as a config override. The value is quoted
+        # because -c parses its value as TOML (a bare word is not a TOML string).
+        if reasoning_effort is not None:
+            command.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
 
         # Sandbox enforcement (OS-level, not prompt-level). Codex's tool
         # restriction prompt is advisory only — the model can ignore it — so we

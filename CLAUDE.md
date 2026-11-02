@@ -144,7 +144,7 @@ providers:
 - **Codex** (`providers/codex.py`): `gpt-5.3-codex`, `gpt-5.1-codex-mini`, `o4-mini`, or any `gpt-`/`codex-`/`o1-`/`o3-`/`o4-` prefixed model. Default: `gpt-5.3-codex`. Requires OpenAI API key auth (`codex login --with-api-key`); ChatGPT auth does not support model selection
 - **Cursor** (`providers/cursor.py`): `composer-2.5`, `composer-2.5-fast`, or any `composer-*` prefixed model. Default: `composer-2.5`. Requires `CURSOR_API_KEY` (Pro plan) in `.env`. See `docs/linux-deployment.md` for setup
 
-**Valid effort values (Claude Opus 4.7 only):** `low`, `medium`, `high`, `xhigh`, `max`. Forwarded to the CLI as `--effort <value>` via the SDK's `extra_args`. Ignored by Gemini, Codex, Cursor, and pre-Opus-4.7 Claude models. Default for this project: `max`.
+**Valid effort values:** `low`, `medium`, `high`, `xhigh`, `max`. For Claude, forwarded to the CLI as `--effort <value>` via the SDK's `extra_args` (Opus 4.7+; ignored by earlier Claude models). For Codex, forwarded as a `model_reasoning_effort` config override (`-c`), with `max` mapped to `xhigh` (Codex has no `max` level); unrecognised values fall back to the CLI default with a warning. Ignored by Gemini and Cursor. Default for this project: `max`.
 
 **Config model definitions** are in `core/config.py`: `MasterProviderConfig` and `MultiProviderConfig` Pydantic models define the `provider`, `model`, and `effort` fields.
 

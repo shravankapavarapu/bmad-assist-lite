@@ -170,6 +170,97 @@ class TestInvocation:
     @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
     @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
     @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_effort_forwarded_as_reasoning_effort_override(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+    ) -> None:
+        """effort=high becomes -c model_reasoning_effort="high" on the command."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
+        process = create_mock_process(stdout_content=stream, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CodexProvider()
+        provider.invoke("test prompt", effort="high", timeout=300)
+
+        command = mock_popen.call_args[0][0]
+        assert "-c" in command
+        c_idx = command.index("-c")
+        assert command[c_idx + 1] == 'model_reasoning_effort="high"'
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_effort_max_maps_to_xhigh(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+    ) -> None:
+        """Codex has no 'max' level; it caps at xhigh."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
+        process = create_mock_process(stdout_content=stream, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CodexProvider()
+        provider.invoke("test prompt", effort="max", timeout=300)
+
+        command = mock_popen.call_args[0][0]
+        c_idx = command.index("-c")
+        assert command[c_idx + 1] == 'model_reasoning_effort="xhigh"'
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_no_effort_means_no_reasoning_override(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+    ) -> None:
+        """Unset effort adds no -c flag: the CLI default applies."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
+        process = create_mock_process(stdout_content=stream, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CodexProvider()
+        provider.invoke("test prompt", timeout=300)
+
+        command = mock_popen.call_args[0][0]
+        assert "-c" not in command
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_unrecognised_effort_falls_back_to_cli_default(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+    ) -> None:
+        """An unknown effort value is dropped (warning), not passed through."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
+        process = create_mock_process(stdout_content=stream, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CodexProvider()
+        provider.invoke("test prompt", effort="turbo", timeout=300)
+
+        command = mock_popen.call_args[0][0]
+        assert "-c" not in command
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
     def test_sandbox_read_only_when_tools_restricted(
         self,
         mock_popen: MagicMock,
