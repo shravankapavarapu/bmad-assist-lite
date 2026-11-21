@@ -35,7 +35,7 @@ from bmad_assist_lite.core.exceptions import (
     ProviderTimeoutError,
 )
 from bmad_assist_lite.providers.base import BaseProvider, ProviderResult
-from bmad_assist_lite.providers.codex import CodexProvider
+from bmad_assist_lite.providers.codex import CodexProvider, _extract_agent_message_text
 from bmad_assist_lite.providers.result_collector import ResultCollector
 
 # ============================================================================
@@ -67,6 +67,21 @@ def make_item_completed_agent_message(text: str) -> str:
             "type": "agent_message",
             "content": [{"type": "output_text", "text": text}],
         },
+    })
+
+
+def make_item_completed_agent_message_flat(text: str) -> str:
+    """Create an item.completed line in the current CLI's flat shape.
+
+    codex-cli 0.166.0 (observed) emits the message as a top-level ``text``
+    field with no ``content`` array::
+
+        {"type": "item.completed", "item": {"id": "item_0",
+         "type": "agent_message", "text": "..."}}
+    """
+    return make_ndjson_line({
+        "type": "item.completed",
+        "item": {"id": "item_0", "type": "agent_message", "text": text},
     })
 
 
@@ -396,7 +411,7 @@ class TestInvocation:
         mock_kwargs: MagicMock,
         mock_uuid: MagicMock,
     ) -> None:
-        """When schema file exists, command includes --output-schema (Task 2.5)."""
+        """Read-only call with schema file present includes --output-schema (Task 2.5)."""
         mock_resolve_cli.return_value = "/usr/bin/codex"
         mock_uuid.uuid4.return_value = MagicMock(hex="abcdef1234567890")
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
@@ -409,7 +424,12 @@ class TestInvocation:
 
         with patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", schema_mock):
             provider = CodexProvider()
-            provider.invoke("test", timeout=300, cwd=Path("/tmp/test-project"))
+            provider.invoke(
+                "test",
+                timeout=300,
+                cwd=Path("/tmp/test-project"),
+                allowed_tools=["Read", "Glob", "Grep"],
+            )
 
         call_args = mock_popen.call_args
         command = call_args[0][0]
@@ -441,7 +461,12 @@ class TestInvocation:
 
         with patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", schema_mock):
             provider = CodexProvider()
-            provider.invoke("test", timeout=300, cwd=Path("/tmp/test-project"))
+            provider.invoke(
+                "test",
+                timeout=300,
+                cwd=Path("/tmp/test-project"),
+                allowed_tools=["Read", "Glob", "Grep"],
+            )
 
         call_args = mock_popen.call_args
         command = call_args[0][0]
@@ -527,7 +552,12 @@ class TestInvocation:
         mock_resolve_cli: MagicMock,
         mock_kwargs: MagicMock,
     ) -> None:
-        """allowed_tools parameter produces TOOL ACCESS RESTRICTIONS text (Task 2.10)."""
+        """allowed_tools produces the sandbox-aware READ-ONLY REVIEW text (Task 2.10).
+
+        The wording must authorize read-only shell inspection: Codex reads
+        files via shell commands, so a Claude-vocabulary "FORBIDDEN: Bash"
+        warning made reviewers decline to open any file (webdozo 2026-11-06).
+        """
         mock_resolve_cli.return_value = "/usr/bin/codex"
         stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
         process = create_mock_process(stdout_content=stream, returncode=0)
@@ -538,9 +568,10 @@ class TestInvocation:
 
         # Prompt with restriction text is written to stdin, not command args
         written_prompt = process.stdin.write.call_args[0][0]
-        assert "TOOL ACCESS RESTRICTIONS" in written_prompt
-        assert "FORBIDDEN" in written_prompt
-        assert "Read" in written_prompt
+        assert "READ-ONLY REVIEW" in written_prompt
+        assert "MAY run read-only shell commands" in written_prompt
+        assert "MUST NOT modify" in written_prompt
+        assert "FORBIDDEN" not in written_prompt
 
     def test_invoke_is_base_class_method(self) -> None:
         """CodexProvider.invoke is BaseProvider.invoke (not overridden) (Task 2.11)."""
@@ -776,6 +807,88 @@ class TestNDJSONParsing:
 # ============================================================================
 # TestCleanup -- Process termination and thread joining (Task 4)
 # ============================================================================
+
+
+class TestFlatAgentMessageShape:
+    """The current CLI's flat agent_message shape streams text (codex-cli 0.166.0).
+
+    Regression guard for the webdozo run of 2026-11-06: every agent message on
+    a current CLI extracted as "" because only the legacy ``content``-blocks
+    shape was handled, so write-mode calls returned empty responses.
+    """
+
+    def test_flat_text_extracted(self) -> None:
+        """Top-level ``text`` is the message."""
+        item = {"id": "item_0", "type": "agent_message", "text": "hello world"}
+        assert _extract_agent_message_text(item) == "hello world"
+
+    def test_flat_text_wins_over_content_blocks(self) -> None:
+        """When both shapes are present, the top-level field is authoritative."""
+        item = {
+            "type": "agent_message",
+            "text": "flat",
+            "content": [{"type": "output_text", "text": "blocks"}],
+        }
+        assert _extract_agent_message_text(item) == "flat"
+
+    def test_empty_flat_text_falls_back_to_content_blocks(self) -> None:
+        """An empty top-level field defers to the legacy block walk."""
+        item = {
+            "type": "agent_message",
+            "text": "",
+            "content": [{"type": "output_text", "text": "blocks"}],
+        }
+        assert _extract_agent_message_text(item) == "blocks"
+
+    def test_non_string_flat_text_falls_back(self) -> None:
+        """A non-string ``text`` value is ignored, not str()-ified."""
+        item = {
+            "type": "agent_message",
+            "text": ["not", "a", "string"],
+            "content": [{"type": "output_text", "text": "blocks"}],
+        }
+        assert _extract_agent_message_text(item) == "blocks"
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_flat_shape_reaches_result_stdout(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+    ) -> None:
+        """End to end: a 0.166.0-shaped stream lands in result.stdout."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(
+            make_ndjson_line({"type": "thread.started", "thread_id": "t1"}),
+            make_ndjson_line({"type": "turn.started"}),
+            make_item_completed_agent_message_flat("hello world"),
+            make_ndjson_line(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 14953,
+                        "cached_input_tokens": 12160,
+                        "cache_write_input_tokens": 0,
+                        "output_tokens": 6,
+                        "reasoning_output_tokens": 0,
+                    },
+                }
+            ),
+        )
+        process = create_mock_process(stdout_content=stream, returncode=0)
+        mock_popen.return_value = process
+
+        provider = CodexProvider()
+        result = provider.invoke("test", timeout=300)
+
+        assert result.stdout == "hello world"
+        assert result.input_tokens == 14953 - 12160
+        assert result.cache_read_tokens == 12160
+        assert result.cache_creation_tokens == 0
+        assert result.output_tokens == 6
 
 
 class TestCleanup:
@@ -1306,9 +1419,531 @@ class TestParseOutput:
 
         output = provider.parse_output(result)
         assert "### Evidence Score:" in output
-        assert "**PASS**" in output
+        # A clean pass over all nine categories scores -4.5, which the shared
+        # thresholds call EXCELLENT (<= -3.0).
+        assert "**EXCELLENT**" in output
         # Summary field is intentionally excluded to prevent double-counting
         assert "**Summary:**" not in output
+
+
+# ============================================================================
+# Shared helpers for the scoring / findings-block / telemetry tests
+# ============================================================================
+
+
+def _review_json(findings: list[dict] | None = None, verdict: str = "PASS") -> str:
+    """Build a Codex review JSON string matching codex-review-schema.json."""
+    return json.dumps({
+        "findings": findings or [],
+        "overall_verdict": verdict,
+        "summary": "summary text",
+    })
+
+
+def _schema_finding(
+    title: str,
+    priority: str,
+    *,
+    body: str = "explanation",
+    file_path: str | None = "src/app/module.py",
+    line_range: list[int] | None = None,
+) -> dict:
+    """Build one finding in the shape codex-review-schema.json requires."""
+    finding: dict = {
+        "title": title,
+        "body": body,
+        "priority": priority,
+        "confidence_score": 0.9,
+    }
+    if file_path is not None:
+        finding["code_location"] = {
+            "file_path": file_path,
+            "line_range": line_range if line_range is not None else [10, 12],
+        }
+    return finding
+
+
+def _parse_with(provider: CodexProvider, structured: str) -> str:
+    """Run parse_output() over cached structured output."""
+    provider._structured_output = structured
+    return provider.parse_output(
+        ProviderResult(
+            stdout="",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            model="gpt-5.3-codex",
+            command=("codex",),
+        )
+    )
+
+
+# ============================================================================
+# TestCleanPassScale -- nine-category scale, unclamped total, shared verdict
+# ============================================================================
+
+
+class TestCleanPassScale:
+    """The Codex evidence table scores on the same scale as Claude lanes."""
+
+    def test_clean_pass_counts_nine_categories(self) -> None:
+        """A clean review credits nine categories and totals -4.5."""
+        from bmad_assist_lite.validation.evidence_score import parse_evidence_findings
+
+        output = _parse_with(CodexProvider(), _review_json())
+
+        assert "| 9 categories |" in output
+        assert "### Evidence Score: -4.5" in output
+        report = parse_evidence_findings(output, "codex")
+        assert report is not None
+        assert report.clean_passes == 9
+        assert report.total_score == -4.5
+        assert report.parse_warnings == ()
+
+    def test_partial_credit_is_nine_minus_findings(self) -> None:
+        """Two findings leave seven clean categories."""
+        from bmad_assist_lite.validation.evidence_score import parse_evidence_findings
+
+        output = _parse_with(
+            CodexProvider(),
+            _review_json(
+                [_schema_finding("a", "P2"), _schema_finding("b", "P3")],
+                verdict="NEEDS_WORK",
+            ),
+        )
+
+        assert "| 7 categories |" in output
+        report = parse_evidence_findings(output, "codex")
+        assert report is not None
+        assert report.clean_passes == 7
+        # 2 * 0.3 + 7 * -0.5 = -2.9: negative, and printed as such (no clamp)
+        assert "### Evidence Score: -2.9" in output
+        assert report.total_score == -2.9
+        assert report.parse_warnings == ()
+
+    def test_nine_or_more_findings_get_no_clean_credit(self) -> None:
+        """Nine findings exhaust the categories, so there is no CLEAN PASS row."""
+        findings = [_schema_finding(f"f{i}", "P3") for i in range(9)]
+        output = _parse_with(CodexProvider(), _review_json(findings, verdict="NEEDS_WORK"))
+        assert "CLEAN PASS" not in output
+
+    @pytest.mark.parametrize(
+        ("priorities", "expected"),
+        [
+            ([], "EXCELLENT"),  # -4.5
+            (["P1"], "EXCELLENT"),  # 1.0 - 4.0 = -3.0, boundary
+            (["P1", "P1"], "PASS"),  # 2.0 - 3.5 = -1.5
+            (["P0", "P0", "P1", "P1"], "MAJOR_REWORK"),  # 8.0 - 2.5 = 5.5
+            (["P0", "P0", "P0", "P0"], "REJECT"),  # 12.0 - 2.5 = 9.5
+        ],
+    )
+    def test_verdict_row_uses_shared_thresholds(
+        self, priorities: list[str], expected: str
+    ) -> None:
+        """The table's verdict matches determine_verdict() on the parsed score."""
+        from bmad_assist_lite.validation.evidence_score import (
+            determine_verdict,
+            parse_evidence_findings,
+        )
+
+        findings = [_schema_finding(f"issue {i}", p) for i, p in enumerate(priorities)]
+        verdict = "PASS" if not findings else "NEEDS_WORK"
+        output = _parse_with(CodexProvider(), _review_json(findings, verdict=verdict))
+
+        assert f"**{expected}**" in output
+        report = parse_evidence_findings(output, "codex")
+        assert report is not None
+        assert report.parse_warnings == ()
+        assert determine_verdict(report.total_score).value == expected
+
+
+# ============================================================================
+# TestFindingsBlock -- structured findings block for the review merge
+# ============================================================================
+
+
+class TestFindingsBlock:
+    """parse_output() appends a block that validation.findings can parse."""
+
+    def test_round_trip_through_both_parsers(self) -> None:
+        """The same text parses cleanly as findings and as an evidence score."""
+        from bmad_assist_lite.validation.evidence_score import parse_evidence_findings
+        from bmad_assist_lite.validation.findings import (
+            Bucket,
+            Severity,
+            parse_findings,
+        )
+
+        findings = [
+            _schema_finding("Null deref in loader", "P0", body="crashes", line_range=[42, 44]),
+            _schema_finding("Missing negative test", "P1", file_path="tests/test_x.py"),
+            _schema_finding("Naming nit", "P2"),
+            _schema_finding("Trailing whitespace", "P3"),
+        ]
+        output = _parse_with(CodexProvider(), _review_json(findings, verdict="NEEDS_WORK"))
+
+        parsed = parse_findings(output)
+        assert [f.severity for f in parsed.findings] == [
+            Severity.HIGH,
+            Severity.MEDIUM,
+            Severity.LOW,
+            Severity.LOW,
+        ]
+        first = parsed.findings[0]
+        assert first.file == "src/app/module.py"
+        assert first.line == 42
+        assert first.title == "Null deref in loader"
+        assert first.anchor == "Null deref in loader"
+        assert first.detail == "crashes"
+        assert all(f.bucket is Bucket.PATCH for f in parsed.findings)
+        assert parsed.findings[1].file == "tests/test_x.py"
+
+        report = parse_evidence_findings(output, "codex")
+        assert report is not None
+        assert len(report.findings) == 4
+        assert report.clean_passes == 5
+        assert report.parse_warnings == ()
+
+    def test_block_follows_evidence_table(self) -> None:
+        """The machine block comes after the human-readable table."""
+        from bmad_assist_lite.validation.findings import (
+            FINDINGS_CLOSE_MARKER,
+            FINDINGS_OPEN_MARKER,
+        )
+
+        output = _parse_with(CodexProvider(), _review_json([_schema_finding("x", "P1")]))
+        assert output.index("### Evidence Score:") < output.index(FINDINGS_OPEN_MARKER)
+        assert output.rstrip().endswith(FINDINGS_CLOSE_MARKER)
+        assert "```json" in output
+
+    def test_clean_review_emits_empty_list(self) -> None:
+        """No findings is an explicit empty list, which reads as a clean review."""
+        from bmad_assist_lite.validation.findings import parse_findings
+
+        output = _parse_with(CodexProvider(), _review_json())
+        assert parse_findings(output).is_clean
+
+    def test_missing_code_location_gives_empty_file_and_no_line(self) -> None:
+        """A finding without code_location still parses (file is required, may be empty)."""
+        from bmad_assist_lite.validation.findings import parse_findings
+
+        output = _parse_with(
+            CodexProvider(),
+            _review_json([_schema_finding("General concern", "P1", file_path=None)]),
+        )
+        (finding,) = parse_findings(output).findings
+        assert finding.file == ""
+        assert finding.line is None
+
+    def test_unknown_priority_maps_to_low(self) -> None:
+        """An off-schema priority degrades to low, like MINOR in the table."""
+        from bmad_assist_lite.validation.findings import Severity, parse_findings
+
+        output = _parse_with(CodexProvider(), _review_json([_schema_finding("odd", "P9")]))
+        (finding,) = parse_findings(output).findings
+        assert finding.severity is Severity.LOW
+
+    def test_non_review_json_has_no_block(self) -> None:
+        """Raw non-review JSON is returned unchanged, with no block added."""
+        from bmad_assist_lite.validation.findings import FINDINGS_OPEN_MARKER
+
+        raw = json.dumps({"something": "else"})
+        output = _parse_with(CodexProvider(), raw)
+        assert output == raw
+        assert FINDINGS_OPEN_MARKER not in output
+
+    def test_review_merge_accepts_codex_lane(self) -> None:
+        """A Codex lane no longer forces the legacy prose-merge fallback."""
+        from bmad_assist_lite.loop.review_merge import parse_reviewer_findings
+
+        output = _parse_with(
+            CodexProvider(),
+            _review_json([_schema_finding("Race in writer", "P0")], verdict="NEEDS_WORK"),
+        )
+        findings, notes = parse_reviewer_findings(
+            [{"reviewer": "Codex", "exit_code": 0, "response": output}]
+        )
+        assert notes == []
+        assert [f.title for f in findings] == ["Race in writer"]
+
+
+# ============================================================================
+# TestOutputSchemaScope -- schema only on read-only (reviewer/validator) calls
+# ============================================================================
+
+
+def _schema_present() -> MagicMock:
+    """Return a mock schema Path that exists."""
+    schema_mock = MagicMock(spec=Path)
+    schema_mock.is_file.return_value = True
+    schema_mock.__str__ = lambda self: "/path/to/schema.json"
+    return schema_mock
+
+
+class TestOutputSchemaScope:
+    """--output-schema / --output-last-message only when allowed_tools is set."""
+
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_write_mode_runs_without_schema(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """allowed_tools=None (master/write phase) never forces the review schema."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("free form"))
+        mock_popen.return_value = create_mock_process(stdout_content=stream)
+
+        with patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _schema_present()):
+            provider = CodexProvider()
+            result = provider.invoke("test", timeout=300, cwd=tmp_path)
+
+        command = mock_popen.call_args[0][0]
+        assert "--output-schema" not in command
+        assert "--output-last-message" not in command
+        assert provider.parse_output(result) == "free form"
+
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_read_only_mode_uses_schema(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A list of allowed_tools (reviewer/validator lane) adds both flags."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
+        mock_popen.return_value = create_mock_process(stdout_content=stream)
+
+        with patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _schema_present()):
+            CodexProvider().invoke("test", timeout=300, cwd=tmp_path, allowed_tools=["Read"])
+
+        command = mock_popen.call_args[0][0]
+        assert "--output-schema" in command
+        assert "--output-last-message" in command
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_missing_schema_warns_only_on_read_only_path(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The missing-schema warning fires for reviewers, not for write phases."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+
+        def fresh_process(*_args: object, **_kwargs: object) -> MagicMock:
+            stream = build_ndjson_stream(make_item_completed_agent_message("ok"))
+            return create_mock_process(stdout_content=stream)
+
+        mock_popen.side_effect = fresh_process
+
+        with caplog.at_level("WARNING", logger="bmad_assist_lite.providers.codex"):
+            CodexProvider().invoke("test", timeout=300)
+        assert "Review schema not found" not in caplog.text
+
+        with caplog.at_level("WARNING", logger="bmad_assist_lite.providers.codex"):
+            CodexProvider().invoke("test", timeout=300, allowed_tools=["Read"])
+        assert "Review schema not found" in caplog.text
+
+    @patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA)
+    @patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={})
+    @patch("bmad_assist_lite.providers.codex.resolve_cli_path")
+    @patch("bmad_assist_lite.providers.codex.Popen")
+    def test_stale_structured_output_cleared_on_next_call(
+        self,
+        mock_popen: MagicMock,
+        mock_resolve_cli: MagicMock,
+        mock_kwargs: MagicMock,
+    ) -> None:
+        """A reused instance never returns an earlier call's review JSON."""
+        mock_resolve_cli.return_value = "/usr/bin/codex"
+        stream = build_ndjson_stream(make_item_completed_agent_message("fresh text"))
+        mock_popen.return_value = create_mock_process(stdout_content=stream)
+
+        provider = CodexProvider()
+        provider._structured_output = _review_json()
+        result = provider.invoke("test", timeout=300)
+
+        assert provider.parse_output(result) == "fresh text"
+
+
+# ============================================================================
+# TestUsageTelemetry -- token usage from NDJSON events
+# ============================================================================
+
+
+def _turn_completed(usage: object) -> str:
+    """Build a turn.completed NDJSON line carrying *usage*."""
+    return make_ndjson_line({"type": "turn.completed", "usage": usage})
+
+
+class TestUsageTelemetry:
+    """Usage events populate ProviderResult token fields, never raising."""
+
+    def _invoke(self, stream: str) -> ProviderResult:
+        """Run one invocation over *stream* with the CLI mocked out."""
+        with (
+            patch("bmad_assist_lite.providers.codex._REVIEW_SCHEMA_PATH", _NO_SCHEMA),
+            patch("bmad_assist_lite.providers.codex.get_subprocess_kwargs", return_value={}),
+            patch(
+                "bmad_assist_lite.providers.codex.resolve_cli_path",
+                return_value="/usr/bin/codex",
+            ),
+            patch("bmad_assist_lite.providers.codex.Popen") as mock_popen,
+        ):
+            mock_popen.return_value = create_mock_process(stdout_content=stream)
+            return CodexProvider().invoke("test", timeout=300)
+
+    def test_turn_completed_usage_populates_result(self) -> None:
+        """cached_input_tokens -> cache_read_tokens; input_tokens is the uncached rest."""
+        result = self._invoke(
+            build_ndjson_stream(
+                make_item_completed_agent_message("hello"),
+                _turn_completed(
+                    {"input_tokens": 24763, "cached_input_tokens": 24448, "output_tokens": 122}
+                ),
+            )
+        )
+        assert result.stdout == "hello"
+        assert result.input_tokens == 24763 - 24448
+        assert result.cache_read_tokens == 24448
+        assert result.output_tokens == 122
+        assert result.cache_creation_tokens is None
+
+    def test_cache_write_tokens_recorded_as_cache_creation(self) -> None:
+        """cache_write_input_tokens -> cache_creation_tokens, verbatim."""
+        result = self._invoke(
+            _turn_completed(
+                {
+                    "input_tokens": 1000,
+                    "cached_input_tokens": 600,
+                    "cache_write_input_tokens": 250,
+                    "output_tokens": 50,
+                }
+            )
+        )
+        assert result.input_tokens == 400
+        assert result.cache_read_tokens == 600
+        assert result.cache_creation_tokens == 250
+        assert result.output_tokens == 50
+
+    def test_usage_without_cached_keeps_raw_input(self) -> None:
+        """No cached count means input_tokens is reported as given."""
+        result = self._invoke(_turn_completed({"input_tokens": 500, "output_tokens": 20}))
+        assert result.input_tokens == 500
+        assert result.cache_read_tokens is None
+        assert result.output_tokens == 20
+
+    def test_no_usage_event_leaves_metrics_none(self) -> None:
+        """A stream without usage reports None, never zero."""
+        result = self._invoke(make_item_completed_agent_message("hi"))
+        assert result.input_tokens is None
+        assert result.output_tokens is None
+        assert result.cache_read_tokens is None
+
+    @pytest.mark.parametrize(
+        "usage",
+        ["not a dict", 42, None, ["input_tokens", 5]],
+    )
+    def test_non_dict_usage_degrades_to_none(self, usage: object) -> None:
+        """A malformed usage payload records nothing and does not kill the reader."""
+        result = self._invoke(
+            build_ndjson_stream(
+                _turn_completed(usage),
+                make_item_completed_agent_message("still captured"),
+            )
+        )
+        assert result.stdout == "still captured"
+        assert result.input_tokens is None
+        assert result.output_tokens is None
+
+    def test_bad_field_values_degrade_per_field(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Booleans, strings and negatives drop only their own field, with a warning."""
+        with caplog.at_level("WARNING", logger="bmad_assist_lite.providers.codex"):
+            result = self._invoke(
+                _turn_completed(
+                    {"input_tokens": "100", "cached_input_tokens": True, "output_tokens": 7}
+                )
+            )
+        assert result.input_tokens is None
+        assert result.cache_read_tokens is None
+        assert result.output_tokens == 7
+        assert "input_tokens" in caplog.text
+
+        negative = self._invoke(_turn_completed({"input_tokens": 10, "output_tokens": -1}))
+        assert negative.input_tokens == 10
+        assert negative.output_tokens is None
+
+    def test_cached_exceeding_input_drops_uncached_count(self) -> None:
+        """An inconsistent payload cannot produce a negative uncached count."""
+        result = self._invoke(
+            _turn_completed({"input_tokens": 10, "cached_input_tokens": 50, "output_tokens": 3})
+        )
+        assert result.input_tokens is None
+        assert result.cache_read_tokens == 50
+        assert result.output_tokens == 3
+
+    def test_top_level_usage_on_other_event_accepted(self) -> None:
+        """A usage object on a non-turn event is read too."""
+        stream = make_ndjson_line(
+            {"type": "token_count", "usage": {"input_tokens": 9, "output_tokens": 4}}
+        )
+        result = self._invoke(stream)
+        assert result.input_tokens == 9
+        assert result.output_tokens == 4
+
+    def test_last_usage_envelope_wins(self) -> None:
+        """Later usable envelopes replace earlier ones; malformed ones do not."""
+        result = self._invoke(
+            build_ndjson_stream(
+                _turn_completed({"input_tokens": 1, "output_tokens": 1}),
+                _turn_completed({"input_tokens": 2, "output_tokens": 2}),
+                _turn_completed("garbage"),
+            )
+        )
+        assert result.input_tokens == 2
+        assert result.output_tokens == 2
+
+    def test_non_object_json_lines_are_skipped(self) -> None:
+        """Scalar or list JSON lines do not crash the NDJSON reader."""
+        result = self._invoke(
+            build_ndjson_stream(
+                "42\n",
+                "[1, 2]\n",
+                make_ndjson_line({"type": "item.completed", "item": "not a dict"}),
+                make_item_completed_agent_message("survived"),
+            )
+        )
+        assert result.stdout == "survived"
+
+    def test_metrics_reach_phase_recorder(self) -> None:
+        """BaseProvider._record_call_metrics forwards the Codex token counts."""
+        with patch(
+            "bmad_assist_lite.core.phase_metrics.record_provider_call"
+        ) as mock_record:
+            self._invoke(
+                _turn_completed(
+                    {"input_tokens": 300, "cached_input_tokens": 100, "output_tokens": 50}
+                )
+            )
+        kwargs = mock_record.call_args.kwargs
+        assert kwargs["input_tokens"] == 200
+        assert kwargs["cache_read_tokens"] == 100
+        assert kwargs["output_tokens"] == 50
 
 
 # ============================================================================

@@ -238,6 +238,16 @@ class ProviderConfig(BaseModel):
         ),
     )
     cli_paths: CliPathsConfig = Field(default_factory=CliPathsConfig)
+    codex_write_network: bool = Field(
+        default=False,
+        description=(
+            "Let Codex WRITE phases (dev, synthesis, fixes) use the network, localhost "
+            "included, by passing sandbox_workspace_write.network_access=true. Needed "
+            "when a phase must start a local dev server (browser/design test tiers). "
+            "Read-only reviewer lanes keep the read-only sandbox, network off. Defaults "
+            "to False: the workspace-write sandbox blocks all network."
+        ),
+    )
     phase_models: PhaseModelsConfig | None = Field(
         default=None, description="Per-phase master-model overrides (routable phases only)"
     )

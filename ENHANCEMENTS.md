@@ -69,3 +69,63 @@ Currently, stories are processed in **sprint-status.yaml insertion order** (dict
 | 1   | `/bmad-tea-testarch-test-review` |
 | 2   | `/bmad-tea-testarch-nfr-assess`  |
 | 3   | `/bmad-tea-testarch-trace`       |
+
+## Resilient failure handling: don't discard completed work on a transient failure
+
+**Priority:** High
+
+### Context
+
+Observed live while supervising webdozo-studio epic 13 on 2026-09-17 (a 15-story
+parallel run at `max_concurrency: 1`). Two kinds of expensive waste showed up, both
+where the failure was transient or environmental rather than a real code defect:
+
+1. **A whole parallel wave was discarded on a false-negative gate.** Stories 13.5,
+   13.9 and 13.15 built cleanly and merged, but the post-merge quality gate failed
+   typecheck and build for all three. The cause was not the code: a stale
+   `apps/studio/.next/dev/types/validator.ts` in the MAIN repo (left by an earlier
+   `pnpm build`) referenced routes one of the stories deleted, so `tsc` failed on the
+   generated file. The orchestrator rolled the integration head back and marked the
+   three blocked. The completed `parallel/13-*` branches survived, but a naive resume
+   would have rebuilt all three from scratch (re-running create-story/dev). The
+   supervisor recovered only by merging the surviving stacked branch by hand.
+
+2. **In-flight reviews dropped on a usage limit.** Two review-phase invocations died
+   mid-run on a rate-limit (HTTP 429, subscription session limit), losing all their
+   work, and had to be re-run after the window reset.
+
+The common thread: the orchestrator treats a transient/environmental failure the same
+as a real code defect — it discards the worktree and blocks the story — so a
+recoverable stumble costs a full rebuild.
+
+### Proposed behavior
+
+1. **Classify the failure before discarding.** The gate runner already tags results
+   (`classification=real`). Extend that so the merge/worktree lifecycle distinguishes a
+   *transient/environmental* failure (a usage 429; a gate that fails only in the
+   accumulating main repo, e.g. a stale `.next`) from a *real code defect* that survives
+   the fix loop. Only the latter should block-and-discard.
+
+2. **Run the post-merge quality gate in a clean state.** The false-negative happened
+   because the re-gate ran in the main repo where the stale `.next` lived. Build the
+   post-merge check against a clean checkout, or clean framework build artifacts
+   (`.next`, etc.) before it runs, so an accumulating artifact from a prior build can
+   never false-fail a route-changing merge.
+
+3. **Reuse the surviving branch on resume for BLOCKED stories, not just parked ones.**
+   `retry_parked_on_resume` already re-enters the merge ladder for *parked* merges whose
+   branch still exists. Extend the same idea to *blocked* stories whose branch survives:
+   on resume, re-attempt the merge + post-merge gate on the completed branch (now that
+   the environment is fixed) rather than re-running create-story/dev from scratch. The
+   branches already survive today; the orchestrator just does not reuse them.
+
+### Notes
+
+- The webdozo-studio runner skill now works around #2 by removing `apps/studio/.next`
+  before each resume; that is a band-aid the tool should not need.
+- The session that surfaced this is inspectable: transcript
+  `~/.claude/projects/-home-ksk-webdozo-webdozo-studio/fb9570a6-5a84-46f0-966f-ce66039bb1c7.jsonl`
+  (large — grep, don't cat), and the supervision journal at
+  `<webdozo-studio>/.bmad-assist-lite/cache/runner-journal-epic-13.md` (the compact
+  narrative; look for "false-negative", "stale-.next", and the wave that blocked
+  13.5/13.9/13.15).

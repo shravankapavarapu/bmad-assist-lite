@@ -23,7 +23,6 @@ from bmad_assist_lite.core.exceptions import (
 )
 from bmad_assist_lite.providers._windows import get_subprocess_kwargs, kill_process
 from bmad_assist_lite.providers.base import (
-    COMMON_TOOL_NAMES,
     BaseProvider,
     ExitStatus,
     ProviderResult,
@@ -32,7 +31,9 @@ from bmad_assist_lite.providers.base import (
     resolve_cli_path,
     write_progress,
 )
-from bmad_assist_lite.providers.result_collector import ResultCollector
+from bmad_assist_lite.providers.result_collector import CallMetrics, ResultCollector
+from bmad_assist_lite.validation.evidence_score import determine_verdict
+from bmad_assist_lite.validation.findings import Finding, Severity, render_findings_block
 
 logger = logging.getLogger(__name__)
 
@@ -47,18 +48,201 @@ _PRIORITY_TO_SEVERITY: dict[str, tuple[str, str, float]] = {
     "P3": ("MINOR", "\U0001f7e1", 0.3),
 }
 
-# Default number of clean review categories for clean pass formatting.
-# Represents: architecture, correctness, testing, performance, security.
-_DEFAULT_CLEAN_PASS_COUNT: int = 5
+# Priority-to-severity mapping for the structured findings block that the
+# structured-review merge parses (validation.findings). Unknown priorities fall
+# back to LOW, matching the MINOR fallback of the evidence table.
+_PRIORITY_TO_FINDING_SEVERITY: dict[str, Severity] = {
+    "P0": Severity.HIGH,
+    "P1": Severity.MEDIUM,
+    "P2": Severity.LOW,
+    "P3": Severity.LOW,
+}
+
+# Number of clean review categories for clean pass formatting. Must match the
+# nine categories the code-review template scores Claude lanes against (SOLID,
+# Hidden Bugs, Abstraction, Tests, Performance, Tech Debt, Style, Type Safety,
+# Security), so a clean Codex review lands on the same -4.5 as a clean Claude one.
+_DEFAULT_CLEAN_PASS_COUNT: int = 9
 
 # Path to the bundled JSON Schema for structured review output
 _REVIEW_SCHEMA_PATH: Path = (
-    Path(__file__).resolve().parent.parent
-    / "workflows"
-    / "schemas"
-    / "codex-review-schema.json"
+    Path(__file__).resolve().parent.parent / "workflows" / "schemas" / "codex-review-schema.json"
 )
 
+
+def _codex_write_network_enabled() -> bool:
+    """Return ``providers.codex_write_network`` from the loaded config (False if unset)."""
+    try:
+        from bmad_assist_lite.core.config import get_config
+
+        return bool(get_config().providers.codex_write_network)
+    except Exception:  # config not loaded (unit tests, ad-hoc calls)
+        return False
+
+
+def _load_codex_review(json_str: str) -> tuple[list[dict[str, Any]], str] | None:
+    """Parse *json_str* as Codex review JSON.
+
+    Args:
+        json_str: Raw JSON string (potentially from ``--output-last-message``).
+
+    Returns:
+        ``(findings, overall_verdict)`` with non-dict findings dropped, or
+        ``None`` if the text is not JSON or lacks the review schema's
+        ``findings`` / ``overall_verdict`` / ``summary`` top-level keys.
+
+    """
+    try:
+        data = json.loads(json_str)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    if not all(k in data for k in ("findings", "overall_verdict", "summary")):
+        return None
+
+    findings = data.get("findings", [])
+    if not isinstance(findings, list):
+        return None
+
+    overall_verdict = data.get("overall_verdict", "")
+    if not isinstance(overall_verdict, str):
+        overall_verdict = ""
+
+    return [f for f in findings if isinstance(f, dict)], overall_verdict
+
+
+def _text_field(finding: dict[str, Any], key: str) -> str:
+    """Return a finding's text field, or an empty string if absent or not text."""
+    value = finding.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _finding_location(finding: dict[str, Any]) -> tuple[str, int | None]:
+    """Return ``(file_path, first_line)`` from a finding's ``code_location``.
+
+    Both parts are optional in practice even though the schema requires them;
+    an absent file is an empty string and an absent line is None.
+    """
+    code_location = finding.get("code_location")
+    if not isinstance(code_location, dict):
+        return "", None
+    file_path = code_location.get("file_path")
+    file_str = file_path if isinstance(file_path, str) else ""
+    line: int | None = None
+    line_range = code_location.get("line_range")
+    if isinstance(line_range, list) and line_range:
+        first = line_range[0]
+        if isinstance(first, int) and not isinstance(first, bool):
+            line = first
+    return file_str, line
+
+
+def _render_evidence_table(findings: list[dict[str, Any]], overall_verdict: str) -> str:
+    """Render Codex review findings as an Evidence Score Summary table.
+
+    The printed ``Evidence Score`` is the exact sum of the table rows, so a
+    clean review prints a negative total, and the verdict row comes from the
+    shared :func:`determine_verdict` thresholds.
+    """
+    lines: list[str] = [
+        "## Evidence Score Summary",
+        "",
+        "| Severity | Description | Source | Score |",
+        "|----------|-------------|--------|-------|",
+    ]
+
+    total_score: float = 0.0
+
+    for finding in findings:
+        title = _text_field(finding, "title").replace("|", "/").replace("\n", " ")
+        body = _text_field(finding, "body").replace("|", "/").replace("\n", " ")
+        priority = finding.get("priority", "")
+
+        severity_info = _PRIORITY_TO_SEVERITY.get(priority if isinstance(priority, str) else "")
+        if severity_info is None:
+            logger.warning(
+                "Unknown Codex priority %r, defaulting to MINOR",
+                priority,
+            )
+            severity_info = ("MINOR", "\U0001f7e1", 0.3)
+
+        severity_label, emoji, score = severity_info
+        total_score += score
+
+        # Extract source from code_location.file_path (optional)
+        file_path, _ = _finding_location(finding)
+        source = file_path.replace("|", "/") if file_path else "—"  # em-dash default
+
+        description = f"{title}: {body}" if title and body else (title or body or "")
+        lines.append(f"| {emoji} {severity_label} | {description} | {source} | +{score} |")
+
+    # Clean pass deductions based on finding count and verdict
+    if not findings and overall_verdict == "PASS":
+        clean_score = _DEFAULT_CLEAN_PASS_COUNT * -0.5
+        total_score += clean_score
+        lines.append(
+            f"| \U0001f7e2 CLEAN PASS "
+            f"| {_DEFAULT_CLEAN_PASS_COUNT} categories | — | {clean_score} |"
+        )
+    elif findings:
+        # Partial clean pass: deduct for categories not flagged
+        flagged = len(findings)
+        clean_categories = max(0, _DEFAULT_CLEAN_PASS_COUNT - flagged)
+        if clean_categories > 0:
+            clean_score = clean_categories * -0.5
+            total_score += clean_score
+            lines.append(
+                f"| \U0001f7e2 CLEAN PASS | {clean_categories} categories | — | {clean_score} |"
+            )
+
+    # No clamp: a negative total is valid (it means clean) and must equal the
+    # row sum, or the downstream parser flags a parsed-vs-calculated mismatch.
+    # Rounded like calculate_evidence_score(); "+ 0.0" folds -0.0 into 0.0.
+    total_score = round(total_score, 1) + 0.0
+    verdict_label = determine_verdict(total_score).value
+
+    lines.append("")
+    lines.append(f"### Evidence Score: {total_score:.1f}")
+    lines.append("")
+    lines.append("| Score | Verdict |")
+    lines.append("|-------|---------|")
+    lines.append(f"| **{total_score:.1f}** | **{verdict_label}** |")
+
+    return "\n".join(lines)
+
+
+def _render_findings_block(findings: list[dict[str, Any]]) -> str:
+    """Render Codex review findings as the structured-review findings block.
+
+    The block is what ``loop.review_merge.parse_reviewer_findings`` requires
+    from every reviewer lane; without it a single Codex lane forces the
+    synthesis back to legacy prose merging. Built through
+    :func:`render_findings_block` so the wire shape cannot drift from the
+    parser. The schema has no symbol field, so the title is the anchor.
+    """
+    records: list[Finding] = []
+    for finding in findings:
+        title = _text_field(finding, "title")
+        file_path, line = _finding_location(finding)
+        priority = finding.get("priority", "")
+        severity = _PRIORITY_TO_FINDING_SEVERITY.get(
+            priority if isinstance(priority, str) else "", Severity.LOW
+        )
+        # The anchor is the finding's identity across passes; the title is the
+        # most stable thing the schema offers (no symbol field exists).
+        records.append(
+            Finding(
+                file=file_path,
+                title=title,
+                severity=severity,
+                anchor=title,
+                line=line,
+                detail=_text_field(finding, "body"),
+            )
+        )
+    return render_findings_block(records)
 
 
 def _format_codex_json_as_evidence_text(json_str: str) -> str | None:
@@ -78,128 +262,154 @@ def _format_codex_json_as_evidence_text(json_str: str) -> str | None:
         or ``None`` if it is not valid JSON or does not match the schema.
 
     """
-    try:
-        data = json.loads(json_str)
-    except (json.JSONDecodeError, TypeError):
+    review = _load_codex_review(json_str)
+    if review is None:
+        return None
+    findings, overall_verdict = review
+    return _render_evidence_table(findings, overall_verdict)
+
+
+def _format_codex_review(json_str: str) -> str | None:
+    """Convert Codex review JSON to the evidence table plus the findings block.
+
+    Returns:
+        The Evidence Score Summary table followed by the structured findings
+        block, or ``None`` if *json_str* is not Codex review JSON.
+
+    """
+    review = _load_codex_review(json_str)
+    if review is None:
+        return None
+    findings, overall_verdict = review
+    table = _render_evidence_table(findings, overall_verdict)
+    return f"{table}\n\n{_render_findings_block(findings)}"
+
+
+# ============================================================================
+# Usage telemetry
+# ============================================================================
+
+
+def _usage_int(value: object, key: str) -> int | None:
+    """Return a usage count as a non-negative int, or None with a WARNING.
+
+    None means "not supplied" and passes silently. Booleans, non-integers and
+    negative values are coercion failures and are warned about, so a dropped
+    metric is never silent.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        logger.warning(
+            "Codex usage field %r is %r, not a token count; it is unavailable for this call.",
+            key,
+            value,
+        )
+        return None
+    return value
+
+
+def _extract_codex_usage(usage: object) -> CallMetrics | None:
+    """Read token counts out of a Codex ``usage`` payload.
+
+    Codex (like the OpenAI API) reports ``cached_input_tokens`` as a *subset*
+    of ``input_tokens``. The project convention is that ``input_tokens`` is the
+    uncached remainder and the full prompt is ``input + cache_read +
+    cache_creation``, so the cached share is subtracted out here. Cache writes
+    arrive as ``cache_write_input_tokens`` (codex-cli 0.166.0) and are recorded
+    verbatim as ``cache_creation_tokens``; absent on older CLIs, they stay None.
+
+    Args:
+        usage: The ``usage`` value from an NDJSON event, of unknown shape.
+
+    Returns:
+        The metrics (fields None where unavailable), or None if the payload is
+        not a dict and nothing should be recorded.
+
+    """
+    if not isinstance(usage, dict):
+        logger.warning(
+            "Codex usage payload is %s, not a dict; token metrics for this event are unavailable.",
+            type(usage).__name__,
+        )
         return None
 
-    # Validate expected top-level keys
-    if not isinstance(data, dict):
-        return None
-    if not all(k in data for k in ("findings", "overall_verdict", "summary")):
-        return None
+    total_input = _usage_int(usage.get("input_tokens"), "input_tokens")
+    cached = _usage_int(usage.get("cached_input_tokens"), "cached_input_tokens")
+    output = _usage_int(usage.get("output_tokens"), "output_tokens")
+    cache_write = _usage_int(usage.get("cache_write_input_tokens"), "cache_write_input_tokens")
 
-    findings = data.get("findings", [])
-    if not isinstance(findings, list):
-        return None
-
-    overall_verdict: str = data.get("overall_verdict", "")
-
-    lines: list[str] = [
-        "## Evidence Score Summary",
-        "",
-        "| Severity | Description | Source | Score |",
-        "|----------|-------------|--------|-------|",
-    ]
-
-    total_score: float = 0.0
-
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        title = finding.get("title", "").replace("|", "/").replace("\n", " ")
-        body = finding.get("body", "").replace("|", "/").replace("\n", " ")
-        priority = finding.get("priority", "")
-
-        severity_info = _PRIORITY_TO_SEVERITY.get(priority)
-        if severity_info is None:
+    uncached_input = total_input
+    if total_input is not None and cached is not None:
+        if cached <= total_input:
+            uncached_input = total_input - cached
+        else:
             logger.warning(
-                "Unknown Codex priority %r, defaulting to MINOR",
-                priority,
+                "Codex usage reports more cached tokens (%d) than input tokens (%d); "
+                "the uncached input count is unavailable for this call.",
+                cached,
+                total_input,
             )
-            severity_info = ("MINOR", "\U0001f7e1", 0.3)
+            uncached_input = None
 
-        severity_label, emoji, score = severity_info
-        total_score += score
+    return CallMetrics(
+        input_tokens=uncached_input,
+        output_tokens=output,
+        cache_read_tokens=cached,
+        cache_creation_tokens=cache_write,
+    )
 
-        # Extract source from code_location.file_path (optional)
-        code_location = finding.get("code_location")
-        source = "—"  # em-dash default
-        if isinstance(code_location, dict):
-            file_path = code_location.get("file_path")
-            if file_path:
-                source = str(file_path).replace("|", "/")
 
-        description = f"{title}: {body}" if title and body else (title or body or "")
-        lines.append(
-            f"| {emoji} {severity_label} | {description} | {source} | +{score} |"
-        )
+def _extract_codex_usage_safe(usage: object) -> CallMetrics | None:
+    """Call :func:`_extract_codex_usage`, degrading to None on any error.
 
-    # Clean pass deductions based on finding count and verdict
-    if not findings and overall_verdict == "PASS":
-        clean_score = _DEFAULT_CLEAN_PASS_COUNT * -0.5
-        total_score += clean_score
-        lines.append(
-            f"| \U0001f7e2 CLEAN PASS "
-            f"| {_DEFAULT_CLEAN_PASS_COUNT} categories | — | {clean_score} |"
-        )
-    elif findings:
-        # Partial clean pass: deduct for categories not flagged
-        flagged = len(findings)
-        clean_categories = max(0, _DEFAULT_CLEAN_PASS_COUNT - flagged)
-        if clean_categories > 0:
-            clean_score = clean_categories * -0.5
-            total_score += clean_score
-            lines.append(
-                f"| \U0001f7e2 CLEAN PASS "
-                f"| {clean_categories} categories | — | {clean_score} |"
-            )
-
-    # Compute verdict from total score
-    total_score = max(total_score, 0.0)
-    if total_score <= 2.0:
-        verdict_label = "PASS"
-    elif total_score <= 5.0:
-        verdict_label = "MAJOR_REWORK"
-    else:
-        verdict_label = "REJECT"
-
-    lines.append("")
-    lines.append(f"### Evidence Score: {total_score:.1f}")
-    lines.append("")
-    lines.append("| Score | Verdict |")
-    lines.append("|-------|---------|")
-    lines.append(f"| **{total_score:.1f}** | **{verdict_label}** |")
-
-    return "\n".join(lines)
+    The NDJSON reader thread must never die on a telemetry payload: losing the
+    token counts is acceptable, losing the response text is not.
+    """
+    try:
+        return _extract_codex_usage(usage)
+    except Exception as e:
+        logger.warning("Failed to extract Codex usage tokens: %s", e)
+        return None
 
 
 def _extract_agent_message_text(item: dict[str, Any]) -> str:
-    """Extract text from a Codex agent_message item's content blocks.
+    """Extract text from a Codex agent_message item, accepting both wire shapes.
 
-    The ``item.content`` field is an array of content blocks::
+    Current Codex CLIs (observed on codex-cli 0.166.0) put the message on a
+    top-level ``text`` field::
+
+        {"type": "agent_message", "text": "..."}
+
+    Older CLIs used a ``content`` array of blocks::
 
         [{"type": "output_text", "text": "..."}, ...]
 
-    Iterates blocks, collects text from blocks where ``type == "output_text"``,
-    and joins with empty string.
+    The top-level field wins when it carries text; otherwise the block walk
+    runs, so either CLI generation streams its response into the collector.
+    (Before the top-level shape was handled, every agent message on a current
+    CLI extracted as "" — stdout stayed empty for whole runs, masked only by
+    the structured-output fallback on read-only lanes.)
 
     Args:
         item: The ``item`` dict from an ``item.completed`` NDJSON event.
 
     Returns:
-        Joined text from all ``output_text`` blocks, or empty string if none found.
+        The message text, or empty string if neither shape carries any.
 
     """
+    text = item.get("text")
+    if isinstance(text, str) and text:
+        return text
     content = item.get("content")
     if not content or not isinstance(content, list):
         return ""
     parts: list[str] = []
     for block in content:
         if isinstance(block, dict) and block.get("type") == "output_text":
-            text = block.get("text", "")
-            if text:
-                parts.append(text)
+            block_text = block.get("text", "")
+            if block_text:
+                parts.append(block_text)
     return "".join(parts)
 
 
@@ -265,26 +475,22 @@ class CodexProvider(BaseProvider):
         """Extract response text from provider result.
 
         When cached structured JSON is available (from ``_do_invoke()``),
-        attempts to convert Codex review JSON into evidence score text
-        format via ``_format_codex_json_as_evidence_text()``.  If the JSON
-        matches the review schema, returns the formatted evidence text.
-        If conversion returns ``None`` (not review JSON), falls back to the
+        attempts to convert Codex review JSON via ``_format_codex_review()``.
+        If the JSON matches the review schema, returns the Evidence Score
+        Summary table followed by the structured findings block.  If
+        conversion returns ``None`` (not review JSON), falls back to the
         raw cached JSON string.  Falls back to ``result.stdout.strip()``
         if no structured output was captured at all.
         """
         if self._structured_output is not None:
-            formatted = _format_codex_json_as_evidence_text(
-                self._structured_output,
-            )
+            formatted = _format_codex_review(self._structured_output)
             if formatted is not None:
                 logger.debug(
-                    "parse_output: converted structured JSON to "
-                    "evidence text format",
+                    "parse_output: converted structured JSON to evidence text format",
                 )
                 return formatted
             logger.debug(
-                "parse_output: structured JSON is not review schema, "
-                "returning raw JSON",
+                "parse_output: structured JSON is not review schema, returning raw JSON",
             )
             return self._structured_output
 
@@ -339,6 +545,11 @@ class CodexProvider(BaseProvider):
         """
         _ = settings_file  # Codex CLI has no settings file concept
 
+        # Drop anything a previous call on this instance left behind, so a
+        # write-mode call never returns an earlier reviewer call's JSON.
+        self._structured_output = None
+        self._temp_output_path = None
+
         if timeout <= 0:
             raise ValueError(f"timeout must be positive, got {timeout}")
 
@@ -352,19 +563,24 @@ class CodexProvider(BaseProvider):
         # Build tool restriction prompt if needed
         final_prompt = prompt
         if allowed_tools is not None:
-            allowed_set = set(allowed_tools)
-            restricted_tools = sorted(COMMON_TOOL_NAMES - allowed_set)
-            if restricted_tools:
-                allowed_str = ", ".join(allowed_tools)
-                restricted_str = ", ".join(restricted_tools)
-                restriction_warning = (
-                    "\n\n**CRITICAL - TOOL ACCESS RESTRICTIONS:**\n"
-                    f"You are a CODE REVIEWER with LIMITED tool access.\n\n"
-                    f"ALLOWED tools ONLY: {allowed_str}\n"
-                    f"FORBIDDEN tools (NEVER USE): {restricted_str}\n\n"
-                    "You CANNOT modify any files - this is READ-ONLY.\n"
-                )
-                final_prompt = prompt + restriction_warning
+            # Codex has no Read/Glob/Grep tools: shell commands ARE how it
+            # reads files. The old Claude-vocabulary warning ("FORBIDDEN:
+            # Bash") made an obedient Codex decline to open ANY file, so
+            # reviewers judged only the inlined diff. Enforcement is the
+            # OS-level read-only sandbox below (blocks writes and network);
+            # the prompt's job is to authorize read-only inspection inside it
+            # and state the intent the sandbox enforces.
+            restriction_warning = (
+                "\n\n**CRITICAL - READ-ONLY REVIEW:**\n"
+                "You are a CODE REVIEWER inside an OS-enforced READ-ONLY "
+                "sandbox.\n"
+                "- You MAY run read-only shell commands to read and search "
+                "files (cat, head, ls, rg, git diff/log/show).\n"
+                "- You MUST NOT modify any files, run builds, tests or "
+                "installs, or access the network. The sandbox blocks writes "
+                "and network; do not attempt them.\n"
+            )
+            final_prompt = prompt + restriction_warning
 
         codex_bin = resolve_cli_path("codex")
         logger.debug("Codex CLI resolved to: %s", codex_bin)
@@ -392,34 +608,38 @@ class CodexProvider(BaseProvider):
         # outside the working root). See providers.base.READ_ONLY_TOOLS.
         sandbox_mode = "read-only" if allowed_tools is not None else "workspace-write"
         command.extend(["--sandbox", sandbox_mode])
+        if sandbox_mode == "workspace-write" and _codex_write_network_enabled():
+            command.extend(["-c", "sandbox_workspace_write.network_access=true"])
 
-        # Add --output-schema and --output-last-message for structured output
-        if _REVIEW_SCHEMA_PATH.is_file():
-            temp_dir = (
-                (cwd or Path.cwd()) / ".bmad-assist-lite" / "cache"
-            )
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            temp_output = (
-                temp_dir / f"codex-review-{uuid.uuid4().hex[:8]}.json"
-            )
-            self._temp_output_path = temp_output
-            command.extend([
-                "--output-schema",
-                str(_REVIEW_SCHEMA_PATH),
-                "--output-last-message",
-                str(temp_output),
-            ])
-            logger.debug(
-                "Structured output: schema=%s, output=%s",
-                _REVIEW_SCHEMA_PATH,
-                temp_output,
-            )
-        else:
-            logger.warning(
-                "Review schema not found at %s, proceeding without "
-                "--output-schema (structured output disabled)",
-                _REVIEW_SCHEMA_PATH,
-            )
+        # Add --output-schema and --output-last-message for structured output,
+        # but only on read-only (reviewer/validator) lanes. Write and master
+        # phases must stay free-form: the forced review schema would stop them
+        # emitting anything else, such as the AC-audit verdict table.
+        if allowed_tools is not None:
+            if _REVIEW_SCHEMA_PATH.is_file():
+                temp_dir = (cwd or Path.cwd()) / ".bmad-assist-lite" / "cache"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                temp_output = temp_dir / f"codex-review-{uuid.uuid4().hex[:8]}.json"
+                self._temp_output_path = temp_output
+                command.extend(
+                    [
+                        "--output-schema",
+                        str(_REVIEW_SCHEMA_PATH),
+                        "--output-last-message",
+                        str(temp_output),
+                    ]
+                )
+                logger.debug(
+                    "Structured output: schema=%s, output=%s",
+                    _REVIEW_SCHEMA_PATH,
+                    temp_output,
+                )
+            else:
+                logger.warning(
+                    "Review schema not found at %s, proceeding without "
+                    "--output-schema (structured output disabled)",
+                    _REVIEW_SCHEMA_PATH,
+                )
 
         response_text_parts: list[str] = []
         stderr_chunks: list[str] = []
@@ -472,17 +692,29 @@ class CodexProvider(BaseProvider):
             color_idx: int | None,
             result_collector: ResultCollector,
         ) -> None:
-            """Read NDJSON events from stdout, extracting agent messages."""
+            """Read NDJSON events from stdout, extracting agent messages and usage."""
             for line in iter(stream.readline, ""):
                 stripped = line.strip()
                 if not stripped:
                     continue
                 try:
                     msg = json.loads(stripped)
+                    if not isinstance(msg, dict):
+                        continue
                     msg_type = msg.get("type", "")
+
+                    # Token usage normally rides on "turn.completed", but any
+                    # event with a top-level "usage" is accepted. The last
+                    # usable envelope wins; a malformed one records nothing.
+                    if "usage" in msg:
+                        metrics = _extract_codex_usage_safe(msg["usage"])
+                        if metrics is not None:
+                            result_collector.record_metrics(metrics)
 
                     if msg_type == "item.completed":
                         item = msg.get("item", {})
+                        if not isinstance(item, dict):
+                            continue
                         item_type = item.get("type", "")
 
                         if item_type == "agent_message":
@@ -491,9 +723,7 @@ class CodexProvider(BaseProvider):
                                 text_parts.append(text)
                                 result_collector.add(text)
                                 if logger.isEnabledFor(logging.INFO):
-                                    preview = text[:200] + (
-                                        "..." if len(text) > 200 else ""
-                                    )
+                                    preview = text[:200] + ("..." if len(text) > 200 else "")
                                     tag = format_tag("ASSISTANT", color_idx)
                                     write_progress(f"{tag} {preview}")
 
@@ -538,9 +768,7 @@ class CodexProvider(BaseProvider):
         try:
             returncode = process.wait(timeout=timeout)
         except TimeoutExpired:
-            raise TimeoutError(
-                f"Codex CLI timeout after {timeout}s"
-            ) from None
+            raise TimeoutError(f"Codex CLI timeout after {timeout}s") from None
 
         stdout_thread.join(timeout=5)
         stderr_thread.join(timeout=5)
@@ -555,13 +783,8 @@ class CodexProvider(BaseProvider):
             elif len(stderr_content) <= STDERR_TRUNCATE_LENGTH:
                 stderr_truncated = stderr_content.strip()
             else:
-                stderr_truncated = "..." + stderr_content[
-                    -STDERR_TRUNCATE_LENGTH:
-                ].strip()
-            message = (
-                f"Codex CLI failed with exit code {returncode}: "
-                f"{stderr_truncated}"
-            )
+                stderr_truncated = "..." + stderr_content[-STDERR_TRUNCATE_LENGTH:].strip()
+            message = f"Codex CLI failed with exit code {returncode}: {stderr_truncated}"
             raise ProviderExitCodeError(
                 message,
                 exit_code=returncode,
@@ -590,17 +813,24 @@ class CodexProvider(BaseProvider):
                     )
             except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
                 logger.warning(
-                    "Failed to read structured output from %s (%s), "
-                    "will use stdout fallback",
+                    "Failed to read structured output from %s (%s), will use stdout fallback",
                     self._temp_output_path,
                     exc,
                 )
 
+        # None here means the stream carried no usage envelope: unavailable,
+        # not zero.
+        metrics = collector.metrics or CallMetrics()
+
         logger.info(
-            "Codex CLI completed: duration=%dms, exit_code=%d, text_len=%d",
+            "Codex CLI completed: duration=%dms, exit_code=%d, text_len=%d, "
+            "input_tokens=%s, cached_input_tokens=%s, output_tokens=%s",
             duration_ms,
             returncode,
             len(response_text),
+            metrics.input_tokens,
+            metrics.cache_read_tokens,
+            metrics.output_tokens,
         )
 
         return ProviderResult(
@@ -610,6 +840,10 @@ class CodexProvider(BaseProvider):
             duration_ms=duration_ms,
             model=effective_model,
             command=tuple(command),
+            input_tokens=metrics.input_tokens,
+            output_tokens=metrics.output_tokens,
+            cache_read_tokens=metrics.cache_read_tokens,
+            cache_creation_tokens=metrics.cache_creation_tokens,
         )
 
     def _cleanup(self) -> None:

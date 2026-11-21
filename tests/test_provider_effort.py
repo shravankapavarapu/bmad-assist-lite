@@ -293,9 +293,17 @@ NON_CLAUDE_PROVIDERS = [
     (GeminiProvider, "bmad_assist_lite.providers.gemini", "gemini"),
 ]
 
+# Providers that still discard ``effort`` entirely. Codex is absent: it
+# forwards effort as a ``model_reasoning_effort`` config override (see
+# test_codex_provider.py), so it no longer logs the value as ignored.
+EFFORT_IGNORING_PROVIDERS = [
+    (CursorProvider, "bmad_assist_lite.providers.cursor", "cursor"),
+    (GeminiProvider, "bmad_assist_lite.providers.gemini", "gemini"),
+]
+
 
 class TestNonClaudeProvidersIgnoreEffort:
-    """Gemini, Codex and Cursor accept ``effort`` and ignore it without error."""
+    """Gemini and Cursor accept ``effort`` and ignore it; Codex forwards it."""
 
     @pytest.mark.parametrize(
         ("provider_cls", "module", "logger_name"),
@@ -356,7 +364,7 @@ class TestNonClaudeProvidersIgnoreEffort:
 
     @pytest.mark.parametrize(
         ("provider_cls", "module", "logger_name"),
-        NON_CLAUDE_PROVIDERS,
+        EFFORT_IGNORING_PROVIDERS,
         ids=lambda p: getattr(p, "__name__", str(p)),
     )
     def test_effort_is_logged_as_ignored(
