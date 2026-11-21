@@ -51,6 +51,25 @@ _ThinkingBlock: Any = getattr(_claude_agent_sdk, "ThinkingBlock", None)
 _ToolUseBlock: Any = getattr(_claude_agent_sdk, "ToolUseBlock", None)
 _ToolResultBlock: Any = getattr(_claude_agent_sdk, "ToolResultBlock", None)
 _UserMessage: Any = getattr(_claude_agent_sdk, "UserMessage", None)
+_HookMatcher: Any = getattr(_claude_agent_sdk, "HookMatcher", None)
+
+# One stream message per tool result, and the SDK refuses a message larger than
+# its buffer. An image read with the Read tool travels base64-encoded and the
+# result line carries it twice, so a 390 KB screenshot already makes a line over
+# 1 MB (webdozo-studio epic 20, 2026-11-19: two phases died reading full-page
+# screenshot baselines). Three guards follow from that incident:
+#   - the buffer is raised to 32 MB, as a ceiling only;
+#   - a Read of an image file above _IMAGE_READ_CAP_BYTES is refused before it
+#     runs, with a reason that tells the agent what to do instead;
+#   - any tool result whose content passes _TOOL_RESULT_WARN_CHARS is logged, so
+#     the next oversized source is named in the run log, not found by a crash.
+# The warn threshold is half of 1 MB because the line holds the content twice.
+_STREAM_BUFFER_BYTES = 32 * 1024 * 1024
+_IMAGE_READ_CAP_BYTES = 300 * 1024
+_TOOL_RESULT_WARN_CHARS = 512 * 1024
+_IMAGE_SUFFIXES: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+)
 
 SUPPORTED_MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 
@@ -65,6 +84,89 @@ SUPPORTED_MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
 # this narrow and lets real errors propagate.
 _SDK_ERROR_RESULT_PREFIX = "Claude Code returned an error result:"
 _SDK_BENIGN_SUCCESS_SUBTYPE = "success"
+
+
+async def _refuse_oversized_image_read(
+    input_data: Any, tool_use_id: str | None, context: Any
+) -> dict[str, Any]:
+    """PreToolUse hook: deny a Read of an image file above the size cap.
+
+    Returns an empty dict (no opinion, the read proceeds) for every other call
+    and whenever the file cannot be measured: this guard must never be the
+    reason a normal read fails.
+    """
+    try:
+        if input_data.get("tool_name") != "Read":
+            return {}
+        raw_path = (input_data.get("tool_input") or {}).get("file_path")
+        if not isinstance(raw_path, str) or not raw_path:
+            return {}
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = Path(input_data.get("cwd") or ".") / path
+        if path.suffix.lower() not in _IMAGE_SUFFIXES:
+            return {}
+        size = path.stat().st_size
+    except Exception as e:
+        logger.debug("Image read guard could not measure the file (%s); allowing.", e)
+        return {}
+    if size <= _IMAGE_READ_CAP_BYTES:
+        return {}
+    logger.warning(
+        "Refused a Read of %s (%d KB): an image over %d KB makes a stream message "
+        "large enough to end the phase.",
+        path,
+        size // 1024,
+        _IMAGE_READ_CAP_BYTES // 1024,
+    )
+    reason = (
+        f"{path.name} is {size // 1024} KB. Reading an image over "
+        f"{_IMAGE_READ_CAP_BYTES // 1024} KB can end this session, so the read was "
+        "refused. To look at it, write a downscaled or cropped copy under that size "
+        "to a temporary path and read the copy. To compare it with another image, "
+        "use a command that reports the difference instead of reading either file."
+    )
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
+def _image_read_hooks() -> dict[Any, Any] | None:
+    """Hook table that installs the image read guard, or None on an SDK without hooks."""
+    if _HookMatcher is None:
+        return None
+    return {"PreToolUse": [_HookMatcher(matcher="Read", hooks=[_refuse_oversized_image_read])]}
+
+
+def _warn_on_large_tool_results(message: Any) -> None:
+    """Log each tool result on a user message whose content is large enough to matter.
+
+    Best-effort instrumentation: any unexpected message shape is ignored.
+    """
+    if _ToolResultBlock is None:
+        return
+    try:
+        content = getattr(message, "content", None)
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, _ToolResultBlock):
+                continue
+            body = getattr(block, "content", None)
+            chars = len(body) if isinstance(body, str) else len(json.dumps(body))
+            if chars > _TOOL_RESULT_WARN_CHARS:
+                logger.warning(
+                    "Tool result %s carried %d KB of content; its stream message is "
+                    "likely over 1 MB. Find what produced it before the next run.",
+                    getattr(block, "tool_use_id", "?"),
+                    chars // 1024,
+                )
+    except Exception as e:
+        logger.debug("Could not size a tool result (%s).", e)
 
 
 def _is_benign_success_error(exc: Exception) -> bool:
@@ -644,6 +746,8 @@ class ClaudeSDKProvider(BaseProvider):
             cli_path=self._resolve_cli_path(),
             strict_mcp_config=hermetic,
             resume=resume,
+            max_buffer_size=_STREAM_BUFFER_BYTES,
+            hooks=_image_read_hooks(),
         )
         if hermetic:
             logger.debug("Hermetic run: strict_mcp_config=True, project MCP servers not loaded.")
@@ -683,14 +787,13 @@ class ClaudeSDKProvider(BaseProvider):
                             _read_attr(result_message, "session_id"),
                             _read_attr(message, "session_id"),
                         )
-                elif (
-                    capture is not None
-                    and _UserMessage is not None
-                    and isinstance(message, _UserMessage)
-                ):
-                    # tool_result blocks travel on UserMessage; capture-only,
-                    # never fed to the collector (they are model input).
-                    capture.record_user(message)
+                elif _UserMessage is not None and isinstance(message, _UserMessage):
+                    # tool_result blocks travel on UserMessage; sized and
+                    # captured only, never fed to the collector (they are
+                    # model input).
+                    _warn_on_large_tool_results(message)
+                    if capture is not None:
+                        capture.record_user(message)
         except Exception as e:
             # Swallow only the benign "error result: success" escalation, and
             # only when the turn produced a *useful* amount of output. A benign
